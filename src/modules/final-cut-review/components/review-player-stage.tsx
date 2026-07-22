@@ -67,6 +67,7 @@ interface ReviewPlayerStageProps {
   onLoadedMetadata(video: HTMLVideoElement): void;
   onCanPlay(): void;
   onWaiting(): void;
+  onSeeked(video: HTMLVideoElement): void;
   onError(): void;
   onPlay(): void;
   onPause(): void;
@@ -100,6 +101,7 @@ export function ReviewPlayerStage({
   onLoadedMetadata,
   onCanPlay,
   onWaiting,
+  onSeeked,
   onError,
   onPlay,
   onPause,
@@ -136,6 +138,7 @@ export function ReviewPlayerStage({
           onLoadedMetadata={(event) => onLoadedMetadata(event.currentTarget)}
           onCanPlay={onCanPlay}
           onWaiting={onWaiting}
+          onSeeked={(event) => onSeeked(event.currentTarget)}
           onError={onError}
           onPlay={onPlay}
           onPause={onPause}

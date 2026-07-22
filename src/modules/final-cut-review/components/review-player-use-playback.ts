@@ -7,7 +7,11 @@ import {
   type RefObject,
 } from 'react';
 import type { ReviewIssue, ReviewPlaybackTarget, ReviewVersion } from '../contracts/types';
-import { sortedIssuesForPlayback, targetTimeMsForVersion } from '../core/playback';
+import {
+  PlaybackRequestSequencer,
+  sortedIssuesForPlayback,
+  targetTimeMsForVersion,
+} from '../core/playback';
 import {
   clampFrame,
   clampTimeMs,
@@ -30,9 +34,23 @@ interface PlaybackOptions {
   onPlaybackError(error: string | null): void;
 }
 
+function playbackErrorMessage(error: unknown): string {
+  if (
+    error !== null &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof error.message === 'string' &&
+    error.message.length > 0
+  ) {
+    return error.message;
+  }
+  return '播放失败';
+}
+
 export function useReviewPlayerPlayback(options: PlaybackOptions) {
   const { videoRef, version, onTimeChange, onSelectIssue, onPlaybackError } = options;
   const requestAbortRef = useRef<AbortController | null>(null);
+  const playRequestSequencerRef = useRef(new PlaybackRequestSequencer());
   const activeVersionIdRef = useRef(version.versionId);
   const autoPauseTriggeredRef = useRef<Set<string>>(new Set());
   const lastNaturalTimeMsRef = useRef(0);
@@ -70,6 +88,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
     activeVersionIdRef.current = version.versionId;
     requestAbortRef.current?.abort();
     requestAbortRef.current = null;
+    playRequestSequencerRef.current.cancel();
     videoRef.current?.pause();
     const nextMs = clampTimeMs(options.initialTimeMs ?? 0, version.durationMs);
     setCurrentMs(nextMs);
@@ -85,7 +104,13 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
     onTimeChange(nextMs);
   }, [onTimeChange, options.initialTimeMs, options.resetDraftRef, version, videoRef]);
 
-  useEffect(() => () => requestAbortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      requestAbortRef.current?.abort();
+      playRequestSequencerRef.current.cancel();
+    },
+    [],
+  );
 
   useEffect(() => {
     const video = videoRef.current;
@@ -113,6 +138,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
 
   const stepFrames = useCallback(
     (delta: number) => {
+      playRequestSequencerRef.current.cancel();
       videoRef.current?.pause();
       const currentFrame = frameFromTimestampMs(currentMs, version.fpsNum, version.fpsDen);
       const targetFrame = clampFrame(currentFrame + delta, durationMs, version.fpsNum, version.fpsDen);
@@ -138,17 +164,26 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      const sequence = playRequestSequencerRef.current.next();
       try {
         await video.play();
+        if (!playRequestSequencerRef.current.isCurrent(sequence)) return;
         setPlaying(true);
       } catch (error) {
-        onPlaybackError(error instanceof Error ? error.message : '播放失败');
+        if (!playRequestSequencerRef.current.isCurrent(sequence)) return;
+        onPlaybackError(playbackErrorMessage(error));
       }
     } else {
+      playRequestSequencerRef.current.cancel();
       video.pause();
       setPlaying(false);
     }
   }, [onPlaybackError, videoRef]);
+
+  const handleMediaPause = useCallback(() => {
+    playRequestSequencerRef.current.cancel();
+    setPlaying(false);
+  }, []);
 
   const handleMediaTimeUpdate = (video: HTMLVideoElement) => {
     const nextMs = Math.round(video.currentTime * 1000);
@@ -168,6 +203,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
     lastNaturalTimeMsRef.current = nextMs;
     if (!crossed) return;
     autoPauseTriggeredRef.current.add(crossed.issueId);
+    playRequestSequencerRef.current.cancel();
     video.pause();
     setPlaying(false);
     onSelectIssue(crossed);
@@ -176,6 +212,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
   const playbackToTarget = useCallback(
     async (target: ReviewPlaybackTarget) => {
       requestAbortRef.current?.abort();
+      playRequestSequencerRef.current.cancel();
       const controller = new AbortController();
       requestAbortRef.current = controller;
       const video = videoRef.current;
@@ -189,6 +226,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
       if (version.versionId !== target.versionId || video.dataset.versionId !== target.versionId) {
         throw new Error('媒体加载期间版本已变化');
       }
+      playRequestSequencerRef.current.cancel();
       video.pause();
       if (Math.abs(video.currentTime * 1000 - targetMs) >= 1) {
         const seekPromise = waitForEvent(video, 'seeked', controller.signal);
@@ -196,6 +234,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
         await seekPromise;
         await waitForVideoFrame(video, controller.signal);
       }
+      playRequestSequencerRef.current.cancel();
       video.pause();
       publishTime(targetMs);
       setPlaying(false);
@@ -230,6 +269,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
     changeVolume,
     currentMs,
     durationMs,
+    handleMediaPause,
     handleMediaTimeUpdate,
     loadedMediaDimensions,
     mediaState,

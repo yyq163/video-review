@@ -2383,6 +2383,143 @@ describe('ReviewPlayer component', () => {
     expect(timeline.releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
+  it('keeps a user pause benign when it interrupts a pending play request before repeated seeks', async () => {
+    const seed = createSeedData();
+    const onPlaybackError = vi.fn();
+    const onTimeChange = vi.fn();
+    let rejectPlay!: (reason?: unknown) => void;
+    const pendingPlay = new Promise<void>((_resolve, reject) => {
+      rejectPlay = reject;
+    });
+    const { container } = render(
+      <ReviewPlayer
+        version={{
+          ...seed.versions[1],
+          durationMs: 12000,
+          originalMedia: { ...seed.versions[1].originalMedia, durationMs: 12000 },
+        }}
+        issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
+        selectedAnnotationSet={null}
+        onTimeChange={onTimeChange}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={onPlaybackError}
+      />,
+    );
+    const player = screen.getByTestId('review-player');
+    const video = container.querySelector('video') as HTMLVideoElement;
+    let paused = true;
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => paused });
+    Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 0 });
+    Object.defineProperty(video, 'play', {
+      configurable: true,
+      value: vi.fn(() => {
+        paused = false;
+        return pendingPlay;
+      }),
+    });
+    Object.defineProperty(video, 'pause', {
+      configurable: true,
+      value: vi.fn(() => {
+        paused = true;
+      }),
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: '播放' }));
+    fireEvent.play(video);
+    await waitFor(() => expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: '暂停' }));
+    fireEvent.pause(video);
+    fireEvent.change(screen.getByLabelText('视频时间轴'), { target: { value: '3000' } });
+    fireEvent.change(screen.getByLabelText('视频时间轴'), { target: { value: '6000' } });
+    fireEvent.change(screen.getByLabelText('视频时间轴'), { target: { value: '9000' } });
+
+    await act(async () => {
+      rejectPlay(new DOMException('The play() request was interrupted by a call to pause().', 'AbortError'));
+      await Promise.resolve();
+    });
+
+    expect(onPlaybackError).not.toHaveBeenCalled();
+    expect(player).toHaveAttribute('data-paused', 'true');
+    expect(video.currentTime).toBe(9);
+    expect(onTimeChange).toHaveBeenLastCalledWith(9000);
+  });
+
+  it('still reports a current play request that fails for a real playback reason', async () => {
+    const seed = createSeedData();
+    const onPlaybackError = vi.fn();
+    const { container } = render(
+      <ReviewPlayer
+        version={seed.versions[1]}
+        issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={onPlaybackError}
+      />,
+    );
+    const video = container.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(video, 'paused', { configurable: true, value: true });
+    Object.defineProperty(video, 'play', {
+      configurable: true,
+      value: vi.fn(() => Promise.reject(new DOMException('浏览器拒绝播放', 'NotAllowedError'))),
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: '播放' }));
+
+    await waitFor(() => expect(onPlaybackError).toHaveBeenCalledWith('浏览器拒绝播放'));
+  });
+
+  it('recovers from seek buffering once a current frame is available', () => {
+    const seed = createSeedData();
+    const { container } = render(
+      <ReviewPlayer
+        version={seed.versions[1]}
+        issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+    const player = screen.getByTestId('review-player');
+    const video = container.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 2 });
+
+    fireEvent.waiting(video);
+    expect(player).toHaveAttribute('data-media-state', 'loading');
+    fireEvent.seeked(video);
+
+    expect(player).toHaveAttribute('data-media-state', 'ready');
+  });
+
+  it('keeps seek buffering visible until canplay when no current frame is available', () => {
+    const seed = createSeedData();
+    const { container } = render(
+      <ReviewPlayer
+        version={seed.versions[1]}
+        issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+    const player = screen.getByTestId('review-player');
+    const video = container.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 1 });
+
+    fireEvent.waiting(video);
+    fireEvent.seeked(video);
+    expect(player).toHaveAttribute('data-media-state', 'loading');
+    fireEvent.canPlay(video);
+
+    expect(player).toHaveAttribute('data-media-state', 'ready');
+  });
+
   it('auto-pauses the same unresolved issue again after the user seeks back before it', async () => {
     const seed = createSeedData();
     const issue = seed.issues.find((candidate) => candidate.issueId === 'issue_v2_001');
@@ -2484,6 +2621,75 @@ describe('ReviewPlayer component', () => {
 
     await waitFor(() => expect(screen.getByTestId('current-timecode')).toHaveTextContent('00:00:00:04'));
     expect(onTimeChange).toHaveBeenLastCalledWith(issue.timestampMs);
+  });
+
+  it('keeps a play request started during issue positioning benign when positioning pauses it', async () => {
+    const seed = createSeedData();
+    const issue = seed.issues.find((candidate) => candidate.issueId === 'issue_v2_001');
+    if (!issue) throw new Error('missing seed issue');
+    const ref = createRef<ReviewPlayerHandle>();
+    const onPlaybackError = vi.fn();
+    let rejectPlay!: (reason?: unknown) => void;
+    const pendingPlay = new Promise<void>((_resolve, reject) => {
+      rejectPlay = reject;
+    });
+    const { container } = render(
+      <ReviewPlayer
+        ref={ref}
+        version={seed.versions[1]}
+        issues={[issue]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={onPlaybackError}
+      />,
+    );
+    const video = container.querySelector('video') as HTMLVideoElement;
+    let readyState = 0;
+    let paused = true;
+    Object.defineProperty(video, 'readyState', { configurable: true, get: () => readyState });
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => paused });
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      writable: true,
+      value: issue.timestampMs / 1000,
+    });
+    Object.defineProperty(video, 'play', {
+      configurable: true,
+      value: vi.fn(() => {
+        paused = false;
+        return pendingPlay;
+      }),
+    });
+    Object.defineProperty(video, 'pause', {
+      configurable: true,
+      value: vi.fn(() => {
+        if (!paused) {
+          paused = true;
+          rejectPlay(new DOMException('The play() request was interrupted by a call to pause().', 'AbortError'));
+        }
+      }),
+    });
+
+    let positioning!: Promise<void>;
+    act(() => {
+      positioning = ref.current!.playbackToTarget(playbackTargetFromIssue(issue));
+    });
+    await userEvent.click(screen.getByRole('button', { name: '播放' }));
+    fireEvent.play(video);
+
+    await act(async () => {
+      readyState = 1;
+      fireEvent.loadedMetadata(video);
+      await Promise.resolve();
+      readyState = 2;
+      fireEvent.canPlay(video);
+      await positioning;
+    });
+
+    expect(onPlaybackError).not.toHaveBeenCalled();
+    expect(screen.getByTestId('review-player')).toHaveAttribute('data-paused', 'true');
   });
 
   it('resets transient playback state when switching versions before new metadata arrives', async () => {

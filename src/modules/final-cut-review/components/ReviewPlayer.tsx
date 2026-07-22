@@ -48,7 +48,7 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
     displayMaxScale: stage.displayMaxScale,
     readonly: annotationReadonly,
     onDraftChange: props.onDraftChange,
-    onPause: () => playback.setPlaying(false),
+    onPause: playback.handleMediaPause,
   });
   resetDraftRef.current = annotations.clearDraft;
   const setVideoNode = useCallback((node: HTMLVideoElement | null) => {
@@ -199,14 +199,17 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
             }}
             onCanPlay={() => playback.setMediaState('ready')}
             onWaiting={() => playback.setMediaState('loading')}
+            onSeeked={(video) => {
+              if (video.readyState >= video.HAVE_CURRENT_DATA) playback.setMediaState('ready');
+            }}
             onError={() => {
               playback.setMediaState('error');
               props.onPlaybackError('媒体加载失败');
             }}
             onPlay={() => playback.setPlaying(true)}
-            onPause={() => playback.setPlaying(false)}
+            onPause={playback.handleMediaPause}
             onTimeUpdate={playback.handleMediaTimeUpdate}
-            onEnded={() => playback.setPlaying(false)}
+            onEnded={playback.handleMediaPause}
             onUpdateTextShape={annotations.updateDraftTextShape}
             onCloseTextEditor={annotations.closeTextEditor}
           />
