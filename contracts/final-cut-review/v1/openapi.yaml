@@ -574,6 +574,32 @@ paths:
                 $ref: "#/components/schemas/EnvelopeReviewVersion"
         <<: *standardNon200Responses
 
+  /final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/resolve:
+    post:
+      operationId: edit_resolve_issue
+      tags: [commands]
+      x-command-type: ResolveReviewIssue
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveReviewIssueCommandEnvelope"
+      responses:
+        "200":
+          description: Marked the current-version review issue as modified from the edit entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssue"
+        <<: *standardNon200Responses
+
   /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/start:
     post:
       operationId: review_start

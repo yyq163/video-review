@@ -1,16 +1,38 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { UploadCloud } from 'lucide-react';
 import type { UploadProgress } from '../contracts/types';
 
 const FILE_REQUIRED_MESSAGE = '请选择原片文件。';
-const CREATE_ITEM_FILE_ERROR_ID = 'create-item-file-error';
-const CREATE_ITEM_SUBMISSION_ERROR_ID = 'create-item-upload-error';
 const APPEND_VERSION_FILE_ERROR_ID = 'append-version-file-error';
 const APPEND_VERSION_SUBMISSION_ERROR_ID = 'append-version-upload-error';
-const APPEND_VERSION_REASON_ERROR_ID = 'append-version-supersede-reason-error';
 const ACCEPTED_VIDEO_TYPES = '.mp4,.m4v,.mov,.qt,video/mp4,video/quicktime';
-export const DEFAULT_CREATE_ITEM_TITLE = '第 28 集 · 最终成片';
-export const DEFAULT_CREATE_ITEM_EPISODE = '28';
+
+export interface CreateItemUploadInput {
+  title: string;
+  episode: string;
+  file: File;
+}
+
+export type CreateItemUploadOutcome =
+  | { outcome: 'success'; stopBatch?: boolean }
+  | { outcome: 'failed' | 'uncertain'; message: string };
+
+interface CreateItemUploadRow extends CreateItemUploadInput {
+  id: string;
+  error?: string;
+}
+
+export function titleFromUploadFileName(fileName: string): string {
+  return fileName.replace(/\.[^.]+$/, '');
+}
+
+export function episodeFromUploadFileName(fileName: string): string {
+  const title = titleFromUploadFileName(fileName);
+  const explicit = title.match(/第(\d+)集/);
+  if (explicit) return explicit[1];
+  const candidates = title.match(/(?<!\d)\d{1,3}(?!\d)/g) ?? [];
+  return candidates.length === 1 ? candidates[0] : '';
+}
 
 function UploadProgressView(props: { progress?: UploadProgress }) {
   if (!props.progress) return null;
@@ -41,31 +63,22 @@ function UploadProgressView(props: { progress?: UploadProgress }) {
 }
 
 export function CreateItemUploadPanel(props: {
-  initialTitle?: string;
-  initialEpisode?: string;
   pending?: boolean;
   blockedForListConfirmation?: boolean;
   progress?: UploadProgress;
-  onDraftChange?(draft: { title: string; episode: string }): void;
-  onSubmit(input: { title: string; episode: string; file: File }): void | Promise<void>;
+  onSubmit(input: CreateItemUploadInput): CreateItemUploadOutcome | Promise<CreateItemUploadOutcome>;
 }) {
-  const [title, setTitle] = useState(props.initialTitle ?? DEFAULT_CREATE_ITEM_TITLE);
-  const [episode, setEpisode] = useState(props.initialEpisode ?? DEFAULT_CREATE_ITEM_EPISODE);
-  const [file, setFile] = useState<File | null>(null);
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [submissionError, setSubmissionError] = useState<string | null>(null);
-  const fileErrorIds = [
-    fileError ? CREATE_ITEM_FILE_ERROR_ID : null,
-    submissionError ? CREATE_ITEM_SUBMISSION_ERROR_ID : null,
-  ].filter(Boolean).join(' ') || undefined;
-  const disabled = Boolean(props.pending || props.blockedForListConfirmation);
-  const updateTitle = (nextTitle: string) => {
-    setTitle(nextTitle);
-    props.onDraftChange?.({ title: nextTitle, episode });
-  };
-  const updateEpisode = (nextEpisode: string) => {
-    setEpisode(nextEpisode);
-    props.onDraftChange?.({ title, episode: nextEpisode });
+  const nextRowId = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [rows, setRows] = useState<CreateItemUploadRow[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const disabled = Boolean(props.pending || uploading || props.blockedForListConfirmation);
+  const missingRequired = rows.some((row) => !row.title.trim() || !row.episode.trim());
+  const updateRow = (id: string, patch: Partial<Pick<CreateItemUploadRow, 'title' | 'episode'>>) => {
+    setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch, error: undefined } : row));
+    setBatchError(null);
   };
 
   return (
@@ -74,15 +87,43 @@ export function CreateItemUploadPanel(props: {
       data-testid="create-item-upload"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!file) {
-          setFileError(FILE_REQUIRED_MESSAGE);
+        if (!rows.length) {
+          setBatchError(FILE_REQUIRED_MESSAGE);
           return;
         }
-        setFileError(null);
-        setSubmissionError(null);
-        void Promise.resolve(props.onSubmit({ title, episode, file })).catch((error: unknown) => {
-          setSubmissionError(error instanceof Error ? error.message : '上传失败，请重试。');
-        });
+        if (missingRequired) {
+          setBatchError('请补齐每一条成片的标题和集数后再上传。');
+          return;
+        }
+        setBatchError(null);
+        setUploading(true);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        const batch = [...rows];
+        void (async () => {
+          try {
+            for (const row of batch) {
+              setActiveRowId(row.id);
+              let result: CreateItemUploadOutcome;
+              try {
+                result = await props.onSubmit({ title: row.title, episode: row.episode, file: row.file });
+              } catch {
+                result = { outcome: 'uncertain', message: '上传结果不确定，请先核对待审列表。' };
+              }
+              if (result.outcome === 'success') {
+                setRows((current) => current.filter((candidate) => candidate.id !== row.id));
+                if (result.stopBatch) break;
+                continue;
+              }
+              setRows((current) => current.map((candidate) =>
+                candidate.id === row.id ? { ...candidate, error: result.message } : candidate,
+              ));
+              if (result.outcome === 'uncertain') break;
+            }
+          } finally {
+            setActiveRowId(null);
+            setUploading(false);
+          }
+        })();
       }}
     >
       <div>
@@ -91,34 +132,66 @@ export function CreateItemUploadPanel(props: {
         <span>原片校验通过后会安全上传并创建 V1。</span>
       </div>
       <label>
-        <span>成片标题</span>
-        <input value={title} disabled={disabled} onChange={(event) => updateTitle(event.target.value)} />
-      </label>
-      <label>
-        <span>集数</span>
-        <input value={episode} disabled={disabled} onChange={(event) => updateEpisode(event.target.value)} />
-      </label>
-      <label>
-        <span>原片文件</span>
+        <span>原片文件（可多选）</span>
         <input
+          ref={fileInputRef}
           data-testid="create-item-file"
           type="file"
+          multiple
           accept={ACCEPTED_VIDEO_TYPES}
-          aria-describedby={fileErrorIds}
-          aria-invalid={Boolean(fileError || submissionError)}
+          aria-invalid={Boolean(batchError)}
           disabled={disabled}
           onChange={(event) => {
-            setFile(event.currentTarget.files?.[0] ?? null);
-            setFileError(null);
-            setSubmissionError(null);
+            const selected = Array.from(event.currentTarget.files ?? []);
+            setRows(selected.map((file) => ({
+              id: `upload-row-${nextRowId.current++}`,
+              file,
+              title: titleFromUploadFileName(file.name),
+              episode: episodeFromUploadFileName(file.name),
+            })));
+            setBatchError(null);
           }}
         />
       </label>
-      {fileError ? <span className="fj-review-form-error" data-testid="create-item-file-error" id={CREATE_ITEM_FILE_ERROR_ID} role="alert">{fileError}</span> : null}
-      {submissionError ? <span className="fj-review-form-error" id={CREATE_ITEM_SUBMISSION_ERROR_ID} role="alert">{submissionError}</span> : null}
+      {rows.length ? (
+        <div className="fj-review-upload-rows" data-testid="create-item-upload-rows">
+          {rows.map((row, index) => {
+            const titleId = `${row.id}-title`;
+            const episodeId = `${row.id}-episode`;
+            return (
+              <section className="fj-review-upload-row" data-testid={row.id} key={row.id}>
+                <div className="fj-review-upload-row-file">
+                  <strong>{row.file.name}</strong>
+                  <span>{activeRowId === row.id ? '上传中...' : `第 ${index + 1} 条`}</span>
+                </div>
+                <label htmlFor={titleId}>
+                  <span>成片标题</span>
+                  <input
+                    id={titleId}
+                    value={row.title}
+                    disabled={disabled}
+                    onChange={(event) => updateRow(row.id, { title: event.target.value })}
+                  />
+                </label>
+                <label htmlFor={episodeId}>
+                  <span>集数</span>
+                  <input
+                    id={episodeId}
+                    value={row.episode}
+                    disabled={disabled}
+                    onChange={(event) => updateRow(row.id, { episode: event.target.value })}
+                  />
+                </label>
+                {row.error ? <span className="fj-review-form-error" data-testid={`${row.id}-error`} role="alert">{row.error}</span> : null}
+              </section>
+            );
+          })}
+        </div>
+      ) : null}
+      {batchError ? <span className="fj-review-form-error" data-testid="create-item-batch-error" role="alert">{batchError}</span> : null}
       <UploadProgressView progress={props.progress} />
-      <button className="fj-review-primary" type="submit" disabled={disabled}>
-        {props.blockedForListConfirmation ? '请先确认列表' : props.pending ? '上传中...' : '上传 V1'}
+      <button className="fj-review-primary" type="submit" disabled={disabled || !rows.length || missingRequired}>
+        {props.blockedForListConfirmation ? '请先确认列表' : uploading || props.pending ? '上传中...' : '上传 V1'}
       </button>
     </form>
   );
@@ -128,16 +201,13 @@ export function AppendVersionPanel(props: {
   nextLabel: string;
   pending?: boolean;
   progress?: UploadProgress;
-  requiresSupersedeReason?: boolean;
-  onSubmit(input: { file: File; versionNote: string; changeSummary: string; supersedeReason: string }): void | Promise<void>;
+  onSubmit(input: { file: File; versionNote: string; changeSummary: string }): void | Promise<void>;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [versionNote, setVersionNote] = useState(`${props.nextLabel} 版本说明`);
   const [changeSummary, setChangeSummary] = useState('按审阅意见完成本轮修改。');
-  const [supersedeReason, setSupersedeReason] = useState(props.requiresSupersedeReason ? '审阅前主动补版。' : '');
   const [fileError, setFileError] = useState<string | null>(null);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
-  const supersedeMissing = props.requiresSupersedeReason && !supersedeReason.trim();
   const fileErrorIds = [
     fileError ? APPEND_VERSION_FILE_ERROR_ID : null,
     submissionError ? APPEND_VERSION_SUBMISSION_ERROR_ID : null,
@@ -149,7 +219,6 @@ export function AppendVersionPanel(props: {
       data-testid="append-version-panel"
       onSubmit={(event) => {
         event.preventDefault();
-        if (supersedeMissing) return;
         if (!file) {
           setFileError(FILE_REQUIRED_MESSAGE);
           return;
@@ -160,7 +229,6 @@ export function AppendVersionPanel(props: {
           file,
           versionNote,
           changeSummary,
-          supersedeReason,
         })).catch((error: unknown) => {
           setSubmissionError(error instanceof Error ? error.message : '上传失败，请重试。');
         });
@@ -204,24 +272,12 @@ export function AppendVersionPanel(props: {
           onChange={(event) => setChangeSummary(event.target.value)}
         />
       </label>
-      <label className="fj-review-inline-upload-reason">
-        <span>{props.requiresSupersedeReason ? '主动补版原因（必填）' : '主动补版原因'}</span>
-        <textarea
-          data-testid="append-version-supersede-reason"
-          value={supersedeReason}
-          aria-describedby={supersedeMissing ? APPEND_VERSION_REASON_ERROR_ID : undefined}
-          aria-invalid={supersedeMissing}
-          disabled={props.pending}
-          onChange={(event) => setSupersedeReason(event.target.value)}
-        />
-      </label>
       {fileError ? <span className="fj-review-form-error fj-review-inline-upload-file-error" data-testid="append-version-file-error" id={APPEND_VERSION_FILE_ERROR_ID} role="alert">{fileError}</span> : null}
       {submissionError ? <span className="fj-review-form-error" id={APPEND_VERSION_SUBMISSION_ERROR_ID} role="alert">{submissionError}</span> : null}
       <UploadProgressView progress={props.progress} />
-      <button className="fj-review-secondary fj-review-inline-upload-submit" disabled={props.pending || supersedeMissing} type="submit">
+      <button className="fj-review-secondary fj-review-inline-upload-submit" disabled={props.pending} type="submit">
         {props.pending ? '上传中...' : `确认追加 ${props.nextLabel}`}
       </button>
-      {supersedeMissing ? <span className="fj-review-form-error fj-review-inline-upload-reason-error" id={APPEND_VERSION_REASON_ERROR_ID} role="alert">待审状态主动补版必须填写原因。</span> : null}
     </form>
   );
 }

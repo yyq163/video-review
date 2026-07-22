@@ -238,7 +238,7 @@ def create_issue(
 
 def resolve_issue(client: TestClient, project_id: str, item_id: str, version_id: str, issue: dict[str, Any]) -> dict[str, Any]:
     response = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project_id}/items/{item_id}/versions/{version_id}/issues/{issue['id']}/resolve",
+        f"/api/v1/final-cut-review/edit/projects/{project_id}/items/{item_id}/versions/{version_id}/issues/{issue['id']}/resolve",
         json=command("ResolveReviewIssue", {"project_ref_id": project_id, "review_item_id": item_id, "version_id": version_id, "issue_id": issue["id"]}),
         headers={"If-Match": str(issue["lock_version"])},
     )
@@ -1180,16 +1180,11 @@ def test_delete_review_item_requires_confirmed_payload(client: TestClient) -> No
     assert direct.status_code == 200
 
 
-def test_delete_review_item_rejects_after_review_starts(client: TestClient) -> None:
+def test_delete_review_item_rejects_after_first_issue_starts_review(client: TestClient) -> None:
     project, item = create_project_item(client)
-    start = command("StartReview", {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"]})
-    started = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/start",
-        json=start,
-        headers={"If-Match": str(item["lock_version"])},
-    )
-    assert started.status_code == 200, started.text
-    started_item = api_data(started)
+    create_issue(client, project["project_ref_id"], item)
+    started_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    assert started_item["workflow_status"] == "in_review"
 
     body = command("DeleteReviewItem", {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "confirmed": True})
     response = client.post(
@@ -1207,6 +1202,8 @@ def test_delete_review_item_rejects_after_review_starts(client: TestClient) -> N
 def test_delete_review_item_rejects_multi_version_issue_and_finalized_items(client: TestClient) -> None:
     multi_project = create_project(client, "DEL-MULTI")
     multi_item = create_item(client, multi_project["project_ref_id"], upload_video(client, filename="multi-v1.mp4", seed=b"m"), item_code="MULTI001")
+    create_issue(client, multi_project["project_ref_id"], multi_item, content="allow v2")
+    multi_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{multi_project['project_ref_id']}/items/{multi_item['id']}"))
     file_id = upload_video(client, filename="v2.mp4", seed=b"2")
     upload = command(
         "UploadReviewVersion",
@@ -1214,7 +1211,6 @@ def test_delete_review_item_rejects_multi_version_issue_and_finalized_items(clie
             "project_ref_id": multi_project["project_ref_id"],
             "review_item_id": multi_item["id"],
             "original_file_id": file_id,
-            "supersede_reason": "duplicate cleanup must not remove history",
             "change_summary": "v2",
         },
     )
@@ -1329,7 +1325,12 @@ def test_soft_delete_issue_is_review_command_and_preserves_issue_records(client:
         assert len(annotations) == 1
 
 
-def test_request_changes_makes_current_version_issue_commands_read_only(client: TestClient) -> None:
+def test_legacy_changes_requested_keeps_current_version_commands_writable(client: TestClient) -> None:
+    from sqlalchemy import update
+
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import ReviewItemModel
+
     project, item = create_project_item(client)
     unresolved_issue = create_issue(client, project["project_ref_id"], item, content="keep unresolved")
     item_after_first = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
@@ -1341,105 +1342,72 @@ def test_request_changes_makes_current_version_issue_commands_read_only(client: 
         item["current_version_id"],
         resolved_candidate,
     )
-    item_before_request = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
-    request = command(
-        "RequestChanges",
+
+    with SessionLocal.begin() as session:
+        session.execute(
+            update(ReviewItemModel)
+            .where(ReviewItemModel.id == item["id"])
+            .values(workflow_status="changes_requested")
+        )
+
+    legacy_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    assert legacy_item["workflow_status"] == "changes_requested"
+
+    base = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}"
+    update_issue = command(
+        "UpdateReviewIssue",
         {
             "project_ref_id": project["project_ref_id"],
             "review_item_id": item["id"],
             "version_id": item["current_version_id"],
-            "summary": "current version becomes read only",
+            "issue_id": resolved_issue["id"],
+            "content": "resolved issue remains editable",
         },
     )
-    requested = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/request-changes",
-        json=request,
-        headers={"Idempotency-Key": request["command_id"], "If-Match": str(item_before_request["lock_version"])},
+    updated = client.patch(
+        f"{base}/issues/{resolved_issue['id']}",
+        json=update_issue,
+        headers={"If-Match": str(resolved_issue["lock_version"])},
     )
-    assert requested.status_code == 200, requested.text
-    requested_item = api_data(requested)
-    assert requested_item["workflow_status"] == "changes_requested"
+    assert updated.status_code == 200, updated.text
+    updated_issue = api_data(updated)
+    assert updated_issue["current_revision"]["content"] == "resolved issue remains editable"
 
-    base = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}"
-    attempts = [
-        (
-            "patch",
-            f"{base}/issues/{unresolved_issue['id']}",
-            command(
-                "UpdateReviewIssue",
-                {
-                    "project_ref_id": project["project_ref_id"],
-                    "review_item_id": item["id"],
-                    "version_id": item["current_version_id"],
-                    "issue_id": unresolved_issue["id"],
-                    "content": "must stay hidden",
-                },
-            ),
-            {"If-Match": str(unresolved_issue["lock_version"])},
+    reply = command(
+        "AddReviewMessage",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "version_id": item["current_version_id"],
+            "issue_id": unresolved_issue["id"],
+            "content": "legacy state reply",
+        },
+    )
+    replied = client.post(
+        f"{base}/issues/{unresolved_issue['id']}/messages",
+        json=reply,
+        headers={"Idempotency-Key": reply["command_id"]},
+    )
+    assert replied.status_code == 200, replied.text
+
+    reopened = client.post(
+        f"{base}/issues/{resolved_issue['id']}/reopen",
+        json=command(
+            "ReopenReviewIssue",
+            {
+                "project_ref_id": project["project_ref_id"],
+                "review_item_id": item["id"],
+                "version_id": item["current_version_id"],
+                "issue_id": resolved_issue["id"],
+            },
         ),
-        (
-            "post",
-            f"{base}/issues/{unresolved_issue['id']}/messages",
-            command(
-                "AddReviewMessage",
-                {
-                    "project_ref_id": project["project_ref_id"],
-                    "review_item_id": item["id"],
-                    "version_id": item["current_version_id"],
-                    "issue_id": unresolved_issue["id"],
-                    "content": "must stay hidden",
-                },
-                command_id="changes-requested-reply",
-            ),
-            {"Idempotency-Key": "changes-requested-reply"},
-        ),
-        (
-            "post",
-            f"{base}/issues/{unresolved_issue['id']}/resolve",
-            command(
-                "ResolveReviewIssue",
-                {
-                    "project_ref_id": project["project_ref_id"],
-                    "review_item_id": item["id"],
-                    "version_id": item["current_version_id"],
-                    "issue_id": unresolved_issue["id"],
-                },
-            ),
-            {"If-Match": str(unresolved_issue["lock_version"])},
-        ),
-        (
-            "post",
-            f"{base}/issues/{resolved_issue['id']}/reopen",
-            command(
-                "ReopenReviewIssue",
-                {
-                    "project_ref_id": project["project_ref_id"],
-                    "review_item_id": item["id"],
-                    "version_id": item["current_version_id"],
-                    "issue_id": resolved_issue["id"],
-                },
-            ),
-            {"If-Match": str(resolved_issue["lock_version"])},
-        ),
-        (
-            "post",
-            f"{base}/issues/{unresolved_issue['id']}/soft-delete",
-            command(
-                "SoftDeleteReviewIssue",
-                {
-                    "project_ref_id": project["project_ref_id"],
-                    "review_item_id": item["id"],
-                    "version_id": item["current_version_id"],
-                    "issue_id": unresolved_issue["id"],
-                },
-            ),
-            {"If-Match": str(unresolved_issue["lock_version"])},
-        ),
-    ]
-    for method, path, body, headers in attempts:
-        response = client.request(method, path, json=body, headers=headers)
-        assert response.status_code == 409, f"{path}: {response.text}"
-        assert api_error(response)["code"] == "RESOURCE_STATE_CONFLICT"
+        headers={"If-Match": str(updated_issue["lock_version"])},
+    )
+    assert reopened.status_code == 200, reopened.text
+    assert api_data(reopened)["status"] == "unresolved"
+
+    resolved = resolve_issue(client, project["project_ref_id"], item["id"], item["current_version_id"], unresolved_issue)
+    assert resolved["status"] == "resolved"
 
     create_after_request = command(
         "CreateReviewIssue",
@@ -1447,7 +1415,7 @@ def test_request_changes_makes_current_version_issue_commands_read_only(client: 
             "project_ref_id": project["project_ref_id"],
             "review_item_id": item["id"],
             "version_id": item["current_version_id"],
-            "content": "must stay hidden",
+            "content": "legacy state remains writable",
             "timestamp_ms": 500,
             "frame_number": 12,
         },
@@ -1455,10 +1423,80 @@ def test_request_changes_makes_current_version_issue_commands_read_only(client: 
     response = client.post(
         f"{base}/issues",
         json=create_after_request,
-        headers={"Idempotency-Key": create_after_request["command_id"], "If-Match": str(requested_item["lock_version"])},
+        headers={"Idempotency-Key": create_after_request["command_id"], "If-Match": str(legacy_item["lock_version"])},
     )
-    assert response.status_code == 409
-    assert api_error(response)["code"] == "RESOURCE_STATE_CONFLICT"
+    assert response.status_code == 200, response.text
+
+    denied_review_resolve = client.post(
+        f"{base}/issues/{api_data(response)['id']}/resolve",
+        json=command(
+            "ResolveReviewIssue",
+            {
+                "project_ref_id": project["project_ref_id"],
+                "review_item_id": item["id"],
+                "version_id": item["current_version_id"],
+                "issue_id": api_data(response)["id"],
+            },
+        ),
+        headers={"If-Match": str(api_data(response)["lock_version"])},
+    )
+    assert denied_review_resolve.status_code == 403
+    assert api_error(denied_review_resolve)["code"] == "ENTRY_CAPABILITY_DENIED"
+
+    item_for_append = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    append_file_id = upload_video(client, filename="legacy-v2.mp4", seed=b"legacy-v2")
+    append_body = command(
+        "UploadReviewVersion",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "original_file_id": append_file_id,
+            "change_summary": "legacy changes requested append",
+        },
+    )
+    appended = client.post(
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/versions",
+        json=append_body,
+        headers={"Idempotency-Key": append_body["command_id"], "If-Match": str(item_for_append["lock_version"])},
+    )
+    assert appended.status_code == 200, appended.text
+    assert api_data(appended)["version_no"] == 2
+
+    finalize_project, finalize_item = create_project_item(client, code="LEGACYFINAL")
+    create_issue(client, finalize_project["project_ref_id"], finalize_item, content="legacy unresolved finalization")
+    with SessionLocal.begin() as session:
+        session.execute(
+            update(ReviewItemModel)
+            .where(ReviewItemModel.id == finalize_item["id"])
+            .values(workflow_status="changes_requested")
+        )
+    legacy_finalize_item = api_data(
+        client.get(
+            f"/api/v1/final-cut-review/projects/{finalize_project['project_ref_id']}/items/{finalize_item['id']}"
+        )
+    )
+    assert legacy_finalize_item["workflow_status"] == "changes_requested"
+    assert legacy_finalize_item["unresolved_current_version_count"] == 1
+    finalization = finalize(client, finalize_project["project_ref_id"], legacy_finalize_item)
+    assert finalization["version_id"] == finalize_item["current_version_id"]
+
+
+def test_issue_query_orders_unmodified_before_modified_then_time_and_number(client: TestClient) -> None:
+    project, item = create_project_item(client)
+    early = create_issue(client, project["project_ref_id"], item, content="early modified", stamp=100)
+    item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    first_at_same_time = create_issue(client, project["project_ref_id"], item, content="same time first", stamp=500)
+    item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    second_at_same_time = create_issue(client, project["project_ref_id"], item, content="same time second", stamp=500)
+    resolve_issue(client, project["project_ref_id"], item["id"], item["current_version_id"], early)
+
+    listed = api_data(
+        client.get(
+            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/issues"
+        )
+    )
+    assert [issue["id"] for issue in listed] == [first_at_same_time["id"], second_at_same_time["id"], early["id"]]
+    assert [issue["status"] for issue in listed] == ["unresolved", "unresolved", "resolved"]
 
 
 def test_edit_project_archive_restore_routes_are_not_registered(client: TestClient) -> None:
@@ -2652,17 +2690,7 @@ def test_project_code_is_immutable_and_request_changes_requires_summary(client: 
 def test_version_isolation_and_history_issue_does_not_block_v2_finalization(client: TestClient) -> None:
     project, item = create_project_item(client)
     v1_issue = create_issue(client, project["project_ref_id"], item)
-    request_changes = command(
-        "RequestChanges",
-        {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "version_id": item["current_version_id"], "summary": "need changes"},
-    )
-    response = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/request-changes",
-        json=request_changes,
-        headers={"Idempotency-Key": request_changes["command_id"], "If-Match": "2"},
-    )
-    assert response.status_code == 200, response.text
-    item_for_upload = api_data(response)
+    item_for_upload = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
 
     new_file = upload_video(client, filename="v2.mp4", seed=b"2")
     upload = command(
@@ -2712,8 +2740,24 @@ def test_version_isolation_and_history_issue_does_not_block_v2_finalization(clie
     assert v1_issue["status"] == "unresolved"
 
 
-def test_pending_review_allows_v2_and_v3_append_with_supersede_reason(client: TestClient) -> None:
+def test_each_current_version_requires_one_issue_before_v2_and_v3_append(client: TestClient) -> None:
     project, item = create_project_item(client)
+
+    no_issue_file = upload_video(client, filename="blocked-without-issue.mp4", seed=b"0")
+    no_issue_upload = command(
+        "UploadReviewVersion",
+        {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "original_file_id": no_issue_file},
+    )
+    blocked = client.post(
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/versions",
+        json=no_issue_upload,
+        headers={"Idempotency-Key": no_issue_upload["command_id"], "If-Match": str(item["lock_version"])},
+    )
+    assert blocked.status_code == 409
+    assert api_error(blocked)["code"] == "RESOURCE_STATE_CONFLICT"
+
+    create_issue(client, project["project_ref_id"], item, content="V1 issue")
+    item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
 
     v2_file = upload_video(client, filename="chain-v2.mp4", seed=b"v2")
     v2_upload = command(
@@ -2722,7 +2766,6 @@ def test_pending_review_allows_v2_and_v3_append_with_supersede_reason(client: Te
             "project_ref_id": project["project_ref_id"],
             "review_item_id": item["id"],
             "original_file_id": v2_file,
-            "supersede_reason": "pre-review duplicate cleanup",
             "change_summary": "v2",
         },
     )
@@ -2735,6 +2778,8 @@ def test_pending_review_allows_v2_and_v3_append_with_supersede_reason(client: Te
     v2 = api_data(v2_response)
 
     item_after_v2 = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    create_issue(client, project["project_ref_id"], item_after_v2, content="V2 issue")
+    item_after_v2 = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     v3_file = upload_video(client, filename="chain-v3.mp4", seed=b"v3")
     v3_upload = command(
         "UploadReviewVersion",
@@ -2742,7 +2787,6 @@ def test_pending_review_allows_v2_and_v3_append_with_supersede_reason(client: Te
             "project_ref_id": project["project_ref_id"],
             "review_item_id": item["id"],
             "original_file_id": v3_file,
-            "supersede_reason": "pre-review duplicate cleanup",
             "change_summary": "v3",
         },
     )
@@ -2763,7 +2807,7 @@ def test_pending_review_allows_v2_and_v3_append_with_supersede_reason(client: Te
     assert item_after_v3["current_version_id"] == v3["id"]
 
 
-def test_in_review_forbids_append_and_finalized_rejects_writes(client: TestClient) -> None:
+def test_in_review_allows_append_and_unresolved_current_issue_allows_finalization(client: TestClient) -> None:
     project, item = create_project_item(client)
     issue = create_issue(client, project["project_ref_id"], item)
     file_id = upload_video(client, filename="blocked.mp4", seed=b"3")
@@ -2777,13 +2821,14 @@ def test_in_review_forbids_append_and_finalized_rejects_writes(client: TestClien
         json=upload,
         headers={"Idempotency-Key": upload["command_id"], "If-Match": str(in_review_item["lock_version"])},
     )
-    assert response.status_code == 409
-    assert api_error(response)["code"] == "REVIEW_IN_PROGRESS"
-
-    resolved_issue = resolve_issue(client, project["project_ref_id"], item["id"], item["current_version_id"], issue)
+    assert response.status_code == 200, response.text
+    v2 = api_data(response)
+    item_v2 = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    current_issue = create_issue(client, project["project_ref_id"], item_v2, content="unresolved does not block finalization")
     item_now = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     finalize(client, project["project_ref_id"], item_now, if_match=item_now["lock_version"])
     item_final = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    assert item_final["current_version_id"] == v2["id"]
 
     forged_file_id = upload_video(client, filename="finalized-forged-v3.mp4", seed=b"4")
     forbidden_upload = command(
@@ -2808,14 +2853,14 @@ def test_in_review_forbids_append_and_finalized_rejects_writes(client: TestClien
         {
             "project_ref_id": project["project_ref_id"],
             "review_item_id": item["id"],
-            "version_id": item["current_version_id"],
+            "version_id": v2["id"],
             "content": "late create should be hidden",
             "timestamp_ms": 1000,
             "frame_number": 25,
         },
     )
     late_create = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/issues",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{v2['id']}/issues",
         json=forbidden_create,
         headers={"Idempotency-Key": forbidden_create["command_id"], "If-Match": str(item_final["lock_version"])},
     )
@@ -2827,16 +2872,16 @@ def test_in_review_forbids_append_and_finalized_rejects_writes(client: TestClien
         {
             "project_ref_id": project["project_ref_id"],
             "review_item_id": item["id"],
-            "version_id": item["current_version_id"],
-            "issue_id": resolved_issue["id"],
+            "version_id": v2["id"],
+            "issue_id": current_issue["id"],
             "content": "late update should be hidden",
             "annotation": annotation("late-update"),
         },
     )
     late_update = client.patch(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/issues/{resolved_issue['id']}",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{v2['id']}/issues/{current_issue['id']}",
         json=forbidden_update,
-        headers={"If-Match": str(resolved_issue["lock_version"])},
+        headers={"If-Match": str(current_issue["lock_version"])},
     )
     assert late_update.status_code == 409
     assert assert_error_does_not_echo_input(late_update, "late update should be hidden", "shape-late-update")["code"] == "REVIEW_ITEM_FINALIZED"
@@ -2846,13 +2891,13 @@ def test_in_review_forbids_append_and_finalized_rejects_writes(client: TestClien
         {
             "project_ref_id": project["project_ref_id"],
             "review_item_id": item["id"],
-            "version_id": item["current_version_id"],
-            "issue_id": resolved_issue["id"],
+            "version_id": v2["id"],
+            "issue_id": current_issue["id"],
             "content": "late reply should be hidden",
         },
     )
     late_message = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/issues/{resolved_issue['id']}/messages",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{v2['id']}/issues/{current_issue['id']}/messages",
         json=forbidden_message,
         headers={"Idempotency-Key": forbidden_message["command_id"]},
     )
@@ -2861,24 +2906,24 @@ def test_in_review_forbids_append_and_finalized_rejects_writes(client: TestClien
 
     forbidden_resolve = command(
         "ResolveReviewIssue",
-        {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "version_id": item["current_version_id"], "issue_id": resolved_issue["id"]},
+        {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "version_id": v2["id"], "issue_id": current_issue["id"]},
     )
     late_resolve = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/issues/{resolved_issue['id']}/resolve",
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/versions/{v2['id']}/issues/{current_issue['id']}/resolve",
         json=forbidden_resolve,
-        headers={"If-Match": str(resolved_issue["lock_version"])},
+        headers={"If-Match": str(current_issue["lock_version"])},
     )
     assert late_resolve.status_code == 409
     assert api_error(late_resolve)["code"] == "REVIEW_ITEM_FINALIZED"
 
     forbidden_reopen = command(
         "ReopenReviewIssue",
-        {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "version_id": item["current_version_id"], "issue_id": resolved_issue["id"]},
+        {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "version_id": v2["id"], "issue_id": current_issue["id"]},
     )
     late_reopen = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/issues/{resolved_issue['id']}/reopen",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{v2['id']}/issues/{current_issue['id']}/reopen",
         json=forbidden_reopen,
-        headers={"If-Match": str(resolved_issue["lock_version"])},
+        headers={"If-Match": str(current_issue["lock_version"])},
     )
     assert late_reopen.status_code == 409
     assert api_error(late_reopen)["code"] == "REVIEW_ITEM_FINALIZED"
@@ -2888,17 +2933,17 @@ def test_in_review_forbids_append_and_finalized_rejects_writes(client: TestClien
         {
             "project_ref_id": project["project_ref_id"],
             "review_item_id": item["id"],
-            "version_id": item["current_version_id"],
+            "version_id": v2["id"],
             "summary": "late request changes should be hidden",
         },
     )
     late_request_changes = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/request-changes",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{v2['id']}/request-changes",
         json=forbidden_request_changes,
         headers={"Idempotency-Key": forbidden_request_changes["command_id"], "If-Match": str(item_final["lock_version"])},
     )
-    assert late_request_changes.status_code == 409
-    assert assert_error_does_not_echo_input(late_request_changes, "late request changes should be hidden")["code"] == "REVIEW_ITEM_FINALIZED"
+    assert late_request_changes.status_code == 403
+    assert assert_error_does_not_echo_input(late_request_changes, "late request changes should be hidden")["code"] == "ENTRY_CAPABILITY_DENIED"
 
 
 def test_precise_playback_revision_immutable_and_anti_cross_project(client: TestClient) -> None:

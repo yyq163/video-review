@@ -1,7 +1,7 @@
 # API CONTRACTS
 
-Baseline source: `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md`.
-This file describes the external and internal contracts that must be generated from the single SPEC V1.3 contract source.
+Baseline source: `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md` V1.4 normative amendment.
+This file describes the current external and internal Contract V1 semantics.
 
 ## Single Source And Versioning
 
@@ -137,6 +137,7 @@ review.version.read
 review.version.upload
 review.version.compare
 review.issue.read
+review.issue.resolve
 review.finalization.read
 review.download.finalized_original
 ```
@@ -155,11 +156,8 @@ review.issue.read
 review.issue.create
 review.issue.update
 review.issue.reply
-review.issue.resolve
 review.issue.reopen
 review.issue.delete
-review.session.start
-review.session.request_changes
 review.finalization.read
 review.finalization.create
 review.download.finalized_original
@@ -167,6 +165,8 @@ review.package.create
 review.package.read
 review.package.download
 ```
+
+`review.session.start` and `review.session.request_changes` remain recognized only as legacy wire capabilities/command shapes. They are not granted to either current entry profile. `StartReview` and `RequestChanges` routes may remain present for rolling compatibility, but current principals receive `403 ENTRY_CAPABILITY_DENIED` and no current UI exposes them.
 
 No general-purpose physical delete capability exists in V1. `review.item.delete` is the sole, edit-entry-only physical-delete exception for a duplicate item before review starts; it deletes the item row, its single unreviewed version, upload sessions, any file object not referenced by another version/finalization, and the referenced storage-root blob after the database transaction commits. Audit events keep aggregate ids but must not retain foreign keys to deleted rows. `review.project.delete` is a review-entry soft delete command: it sets `deleted_at`, hides the project from normal list/detail/workspace/media/package query surfaces, keeps descendants and media for audit, and rejects all later write commands. `review.issue.delete` is a review-entry issue soft delete.
 
@@ -208,14 +208,17 @@ FinalizeVersion
 PrepareFinalizedPackage
 ```
 
+`StartReview` and `RequestChanges` in the command registry are compatibility-only. The first `CreateReviewIssue` performs the start transition in the same transaction.
+
 `SoftDeleteProject.payload` 必须同时包含 `project_ref_id` 与常量 `confirmed: true`。浏览器二次确认只负责取得
 用户意图，不能代替服务端合同门禁；缺失或 `false` 必须在命令执行前返回 `422 VALIDATION_ERROR`。
 
 Representative payload requirements:
 
 - `CreateReviewItem`: `projectRefId`, `itemCode`, optional `episodeNo`, `title`, `originalFileId`, optional `versionNote`.
-- The HTTP frontend keeps the completed upload result, created item/version and one stable `CreateReviewItem` command/idempotency ID for the lifetime of the same mounted-page V1 `File` + project + title + episode operation. If the command response, post-command version read, or subsequent project-list refresh is uncertain, an in-page retry replays that exact operation and only repeats the missing read/refresh; it must not upload/bind a second item with a new command ID. The UI must not direct the user to hard-refresh as the retry mechanism because browser reload discards the `File` identity and operation cache; after a reload it directs the user to confirm the existing list result before any new submission. Changing an editable field creates a distinct operation and command ID.
-- `UploadReviewVersion`: `projectRefId`, `reviewItemId`, `originalFileId`, optional `versionNote`, optional `changeSummary`, optional `supersedeReason`.
+- The V1 frontend creates one stable row per selected `File` and submits rows sequentially. Each row keeps its own title, episode and failure. Explicit failures continue; successes are removed; uncertain results stop the batch. List-refetch failure after a successful command never changes the command result or causes a second upload.
+- The HTTP frontend keeps the completed upload result, created item/version and one stable `CreateReviewItem` command/idempotency ID for the lifetime of the same mounted-page V1 `File` + project + title + episode operation. A lost command response is uncertain and reuses the operation identity; a post-success project-list refresh failure only shows `文件已上传成功，待审列表暂时刷新失败，请刷新页面查看。`.
+- `UploadReviewVersion`: `projectRefId`, `reviewItemId`, `originalFileId`, optional `versionNote`, optional `changeSummary`. The optional wire field `supersedeReason` remains accepted for backward compatibility but is not required and is not a gate.
 - The HTTP frontend applies the same mounted-page operation identity to V2/V3 append: one `File` + project + item + version metadata tuple keeps its completed upload and one stable `UploadReviewVersion` command ID. A lost command response is retried with that command ID and cannot allocate another version; changing any tuple field starts a distinct operation.
 - `CreateReviewIssue`: `projectRefId`, `reviewItemId`, `versionId`, `content`, `timestampMs`, `frameNumber`, optional annotation.
 - `FinalizeVersion`: `projectRefId`, `reviewItemId`, `versionId`, `confirmed: true`.
@@ -241,7 +244,7 @@ getIssue(issueId)
 getAnnotation(annotationId)
 ```
 
-Statistics must distinguish current-version unresolved/resolved counts from historical-version counts.
+Statistics must distinguish current-version unresolved/resolved storage values from historical-version counts. User-facing labels are “未修改/已修改”. Issue query order is unresolved first, resolved second, then `timestamp_ms`, then `issue_no`; both entry UIs and playback navigation use the same ordering. Current-workspace queries poll every 2.5 seconds only while mounted; historical-version queries do not poll. No SSE/WebSocket contract is introduced.
 
 ## HTTP Routes
 
@@ -272,6 +275,7 @@ POST  /api/v1/final-cut-review/edit/projects/{project_ref_id}/items
 PATCH /api/v1/final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}
 POST  /api/v1/final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}/delete
 POST  /api/v1/final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}/versions
+POST  /api/v1/final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/resolve
 ```
 
 `CreateProject` accepts optional `description` (maximum 2000 characters) as ordinary project metadata. `ProjectDTO.description` is always present. `external_project_id` remains an optional host-system identity and is never a substitute for description; repeated descriptions across local projects are valid.
@@ -282,20 +286,19 @@ Review write facade:
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/archive
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/restore
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/soft-delete
-POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/start
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues
 PATCH /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/soft-delete
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/messages
-POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/resolve
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/reopen
-POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/request-changes
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/finalize
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages
 GET   /api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}/download-session
 GET   /api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}/download
 ```
+
+Legacy `/start` and `/request-changes` route shapes remain registered only for rolling compatibility and capability-deny current entry profiles. Review-side resolve is likewise not a current capability; only the edit resolve facade and review reopen facade are authorized.
 
 The frontend first prepares a package and renders `preparing`, `ready`,
 `downloading`, or `failed` state. It must not download automatically when the

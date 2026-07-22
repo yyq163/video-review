@@ -78,7 +78,7 @@ export function ProjectDetailItemList({
               <span>第 {item.episode} 集 · {versions.length} 个版本 · 当前 {currentVersion?.label ?? '-'}</span>
             </div>
             <StatusBadge status={item.status} />
-            <span>当前未解决 {openCount}</span>
+            <span>当前未修改 {openCount}</span>
             <div className="fj-review-item-actions">
               <Link
                 className="fj-review-primary"

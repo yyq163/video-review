@@ -73,8 +73,8 @@ export function ReviewTimeline(props: ReviewTimelineProps) {
               className={`fj-review-timeline-marker ${issue.status === 'resolved' ? 'is-resolved' : 'is-open'} ${selected ? 'is-selected' : ''}`}
               data-testid={`timeline-marker-${issue.issueId}`}
               style={{ left: `${left}%` }}
-              title={`#${issue.issueNo} ${formatTimestampTimecode(issue.timestampMs, props.fpsNum, props.fpsDen)} ${issue.status === 'unresolved' ? '未解决' : '已解决'} ${issue.body}`}
-              aria-label={`意见 #${issue.issueNo} ${issue.status === 'unresolved' ? '未解决' : '已解决'}`}
+              title={`#${issue.issueNo} ${formatTimestampTimecode(issue.timestampMs, props.fpsNum, props.fpsDen)} ${issue.status === 'unresolved' ? '未修改' : '已修改'} ${issue.body}`}
+              aria-label={`意见 #${issue.issueNo} ${issue.status === 'unresolved' ? '未修改' : '已修改'}`}
               onPointerDown={(event) => {
                 event.stopPropagation();
               }}

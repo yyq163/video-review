@@ -136,7 +136,11 @@ export class InMemoryReviewStore {
           issue.versionId === versionId &&
           !issue.deletedAt,
       )
-      .sort((left, right) => left.timestampMs - right.timestampMs || left.issueNo - right.issueNo)
+      .sort((left, right) =>
+        (left.status === 'unresolved' ? 0 : 1) - (right.status === 'unresolved' ? 0 : 1) ||
+        left.timestampMs - right.timestampMs ||
+        left.issueNo - right.issueNo,
+      )
       .map(cloneIssue);
   }
 

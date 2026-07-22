@@ -12,6 +12,7 @@ capabilities:
     - review.version.upload
     - review.version.compare
     - review.issue.read
+    - review.issue.resolve
     - review.finalization.read
     - review.download.finalized_original
   review:
@@ -26,14 +27,14 @@ capabilities:
     - review.issue.create
     - review.issue.update
     - review.issue.reply
-    - review.issue.resolve
     - review.issue.reopen
     - review.issue.delete
-    - review.session.start
-    - review.session.request_changes
     - review.finalization.read
     - review.finalization.create
     - review.download.finalized_original
     - review.package.create
     - review.package.read
     - review.package.download
+  compatibility:
+    - review.session.start
+    - review.session.request_changes

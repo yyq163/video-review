@@ -11,6 +11,7 @@ export interface IssuePanelProps {
   playbackPending?: boolean;
   playbackError?: string | null;
   readonlyReason?: string;
+  statusReadonlyReason?: string;
   pending?: boolean;
   onSubmittingChange?(submitting: boolean): void;
   onCreateIssue(body: string): Promise<void>;
@@ -27,6 +28,7 @@ export interface IssueCardProps {
   version: ReviewVersion;
   selected?: boolean;
   readonlyReason?: string;
+  statusReadonlyReason?: string;
   showReadonlyReason?: boolean;
   pending?: boolean;
   entryMode: EntryMode;

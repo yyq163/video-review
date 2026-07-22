@@ -47,7 +47,10 @@ export function itemFromDto(dto: ReviewItemDTO): ReviewItem {
     reviewItemId: dto.id,
     projectRefId: dto.project_ref_id,
     title: dto.title,
-    episode: dto.episode_no?.toString() ?? dto.item_code,
+    episode:
+      /^\d+$/.test(dto.item_code) && dto.episode_no === Number(dto.item_code)
+        ? dto.item_code
+        : dto.episode_no?.toString() ?? dto.item_code,
     currentVersionId: dto.current_version_id,
     activeFinalizationId: dto.active_finalization_id ?? null,
     status: dto.workflow_status,

@@ -97,8 +97,8 @@ Out of scope for V1:
 ## Security Acceptance Checks
 
 - Client-forged `capabilities`, `principal_id`, and `write_guard_verified` are ignored or rejected.
-- `/edit` cannot create/update/resolve/reopen issues, request changes, finalize, or package.
-- `/review` cannot create/update projects or upload versions; archive/restore is explicitly allowed by the product contract.
+- `/edit` can only resolve current-version issues; it cannot create/update/reopen issues, start review, request changes, finalize, or package.
+- `/review` can create/update/reopen current-version issues but cannot resolve them, create/update projects, or upload versions; archive/restore is explicitly allowed by the product contract. Both current entry profiles reject legacy start-review and request-changes commands.
 - History unresolved issue does not block current version finalization.
 - Single download and package download return originals, not proxies.
 - Package content does not drift after snapshot creation.

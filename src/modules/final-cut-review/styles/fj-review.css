@@ -423,24 +423,66 @@
 }
 
 .fj-review-upload-panel {
-  grid-template-columns: minmax(220px, 1.2fr) repeat(2, minmax(120px, 0.7fr)) minmax(180px, 0.9fr) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.5fr) auto;
   margin-bottom: 16px;
   overflow: hidden;
   padding: 14px;
   position: relative;
 }
 
-.fj-review-upload-panel > div {
+.fj-review-upload-panel > div:first-child {
   display: grid;
   gap: 4px;
 }
 
-.fj-review-upload-panel > div svg {
+.fj-review-upload-panel > div:first-child svg {
   color: var(--fj-review-aqua);
 }
 
-.fj-review-upload-panel > div span {
+.fj-review-upload-panel > div:first-child span {
   color: var(--fj-review-muted);
+}
+
+.fj-review-upload-rows,
+.fj-review-upload-panel > .fj-review-form-error {
+  grid-column: 1 / -1;
+}
+
+.fj-review-upload-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.fj-review-upload-row {
+  align-items: end;
+  background: #0b0f11;
+  border: 1px solid #253137;
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr) minmax(100px, 0.45fr);
+  padding: 10px 12px;
+}
+
+.fj-review-upload-row-file {
+  align-self: center;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fj-review-upload-row-file strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fj-review-upload-row-file span {
+  color: var(--fj-review-muted);
+}
+
+.fj-review-upload-row > .fj-review-form-error {
+  grid-column: 1 / -1;
 }
 
 .fj-review-upload-progress {
@@ -1238,8 +1280,8 @@
   display: grid;
   grid-template-areas:
     "summary file note submit"
-    "summary change reason submit"
-    "file-error file-error reason-error reason-error";
+    "summary change change submit"
+    "file-error file-error file-error file-error";
   grid-template-columns: minmax(150px, 0.36fr) minmax(0, 1fr) minmax(0, 1fr) var(--fj-review-inline-upload-submit-width);
   gap: 8px 10px;
   justify-content: stretch;
@@ -1291,16 +1333,8 @@
   grid-area: change;
 }
 
-.fj-review-inline-upload-reason {
-  grid-area: reason;
-}
-
 .fj-review-inline-upload-file-error {
   grid-area: file-error;
-}
-
-.fj-review-inline-upload-reason-error {
-  grid-area: reason-error;
 }
 
 .fj-review-inline-upload-submit {
@@ -1843,8 +1877,8 @@
   .fj-review-inline-upload {
     grid-template-areas:
       "summary file note submit"
-      "summary change reason submit"
-      "file-error file-error reason-error reason-error";
+      "summary change change submit"
+      "file-error file-error file-error file-error";
     grid-template-columns: minmax(148px, 0.42fr) minmax(0, 1fr) minmax(0, 1fr) var(--fj-review-inline-upload-submit-width);
   }
 }
@@ -1984,8 +2018,8 @@
   .fj-review-inline-upload {
     grid-template-areas:
       "summary file note submit"
-      "summary change reason submit"
-      "file-error file-error reason-error reason-error";
+      "summary change change submit"
+      "file-error file-error file-error file-error";
     grid-template-columns: minmax(148px, 0.42fr) minmax(0, 1fr) minmax(0, 1fr) var(--fj-review-inline-upload-submit-width);
   }
 
@@ -2073,10 +2107,13 @@
       "file"
       "note"
       "change"
-      "reason"
       "file-error"
-      "reason-error"
       "submit";
+    grid-template-columns: 1fr;
+  }
+
+  .fj-review-upload-row {
+    align-items: stretch;
     grid-template-columns: 1fr;
   }
 

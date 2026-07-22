@@ -27,7 +27,7 @@ export function ReviewWorkspacePage(props: { entryMode: EntryMode }) {
     );
   }
 
-  if (workspace.error || !workspace.data) {
+  if (!workspace.data) {
     return (
       <AppShell
         entryMode={props.entryMode}

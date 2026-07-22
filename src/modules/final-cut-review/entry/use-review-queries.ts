@@ -41,6 +41,13 @@ export function useWorkspace(mode: EntryMode, input: { projectRefId: ProjectRefI
     queryKey: reviewKeys.workspace(input.projectRefId, input.reviewItemId, input.versionId),
     queryFn: ({ signal }) => api.getWorkspace(input, { signal }),
     retry: (failureCount, error) => !isAbortError(error) && failureCount < 2,
+    refetchInterval: (query) => {
+      const workspace = query.state.data;
+      return !input.versionId || workspace?.currentVersion.versionId === workspace?.item.currentVersionId
+        ? 2_500
+        : false;
+    },
+    refetchIntervalInBackground: true,
   });
 }
 
@@ -54,6 +61,9 @@ export function useReviewMutations(mode: EntryMode) {
     queryClient.invalidateQueries({ queryKey: reviewKeys.workspace(projectRefId, reviewItemId, versionId) });
   const invalidateCurrentWorkspace = (projectRefId: ProjectRefId, reviewItemId: ReviewItemId) =>
     queryClient.invalidateQueries({ queryKey: reviewKeys.workspace(projectRefId, reviewItemId) });
+  const refreshInBackground = (...refreshes: Promise<unknown>[]) => {
+    void Promise.allSettled(refreshes);
+  };
 
   return {
     createProject: useMutation({
@@ -93,11 +103,11 @@ export function useReviewMutations(mode: EntryMode) {
     createReviewItemWithVersion: useMutation({
       mutationFn: (input: Parameters<typeof api.createReviewItemWithVersion>[0]) =>
         api.createReviewItemWithVersion(input, context()),
-      onSuccess: async ({ item }) => {
-        await Promise.all([
+      onSuccess: ({ item }) => {
+        refreshInBackground(
           invalidateProject(item.projectRefId),
           invalidateCurrentWorkspace(item.projectRefId, item.reviewItemId),
-        ]);
+        );
       },
     }),
     updateReviewItem: useMutation({
@@ -119,19 +129,12 @@ export function useReviewMutations(mode: EntryMode) {
     }),
     appendVersion: useMutation({
       mutationFn: (input: Parameters<typeof api.appendVersion>[0]) => api.appendVersion(input, context()),
-      onSuccess: async (version) => {
-        await Promise.all([
+      onSuccess: (version) => {
+        refreshInBackground(
           invalidateProject(version.projectRefId),
           invalidateCurrentWorkspace(version.projectRefId, version.reviewItemId),
           invalidateWorkspace(version.projectRefId, version.reviewItemId, version.versionId),
-        ]);
-      },
-    }),
-    startReview: useMutation({
-      mutationFn: (input: Parameters<typeof api.startReview>[0]) => api.startReview(input, context()),
-      onSuccess: (version) => {
-        invalidateCurrentWorkspace(version.projectRefId, version.reviewItemId);
-        invalidateWorkspace(version.projectRefId, version.reviewItemId, version.versionId);
+        );
       },
     }),
     createIssue: useMutation({
@@ -179,14 +182,6 @@ export function useReviewMutations(mode: EntryMode) {
         invalidateProject(issue.projectRefId);
         invalidateCurrentWorkspace(issue.projectRefId, issue.reviewItemId);
         invalidateWorkspace(issue.projectRefId, issue.reviewItemId, issue.versionId);
-      },
-    }),
-    requestChanges: useMutation({
-      mutationFn: (input: Parameters<typeof api.requestChanges>[0]) => api.requestChanges(input, context()),
-      onSuccess: (version) => {
-        invalidateProject(version.projectRefId);
-        invalidateCurrentWorkspace(version.projectRefId, version.reviewItemId);
-        invalidateWorkspace(version.projectRefId, version.reviewItemId, version.versionId);
       },
     }),
     finalizeCurrentVersion: useMutation({

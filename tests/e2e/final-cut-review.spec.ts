@@ -1,16 +1,8 @@
-import { Buffer } from 'node:buffer';
 import { expect, test, type Page } from '@playwright/test';
 
-const TEST_VIDEO_V1 = {
-  name: 'e2e-v1.mp4',
-  mimeType: 'video/mp4',
-  buffer: Buffer.from('e2e v1 upload fixture'),
-};
-const TEST_VIDEO_V2 = {
-  name: 'e2e-v2.mp4',
-  mimeType: 'video/mp4',
-  buffer: Buffer.from('e2e v2 upload fixture'),
-};
+const TEST_VIDEO_ROOT = '/Volumes/App_Dev/审阅平台/test-video';
+const TEST_VIDEO_V1 = `${TEST_VIDEO_ROOT}/01.mp4`;
+const TEST_VIDEO_V2 = `${TEST_VIDEO_ROOT}/02.mp4`;
 
 const ENTRY_VISIBILITY_SCENARIOS = [
   { entryMode: 'edit', surface: 'project list', path: '/edit/projects' },
@@ -30,12 +22,6 @@ async function expectUploadProgressVisible(page: Page) {
   await expect(page.getByTestId('upload-progress')).toBeVisible();
   await expect(page.getByTestId('upload-progress')).toContainText('%');
   await expect(page.getByTestId('upload-progress')).toContainText(/校验文件|创建上传会话|上传分片|绑定成片记录|上传完成/);
-}
-
-async function resolveAllCurrentIssues(page: import('@playwright/test').Page) {
-  for (const issueId of ['issue_v2_001', 'issue_v2_002', 'issue_v2_003']) {
-    await page.getByTestId(`issue-${issueId}`).getByRole('button', { name: '解决当前版本意见' }).click();
-  }
 }
 
 async function openFirstEditableReviewItem(page: Page) {
@@ -85,8 +71,7 @@ test('edit entry creates project, uploads V1, and appends isolated V2', async ({
   await page.getByRole('button', { name: '创建项目' }).click();
   await expect(page.getByRole('heading', { name: /E2E 成片项目/ })).toBeVisible();
 
-  await page.getByTestId('create-item-upload').getByRole('button', { name: '上传 V1' }).click();
-  await expect(page.getByTestId('create-item-file-error')).toContainText('请选择原片文件');
+  await expect(page.getByTestId('create-item-upload').getByRole('button', { name: '上传 V1' })).toBeDisabled();
   await expect(page.getByTestId('review-player')).toHaveCount(0);
   await page.getByTestId('create-item-file').setInputFiles(TEST_VIDEO_V1);
   await page.getByTestId('create-item-upload').getByRole('button', { name: '上传 V1' }).click();
@@ -97,13 +82,19 @@ test('edit entry creates project, uploads V1, and appends isolated V2', async ({
   await expect(page.getByText('剪辑入口仅可查看意见')).toBeVisible();
   await expect(page.getByTestId('finalize-current')).toHaveCount(0);
 
+  await page.goto(page.url().replace('/edit/', '/review/'));
+  await page.getByPlaceholder('针对当前版本输入意见').fill('允许追加 V2 的首条意见');
+  await page.getByRole('button', { name: '提交意见' }).click();
+  await expect(page.getByText('意见已提交到当前版本。')).toBeVisible();
+  await page.goto(page.url().replace('/review/', '/edit/'));
+
   await page.getByTestId('append-version-panel').locator('button', { hasText: '追加 V2' }).click();
   await expect(page.getByTestId('append-version-file-error')).toContainText('请选择原片文件');
   await page.getByTestId('append-version-file').setInputFiles(TEST_VIDEO_V2);
   await page.getByTestId('append-version-panel').locator('button', { hasText: '追加 V2' }).click();
   await expectUploadProgressVisible(page);
   await expect(page.getByText('V2 已追加，旧版本意见不会继承。')).toBeVisible();
-  await expect(page.getByText('当前版本未解决 0')).toBeVisible();
+  await expect(page.getByText('当前版本未修改 0')).toBeVisible();
 });
 
 test('review entry archives and restores a project without deleting existing items', async ({ page }) => {
@@ -519,6 +510,10 @@ test('ultrawide viewport keeps the workstation non-full-width, topbar-aligned, a
   await page.getByTestId('create-item-upload').getByRole('button', { name: '上传 V1' }).click();
   await openFirstEditableReviewItem(page);
   await expect(page.getByTestId('review-player')).toBeVisible();
+  await page.goto(page.url().replace('/edit/', '/review/'));
+  await page.getByPlaceholder('针对当前版本输入意见').fill('用于显示追加入口');
+  await page.getByRole('button', { name: '提交意见' }).click();
+  await page.goto(page.url().replace('/review/', '/edit/'));
   await expect(page.getByRole('button', { name: '确认追加 V2' })).toBeVisible();
 
   const metrics = await page.evaluate(() => {
@@ -532,8 +527,8 @@ test('ultrawide viewport keeps the workstation non-full-width, topbar-aligned, a
       .find((button) => button.textContent?.includes('确认追加 V2'))
       ?.getBoundingClientRect();
     const appendFile = document.querySelector('.fj-review-inline-upload-file')?.getBoundingClientRect();
-    const appendReason = document.querySelector('.fj-review-inline-upload-reason')?.getBoundingClientRect();
-    if (!root || !topbar || !topbarInner || !workspace || !workspaceFrame || !workbench || !appendButton || !appendFile || !appendReason) {
+    const appendChange = document.querySelector('.fj-review-inline-upload-change')?.getBoundingClientRect();
+    if (!root || !topbar || !topbarInner || !workspace || !workspaceFrame || !workbench || !appendButton || !appendFile || !appendChange) {
       throw new Error('missing root, topbar, workspace, workbench, or append button');
     }
     return {
@@ -549,7 +544,7 @@ test('ultrawide viewport keeps the workstation non-full-width, topbar-aligned, a
       appendButtonWidth: appendButton.width,
       appendButtonHeight: appendButton.height,
       appendButtonTopDeltaToFirstField: Math.abs(appendButton.top - appendFile.top),
-      appendButtonBottomDeltaToSecondField: Math.abs(appendButton.bottom - appendReason.bottom),
+      appendButtonBottomDeltaToSecondField: Math.abs(appendButton.bottom - appendChange.bottom),
       documentHasHorizontalScroll:
         document.documentElement.scrollWidth > window.innerWidth + 1 || document.body.scrollWidth > window.innerWidth + 1,
     };
@@ -870,20 +865,18 @@ test('rapid issue selection only applies the last playback target', async ({ pag
   await expect(page.getByTestId('timeline-marker-issue_v2_003')).toHaveClass(/is-selected/);
 });
 
-test('version isolation and finalization use only current version unresolved issues', async ({ page }) => {
+test('version isolation keeps history read-only and unresolved current issues do not block finalization', async ({ page }) => {
   await page.goto('/review/projects/prj_seed_final_cut/items/item_ep28');
-  await expect(page.getByTestId('issue-panel')).toContainText('当前版本未解决 3');
+  await expect(page.getByTestId('issue-panel')).toContainText('当前版本未修改 3');
   await expect(page.getByTestId('historical-issues')).toContainText('V1 00:00:00:02');
-  await expect(page.getByTestId('finalize-current')).toBeDisabled();
-
-  await resolveAllCurrentIssues(page);
-  await expect(page.getByText('当前版本可定稿')).toBeVisible();
+  await expect(page.getByTestId('finalize-current')).toBeEnabled();
+  await expect(page.getByText('当前版本有未修改意见，仍可定稿')).toBeVisible();
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toContain('不可撤销');
     await dialog.dismiss();
   });
   await page.getByTestId('finalize-current').click();
-  await expect(page.getByText('当前版本可定稿')).toBeVisible();
+  await expect(page.getByText('当前版本有未修改意见，仍可定稿')).toBeVisible();
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toContain('确认将当前版本定稿');
     await dialog.accept();

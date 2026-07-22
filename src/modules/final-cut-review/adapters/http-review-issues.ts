@@ -133,13 +133,13 @@ export class HttpReviewIssues implements IssueApi {
   };
 
   readonly resolveIssue: ReviewApiPort['resolveIssue'] = async (input, context) => {
-    this.transport.assertWriteContext(context, ['review']);
-    return this.issueStatusCommand(input, context, 'ResolveReviewIssue', 'resolve');
+    this.transport.assertWriteContext(context, ['edit']);
+    return this.issueStatusCommand(input, context, 'ResolveReviewIssue', 'resolve', 'edit');
   };
 
   readonly reopenIssue: ReviewApiPort['reopenIssue'] = async (input, context) => {
     this.transport.assertWriteContext(context, ['review']);
-    return this.issueStatusCommand(input, context, 'ReopenReviewIssue', 'reopen');
+    return this.issueStatusCommand(input, context, 'ReopenReviewIssue', 'reopen', 'review');
   };
 
   readonly deleteIssue: ReviewApiPort['deleteIssue'] = async (input, context) => {
@@ -173,6 +173,7 @@ export class HttpReviewIssues implements IssueApi {
     context: ExecutionContext,
     commandType: Extract<CommandType, 'ResolveReviewIssue' | 'ReopenReviewIssue'>,
     action: 'resolve' | 'reopen',
+    entry: 'edit' | 'review',
   ) {
     const current = await this.transport.issueForLock(
       input.projectRefId,
@@ -184,7 +185,7 @@ export class HttpReviewIssues implements IssueApi {
       ReviewIssueDTO,
       { project_ref_id: string; review_item_id: string; version_id: string; issue_id: string }
     >(
-      `/api/v1/final-cut-review/review/projects/${input.projectRefId}/items/${input.reviewItemId}/versions/${input.versionId}/issues/${input.issueId}/${action}`,
+      `/api/v1/final-cut-review/${entry}/projects/${input.projectRefId}/items/${input.reviewItemId}/versions/${input.versionId}/issues/${input.issueId}/${action}`,
       commandType,
       {
         project_ref_id: input.projectRefId,

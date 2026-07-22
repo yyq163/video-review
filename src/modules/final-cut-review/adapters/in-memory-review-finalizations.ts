@@ -47,15 +47,11 @@ export class InMemoryReviewFinalizations {
     const item = this.store.getItem(input.projectRefId, input.reviewItemId);
     invariant(item.currentVersionId === input.versionId, '只能定稿当前版本', 'NOT_CURRENT_VERSION');
     invariant(
-      item.status === 'pending_review' || item.status === 'in_review',
+      item.status === 'pending_review' || item.status === 'in_review' || item.status === 'changes_requested',
       '当前状态不能定稿',
       'INVALID_STATUS_TRANSITION',
     );
     const version = this.store.getVersion(input.projectRefId, input.reviewItemId, input.versionId);
-    const unresolved = this.store
-      .getIssuesForVersion(input.projectRefId, input.reviewItemId, input.versionId)
-      .filter((issue) => issue.status === 'unresolved');
-    invariant(unresolved.length === 0, '当前版本仍有未解决意见，不能定稿', 'CURRENT_VERSION_HAS_OPEN_ISSUES');
     invariant(!item.activeFinalizationId, '当前成片已有定稿记录', 'ACTIVE_FINALIZATION_EXISTS');
 
     const timestamp = nowIso();

@@ -1,5 +1,5 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react';
-import type { ReviewAnnotationShape, ReviewIssue, ReviewWorkspace, UploadProgress } from '../contracts/types';
+import type { ReviewAnnotationShape, ReviewIssue, ReviewVersion, ReviewWorkspace, UploadProgress } from '../contracts/types';
 import type { ReviewPlayerHandle } from '../components/ReviewPlayer';
 import type { useReviewMutations } from '../entry/use-review-queries';
 import {
@@ -10,13 +10,12 @@ import {
 
 type ReviewMutations = ReturnType<typeof useReviewMutations>;
 type CurrentInput = { projectRefId: string; reviewItemId: string; versionId: string };
-export type AppendVersionInput = { file: File; versionNote: string; changeSummary: string; supersedeReason: string };
+export type AppendVersionInput = { file: File; versionNote: string; changeSummary: string };
 
 function isSameAppendVersionInput(current: AppendVersionInput, pending: AppendVersionInput): boolean {
   return current.file === pending.file &&
     current.versionNote === pending.versionNote &&
-    current.changeSummary === pending.changeSummary &&
-    current.supersedeReason === pending.supersedeReason;
+    current.changeSummary === pending.changeSummary;
 }
 
 export function useReviewWorkspaceActions(input: {
@@ -43,12 +42,6 @@ export function useReviewWorkspaceActions(input: {
   clearSelectedIssueParam(issueId: string): void;
   selectVersionParams(versionId: string, currentVersionId: string): void;
 }) {
-  const startReview = () =>
-    input.mutations.startReview.mutate(input.currentInput, {
-      onError: input.showActionError,
-      onSuccess: () => input.showToast('已开始当前版本审阅。'),
-    });
-
   const createIssue = async (body: string) => {
     const snapshot = input.playerRef.current?.snapshot();
     try {
@@ -73,12 +66,6 @@ export function useReviewWorkspaceActions(input: {
       throw error;
     }
   };
-
-  const requestChanges = () =>
-    input.mutations.requestChanges.mutate(input.currentInput, {
-      onError: input.showActionError,
-      onSuccess: () => input.showToast('已要求修改，等待剪辑入口追加新版本。'),
-    });
 
   const finalize = () => {
     const confirmed = window.confirm('确认将当前版本定稿？定稿后当前版本将冻结，且不可撤销。');
@@ -135,33 +122,14 @@ export function useReviewWorkspaceActions(input: {
       throw error;
     }
     input.setUploadProgress({ stage: 'validating', percent: 0, totalBytes: versionInput.file.size });
+    let version: ReviewVersion;
     try {
-      const version = await input.mutations.appendVersion.mutateAsync({
+      version = await input.mutations.appendVersion.mutateAsync({
         ...versionInput,
         projectRefId: input.projectRefId,
         reviewItemId: input.reviewItemId,
         onProgress: input.setUploadProgress,
       });
-      const refreshed = await input.refetchWorkspace();
-      if (!refreshed.data?.versions.some((candidate) => candidate.versionId === version.versionId)) {
-        throw new Error('版本已追加，但刷新后的版本列表尚未出现该版本。请保持当前页面重试，或重新载入后核对列表。');
-      }
-      clearAppendVersionConfirmationRequired(input.projectRefId, input.reviewItemId);
-      const nextProtectionState = getAppendVersionProtectionState(input.projectRefId, input.reviewItemId);
-      input.setAppendVersionProtectionState(nextProtectionState);
-      if (nextProtectionState !== 'clear') {
-        throw new Error('版本已追加，但浏览器会话存储不可用。请恢复站点存储并重新载入页面。');
-      }
-      input.setAppendVersionRetry(null);
-      input.setUploadProgress({
-        stage: 'completed',
-        percent: 100,
-        bytesSent: versionInput.file.size,
-        totalBytes: versionInput.file.size,
-      });
-      input.showToast(`${version.label} 已追加，旧版本意见不会继承。`);
-      input.selectVersionParams(version.versionId, version.versionId);
-      input.setUploadProgress(undefined);
     } catch (error) {
       input.setUploadProgress(undefined);
       const nextProtectionState = getAppendVersionProtectionState(input.projectRefId, input.reviewItemId);
@@ -169,6 +137,31 @@ export function useReviewWorkspaceActions(input: {
       input.setAppendVersionRetry(nextProtectionState === 'required' ? versionInput : null);
       input.showActionError(error);
       throw error;
+    }
+
+    clearAppendVersionConfirmationRequired(input.projectRefId, input.reviewItemId);
+    input.setAppendVersionProtectionState(
+      getAppendVersionProtectionState(input.projectRefId, input.reviewItemId),
+    );
+    input.setAppendVersionRetry(null);
+    input.setUploadProgress({
+      stage: 'completed',
+      percent: 100,
+      bytesSent: versionInput.file.size,
+      totalBytes: versionInput.file.size,
+    });
+    try {
+      const refreshed = await input.refetchWorkspace();
+      if (!refreshed.data?.versions.some((candidate) => candidate.versionId === version.versionId)) {
+        input.showToast('文件已上传成功，待审列表暂时刷新失败，请刷新页面查看。');
+      } else {
+        input.showToast(`${version.label} 已追加，旧版本意见不会继承。`);
+        input.selectVersionParams(version.versionId, version.versionId);
+      }
+    } catch {
+      input.showToast('文件已上传成功，待审列表暂时刷新失败，请刷新页面查看。');
+    } finally {
+      input.setUploadProgress(undefined);
     }
   };
 
@@ -248,9 +241,7 @@ export function useReviewWorkspaceActions(input: {
     );
 
   return {
-    startReview,
     createIssue,
-    requestChanges,
     finalize,
     download,
     packageProject,

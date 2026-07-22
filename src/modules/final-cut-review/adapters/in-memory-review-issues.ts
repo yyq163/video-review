@@ -49,7 +49,11 @@ export class InMemoryReviewIssues {
       this.store.items.set(item.reviewItemId, { ...item, status: 'in_review', updatedAt: timestamp });
       this.store.versions.set(version.versionId, { ...version, status: 'in_review' });
     } else {
-      invariant(item.status === 'in_review', '只有审阅中版本可以创建意见', 'INVALID_STATUS_TRANSITION');
+      invariant(
+        item.status === 'in_review' || item.status === 'changes_requested',
+        '当前状态不能创建意见',
+        'INVALID_STATUS_TRANSITION',
+      );
     }
 
     const issueId = `issue_${createUuid()}`;
@@ -107,9 +111,12 @@ export class InMemoryReviewIssues {
     const item = this.store.getItem(input.projectRefId, input.reviewItemId);
     invariant(item.currentVersionId === input.versionId, '历史版本只读', 'HISTORICAL_VERSION_READONLY');
     invariant(item.status !== 'finalized', '已定稿后不能编辑意见', 'FINALIZED_READONLY');
-    invariant(item.status === 'in_review', '只有审阅中版本可以编辑意见', 'INVALID_STATUS_TRANSITION');
+    invariant(
+      item.status === 'in_review' || item.status === 'changes_requested',
+      '当前状态不能编辑意见',
+      'INVALID_STATUS_TRANSITION',
+    );
     const issue = this.store.getIssue(input.projectRefId, input.reviewItemId, input.versionId, input.issueId);
-    invariant(issue.status === 'unresolved', '已解决意见需要重新打开后才能编辑', 'ISSUE_RESOLVED_READONLY');
 
     const timestamp = nowIso();
     const revisionId = `rev_${createUuid()}`;
@@ -161,7 +168,11 @@ export class InMemoryReviewIssues {
     invariant(item.currentVersionId === input.versionId, '历史版本只读', 'HISTORICAL_VERSION_READONLY');
     invariant(item.status !== 'finalized', '已定稿后不能回复', 'FINALIZED_READONLY');
     const issue = this.store.getIssue(input.projectRefId, input.reviewItemId, input.versionId, input.issueId);
-    invariant(item.status === 'in_review', '当前版本意见已只读', 'INVALID_STATUS_TRANSITION');
+    invariant(
+      item.status === 'in_review' || item.status === 'changes_requested',
+      '当前版本意见已只读',
+      'INVALID_STATUS_TRANSITION',
+    );
     const next: ReviewIssue = {
       ...issue,
       lockVersion: issue.lockVersion + 1,
@@ -197,7 +208,11 @@ export class InMemoryReviewIssues {
     invariant(item.status !== 'finalized', '已定稿后不能处理意见', 'FINALIZED_READONLY');
     invariant(item.currentVersionId === input.versionId, '只能处理当前版本意见', 'HISTORICAL_VERSION_READONLY');
     const issue = this.store.getIssue(input.projectRefId, input.reviewItemId, input.versionId, input.issueId);
-    invariant(item.status === 'in_review', '当前版本意见已只读', 'INVALID_STATUS_TRANSITION');
+    invariant(
+      item.status === 'in_review' || item.status === 'changes_requested',
+      '当前版本意见已只读',
+      'INVALID_STATUS_TRANSITION',
+    );
     const next: ReviewIssue = {
       ...issue,
       status: input.status,
@@ -223,7 +238,11 @@ export class InMemoryReviewIssues {
     const issue = this.store.getIssue(input.projectRefId, input.reviewItemId, input.versionId, input.issueId, {
       includeDeleted: true,
     });
-    invariant(item.status === 'in_review', '当前版本意见已只读', 'INVALID_STATUS_TRANSITION');
+    invariant(
+      item.status === 'in_review' || item.status === 'changes_requested',
+      '当前版本意见已只读',
+      'INVALID_STATUS_TRANSITION',
+    );
     invariant(!issue.deletedAt, '意见已删除', 'RESOURCE_STATE_CONFLICT');
     const next: ReviewIssue = {
       ...issue,

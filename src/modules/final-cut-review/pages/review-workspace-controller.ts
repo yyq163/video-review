@@ -48,11 +48,9 @@ export function useReviewWorkspaceController(
   const pending = useMemo(
     () =>
       mutations.appendVersion.isPending ||
-      mutations.startReview.isPending ||
       mutations.createIssue.isPending ||
       mutations.resolveIssue.isPending ||
       mutations.reopenIssue.isPending ||
-      mutations.requestChanges.isPending ||
       mutations.finalizeCurrentVersion.isPending ||
       mutations.downloadFinalizedOriginal.isPending ||
       mutations.createProjectFinalizedPackage.isPending ||
@@ -66,22 +64,27 @@ export function useReviewWorkspaceController(
   const isSelectedCurrent = data.currentVersion.versionId === data.item.currentVersionId;
   const writeReadonlyReason =
     readonlyReason ??
-    (props.entryMode !== 'review'
-      ? '剪辑入口仅可查看意见，不能创建或处理意见。'
-      : !isSelectedCurrent
-        ? '历史版本只读'
-        : data.item.status === 'changes_requested'
-          ? '已要求修改，当前版本只读'
-          : data.currentVersion.status === 'finalized'
-            ? '当前版本已定稿冻结'
-            : undefined);
+    (!isSelectedCurrent
+      ? '历史版本只读'
+      : props.entryMode !== 'review'
+        ? '剪辑入口仅可查看意见正文并标记“已修改”。'
+        : data.currentVersion.status === 'finalized'
+          ? '当前版本已定稿冻结'
+          : undefined);
   const issuePanelReadonlyReason = writeReadonlyReason === '当前版本已定稿冻结' ? '定稿冻结后意见区只读。' : writeReadonlyReason;
+  const issueStatusReadonlyReason =
+    readonlyReason ??
+    (!isSelectedCurrent
+      ? '历史版本只读'
+      : data.currentVersion.status === 'finalized'
+        ? '定稿冻结后意见区只读。'
+        : undefined);
   const canAppendVersion =
     props.entryMode === 'edit' &&
     !readonlyReason &&
     isSelectedCurrent &&
     data.item.status !== 'finalized' &&
-    data.item.status !== 'in_review';
+    data.currentIssues.length > 0;
   const nextLabel = `V${data.versions.length + 1}`;
   const currentIssues = useMemo(() => {
     if (
@@ -90,7 +93,7 @@ export function useReviewWorkspaceController(
       optimisticIssue.reviewItemId !== props.reviewItemId ||
       optimisticIssue.versionId !== data.currentVersion.versionId
     ) {
-      return data.currentIssues;
+      return sortedIssuesForPlayback(data.currentIssues);
     }
     const currentCopy = data.currentIssues.filter((issue) => issue.issueId !== optimisticIssue.issueId);
     return sortedIssuesForPlayback([...currentCopy, optimisticIssue]);
@@ -225,6 +228,7 @@ export function useReviewWorkspaceController(
     isSelectedCurrent,
     writeReadonlyReason,
     issuePanelReadonlyReason,
+    issueStatusReadonlyReason,
     canAppendVersion,
     nextLabel,
     currentIssues,

@@ -23,6 +23,7 @@ export function ReviewWorkspaceIssuePanel({
       playbackPending={playback.playbackPending}
       playbackError={playback.playbackError}
       readonlyReason={controller.issuePanelReadonlyReason}
+      statusReadonlyReason={controller.issueStatusReadonlyReason}
       onSelectIssue={playback.selectIssue}
       onCreateIssue={actions.createIssue}
       onEditIssue={actions.editIssue}

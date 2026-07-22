@@ -1,13 +1,12 @@
 # ARCHITECTURE
 
-Baseline source: `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md`.
-This document must stay aligned with SPEC V1.3, especially sections 5-12, 20-33, 36-40.
+Baseline source: the V1.4 normative amendment in `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md`.
 
 ## Product And Boundary Rules
 
 - The module has exactly two standalone front-end entries: `/edit` and `/review`.
-- `/edit` owns project management, review item creation, V1 upload, version upload, issue viewing, version compare, finalization read, and finalized-original single download.
-- `/review` owns review work: start review, create/update/reply/resolve/reopen issues, request changes, finalize, finalized-original single download, and project finalized-original package create/read/download.
+- `/edit` owns project management, review item creation, sequential multi-file V1 upload, version upload, issue viewing, marking an issue modified (`resolve`), version compare, finalization read, and finalized-original single download.
+- `/review` owns review work: create/update/reply/delete/annotate issues, reopen an issue as unmodified, finalize, finalized-original single download, and project finalized-original package create/read/download.
 - Entry source is not identity. It is only one input to capability calculation.
 - V1 has no delete capability, no delete endpoint, no physical business delete, no cross-version issue tracking, no automatic fix judgment, no download center, and no account-specific permission model.
 - Current no-account mode must still use access-control ports. "No account" is not a reason to hard-code authorization away.
@@ -248,21 +247,18 @@ Review item workflow:
 ```text
 Create V1 -> pending_review
 pending_review -> in_review
-in_review -> changes_requested
-changes_requested -> pending_review
-pending_review / in_review -> finalized
+pending_review / in_review / legacy changes_requested -> pending_review (append next version after >=1 current issue)
+pending_review / in_review / legacy changes_requested -> finalized
 ```
 
 Rules:
 
-- `pending_review -> in_review` requires explicit `StartReviewCommand` or implicit same-transaction transition when creating the first issue. Playback must be ready.
+- `pending_review -> in_review` occurs only as the same-transaction transition when creating the first issue. Playback must be ready.
 - Playing, seeking, switching versions, and GET requests never change workflow status.
-- `in_review -> changes_requested` requires at least one unresolved current-version issue and a note.
-- `changes_requested -> pending_review` happens after successful version upload.
-- `pending_review -> pending_review` version upload is allowed only before review or for upload mistake replacement and requires `supersede_reason`.
-- `in_review` cannot upload a new version.
+- Any non-final current version with at least one non-deleted issue can upload the next version; issue status, `changes_requested`, and `supersede_reason` are not gates.
+- Legacy `changes_requested` remains readable and writable as a current non-final version; no migration rewrite is required.
 - `finalized` cannot write anything.
-- Finalization requires current version, zero unresolved current-version issues, playback ready, original file available, and hash verified.
+- Finalization requires current version, playback ready, original file and complete media snapshot, hash verification, no active finalization, and explicit irreversible confirmation. Issue status does not block.
 
 Issue workflow:
 
@@ -271,7 +267,7 @@ unresolved -> resolved
 resolved -> unresolved
 ```
 
-Only `/review` can resolve or reopen. Status affects only the issue's exact version.
+`/edit` can only resolve (mark modified); `/review` can only reopen (mark unmodified). Backend capability and route facades enforce the split. Status affects only the issue's exact version and does not make current issue content read-only.
 
 ## Files, Media, Download, And Package
 
@@ -285,7 +281,7 @@ thumbnail
 package_temp
 ```
 
-`review-media` owns upload sessions, hash verification, media probe, playback proxy generation, stream URLs, and playback readiness. `processing` or `failed` playback status blocks start review, issue creation, request changes, and finalization.
+`review-media` owns upload sessions, hash verification, media probe, playback proxy generation, stream URLs, and playback readiness. `processing` or `failed` playback status blocks issue creation and finalization.
 
 Uploads require multipart/resumable behavior, progress, retry, page-leave protection, MIME/extension/magic-bytes/size/SHA-256 validation, and at least 2 GB per file as configurable deployment value.
 

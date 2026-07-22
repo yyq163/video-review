@@ -8,6 +8,9 @@ if (!baseURL) {
 if (!process.env.FCR_E2E_API_BASE_URL) {
   throw new Error('FCR_E2E_API_BASE_URL is required for the real-stack E2E profile');
 }
+if (!process.env.FCR_E2E_PRINCIPAL_CONTEXT) {
+  throw new Error('FCR_E2E_PRINCIPAL_CONTEXT is required for the isolated real-stack E2E profile');
+}
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -20,7 +23,7 @@ export default defineConfig({
   fullyParallel: false,
   use: {
     baseURL,
-    trace: 'retain-on-failure',
+    trace: 'off',
     screenshot: 'only-on-failure',
   },
   projects: [

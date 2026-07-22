@@ -36,6 +36,7 @@ COMMAND_ROUTE_TYPES = {
     "edit_update_item": "UpdateReviewItem",
     "edit_delete_item": "DeleteReviewItem",
     "edit_upload_version": "UploadReviewVersion",
+    "edit_resolve_issue": "ResolveReviewIssue",
     "review_start": "StartReview",
     "review_create_issue": "CreateReviewIssue",
     "review_update_issue": "UpdateReviewIssue",
@@ -428,6 +429,11 @@ def edit_delete_item(project_ref_id: str, review_item_id: str, envelope: Command
 @router.post("/edit/projects/{project_ref_id}/items/{review_item_id}/versions")
 def edit_upload_version(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
     return _execute("edit", "UploadReviewVersion", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match)
+
+
+@router.post("/edit/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/resolve")
+def edit_resolve_issue(project_ref_id: str, review_item_id: str, version_id: str, issue_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+    return _execute("edit", "ResolveReviewIssue", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id}, deps, None, if_match)
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/start")

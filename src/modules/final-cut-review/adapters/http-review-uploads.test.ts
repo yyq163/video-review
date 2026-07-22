@@ -1128,7 +1128,7 @@ function reviewItem(currentVersionNo: number): ReviewItemDTO {
     current_version_no: currentVersionNo,
     ui_status: '待修改',
     active_finalization_id: null,
-    unresolved_current_version_count: 0,
+    unresolved_current_version_count: 1,
     resolved_current_version_count: 0,
     historical_version_count: currentVersionNo - 1,
     is_finalized: false,

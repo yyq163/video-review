@@ -52,16 +52,15 @@ describe('project and review item metadata editing', () => {
       runtime = createdRuntime;
     });
     const createItem = vi.spyOn(runtime!.getApi('edit'), 'createReviewItemWithVersion');
+    await userEvent.upload(
+      await screen.findByTestId('create-item-file'),
+      new File(['video'], 'blank-title.mp4', { type: 'video/mp4' }),
+    );
     const title = await screen.findByLabelText('成片标题');
     await userEvent.clear(title);
     await userEvent.type(title, '   ');
-    await userEvent.upload(
-      screen.getByTestId('create-item-file'),
-      new File(['video'], 'blank-title.mp4', { type: 'video/mp4' }),
-    );
-    await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('成片标题必填');
+    expect(screen.getByRole('button', { name: '上传 V1' })).toBeDisabled();
     expect(createItem).not.toHaveBeenCalled();
     dispose();
   });

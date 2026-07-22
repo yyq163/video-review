@@ -16,6 +16,7 @@ export function IssueCard(props: IssueCardProps) {
   const replyDraftRef = useRef<HTMLTextAreaElement | null>(null);
   const annotationSummaries = summarizeAnnotationShapes(props.issue.currentAnnotationSet?.shapes ?? []);
   const canWrite = !props.readonlyReason;
+  const canChangeStatus = !props.statusReadonlyReason;
   const localSubmitting = editSubmitting || replySubmitting;
   return (
     <article
@@ -209,17 +210,17 @@ export function IssueCard(props: IssueCardProps) {
           </button>
         </form>
       ) : null}
-      {canWrite ? (
+      {canChangeStatus ? (
         <CapabilityGate entryMode={props.entryMode} capability={props.issue.status === 'unresolved' ? 'review.issue.resolve' : 'review.issue.reopen'}>
           {props.issue.status === 'unresolved' ? (
             <button className="fj-review-secondary" onClick={() => props.onResolve(props.issue)} disabled={props.pending || localSubmitting}>
               <ShieldCheck />
-              解决当前版本意见
+              标记已修改
             </button>
           ) : (
             <button className="fj-review-secondary" onClick={() => props.onReopen(props.issue)} disabled={props.pending || localSubmitting}>
               <RotateCcw />
-              重新打开
+              重新打开为未修改
             </button>
           )}
         </CapabilityGate>

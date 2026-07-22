@@ -58,8 +58,8 @@ export function StatusBadge(props: { status: ReviewItemStatus | 'unresolved' | '
     in_review: '审阅中',
     changes_requested: '待修改',
     finalized: '已定稿',
-    unresolved: '未解决',
-    resolved: '已解决',
+    unresolved: '未修改',
+    resolved: '已修改',
     active: '进行中',
     archived: '已归档',
   };

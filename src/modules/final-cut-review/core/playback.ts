@@ -31,7 +31,10 @@ export function getIssueAnnotationSet(issue: ReviewIssue, target: ReviewPlayback
 }
 
 export function sortedIssuesForPlayback(issues: ReviewIssue[]): ReviewIssue[] {
-  return [...issues].sort((left, right) => left.timestampMs - right.timestampMs || left.issueNo - right.issueNo);
+  return [...issues].sort((left, right) => {
+    const statusOrder = Number(left.status === 'resolved') - Number(right.status === 'resolved');
+    return statusOrder || left.timestampMs - right.timestampMs || left.issueNo - right.issueNo;
+  });
 }
 
 export function targetTimeMsForVersion(target: ReviewPlaybackTarget, version: ReviewVersion): number {

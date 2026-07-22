@@ -10,14 +10,12 @@ export function DecisionBar(props: {
   readonlyReason?: string;
   pending?: boolean;
   packageState: 'idle' | 'preparing' | 'ready' | 'downloading' | 'failed';
-  onRequestChanges(): void;
   onFinalize(): void;
   onDownload(): void;
   onPackage(): void;
 }) {
   const openCurrent = props.issues.some((issue) => issue.status === 'unresolved');
   const isCurrentFinalized = props.finalization?.versionId === props.version.versionId;
-  const canRequestChanges = props.version.status === 'in_review' && openCurrent;
   const isReadonly = Boolean(props.readonlyReason);
 
   return (
@@ -27,33 +25,22 @@ export function DecisionBar(props: {
         <span>
           {!props.isCurrentVersion
             ? '历史版本只读'
+            : isCurrentFinalized
+              ? '当前版本已定稿冻结'
             : props.readonlyReason
               ? props.readonlyReason
               : openCurrent
-              ? '当前版本仍有未解决意见'
-              : isCurrentFinalized
-                ? '当前版本已定稿冻结'
-                : '当前版本可定稿'}
+              ? '当前版本有未修改意见，仍可定稿'
+              : '当前版本可定稿'}
         </span>
       </div>
-      {!isReadonly ? (
-        <CapabilityGate entryMode={props.entryMode} capability="review.session.request_changes">
-          <button
-            className="fj-review-secondary"
-            onClick={props.onRequestChanges}
-            disabled={props.pending || isCurrentFinalized || !props.isCurrentVersion || !canRequestChanges}
-          >
-            要求修改
-          </button>
-        </CapabilityGate>
-      ) : null}
       {!isReadonly ? (
         <CapabilityGate entryMode={props.entryMode} capability="review.finalization.create">
           <button
             className="fj-review-primary"
             data-testid="finalize-current"
             onClick={props.onFinalize}
-            disabled={props.pending || openCurrent || isCurrentFinalized || !props.isCurrentVersion}
+            disabled={props.pending || isCurrentFinalized || !props.isCurrentVersion}
           >
             最终通过
           </button>

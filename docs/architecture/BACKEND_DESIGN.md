@@ -1,7 +1,7 @@
 # BACKEND DESIGN
 
-Baseline source: `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md`.
-The current runnable delivery can use mock adapters, but backend-facing design must match SPEC V1.3 exactly so formal adapters can replace mocks without changing UI, domain rules, or contracts.
+Baseline source: the V1.4 normative amendment in `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md`.
+The in-memory and PostgreSQL adapters must implement the same current invariants.
 
 ## Module Layout
 
@@ -222,20 +222,18 @@ finalized
 Allowed transitions:
 
 - Create V1 -> `pending_review`.
-- `pending_review -> in_review` through `StartReviewCommand` or same-transaction first issue creation, with playback ready.
-- `in_review -> changes_requested` when current version has unresolved issues and note exists.
-- `changes_requested -> pending_review` after successful version upload.
-- `pending_review -> finalized` or `in_review -> finalized` when current version has no unresolved issues, playback is ready, original is available, and hash matches.
+- `pending_review -> in_review` only through same-transaction first issue creation, with playback ready.
+- Any non-final state, including legacy `changes_requested`, can append the next version after the current version has at least one non-deleted issue; the new version becomes `pending_review`.
+- Any non-final state, including legacy `changes_requested`, can finalize the current version when playback/media/hash/active-finalization/confirmation safety gates pass. Issue status is not a gate.
 
 Blocked:
 
 - GET, playing, seeking, and version switching cannot change status.
-- `in_review` cannot upload a new version.
 - `finalized` cannot produce any write.
 - Finalization checks current version only.
 - Historical unresolved issues do not block current finalization.
 
-Issue status transitions are explicit `ResolveReviewIssue` and `ReopenReviewIssue` commands only, and only for `/review`.
+Issue status transitions remain explicit: the edit facade alone exposes `ResolveReviewIssue` (mark modified), and the review facade alone exposes `ReopenReviewIssue` (mark unmodified). Current-version issue content/revisions/messages/deletion remain writable in `in_review` and legacy `changes_requested`; historical and finalized versions remain read-only. Issue queries order unresolved first, resolved second, then timestamp and issue number.
 
 ## File And Media Design
 
@@ -255,7 +253,7 @@ Upload requirements:
 
 Review version is created only after upload completion, hash verification, and media probe. Playback proxy may be async. `PlaybackStatus` is `processing`, `ready`, or `failed`.
 
-`processing` or `failed` blocks start review, issue creation, request changes, and finalization.
+`processing` or `failed` blocks issue creation and finalization.
 
 Physical paths are never exposed through APIs, logs, DTOs, or errors.
 
@@ -338,7 +336,7 @@ Single transaction is required for:
 
 - Create item + V1 + current version pointer.
 - Upload version + current version switch.
-- First issue creation + start review transition.
+- First issue creation + implicit review transition in one transaction.
 - Request changes + decision + status change + outbox.
 - Finalize + finalization + status change + outbox.
 - Create package snapshot file list.

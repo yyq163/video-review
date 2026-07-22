@@ -22,10 +22,6 @@ describe('review workspace append-version confirmation', () => {
   it('blocks after response loss and remount until an explicit version-list refetch succeeds', async () => {
     const runtime = createReviewRuntime();
     const reviewApi = runtime.getApi('review');
-    await reviewApi.requestChanges(
-      { projectRefId: PROJECT_REF_ID, reviewItemId: REVIEW_ITEM_ID, versionId: CURRENT_VERSION_ID },
-      reviewApi.entryPolicy.createContext('review'),
-    );
 
     const first = renderEditWorkspace(runtime);
     expect(await screen.findByRole('button', { name: '确认追加 V3' })).toBeEnabled();

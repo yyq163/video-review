@@ -47,7 +47,7 @@ export function IssuePanel(props: IssuePanelProps) {
         <CapabilityGate
           entryMode={props.entryMode}
           capability="review.issue.create"
-          fallback={<div className="fj-review-readonly-note">剪辑入口仅可查看意见，不能创建或处理意见。</div>}
+          fallback={<div className="fj-review-readonly-note">剪辑入口可查看意见并标记“已修改”。</div>}
         >
           {canWriteCurrentVersion ? (
             <form
@@ -99,7 +99,7 @@ export function IssuePanel(props: IssuePanelProps) {
       )}
       <div className="fj-review-issue-scroll" data-testid="issue-panel-scroll">
         <div className="fj-review-issue-summary">
-          <span>当前版本未解决 {unresolvedCount}</span>
+          <span>当前版本未修改 {unresolvedCount}</span>
           <span>历史意见 {props.historicalIssues.length}</span>
         </div>
         {showPlaybackStatus ? (
@@ -117,6 +117,7 @@ export function IssuePanel(props: IssuePanelProps) {
               version={props.version}
               selected={issue.issueId === props.selectedIssueId}
               readonlyReason={props.readonlyReason ?? (canWriteCurrentVersion ? undefined : '历史版本只读')}
+              statusReadonlyReason={props.statusReadonlyReason ?? (props.isCurrentVersion ? undefined : '历史版本只读')}
               showReadonlyReason={!props.readonlyReason}
               entryMode={props.entryMode}
               pending={props.pending}
@@ -140,6 +141,7 @@ export function IssuePanel(props: IssuePanelProps) {
                 version={versionForIssue(props.versions, props.version, issue)}
                 selected={issue.issueId === props.selectedIssueId}
                 readonlyReason="历史版本只读"
+                statusReadonlyReason="历史版本只读"
                 entryMode="edit"
                 pending={props.pending}
                 onSubmittingChange={(isSubmitting) => handleCardSubmittingChange(issue.issueId, isSubmitting)}

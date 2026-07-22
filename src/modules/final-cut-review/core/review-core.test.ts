@@ -168,21 +168,6 @@ it('restores mock repository state from a snapshot and relinks uploaded original
   expect(workspace.currentVersion.playbackUrl).toBe('blob:restored-original');
 });
 
-async function resolveAllCurrentSeedIssues(review: ReviewApiPort) {
-  const workspace = await review.getWorkspace({ projectRefId: 'prj_seed_final_cut', reviewItemId: 'item_ep28' });
-  for (const issue of workspace.currentIssues.filter((candidate) => candidate.status === 'unresolved')) {
-    await review.resolveIssue(
-      {
-        projectRefId: issue.projectRefId,
-        reviewItemId: issue.reviewItemId,
-        versionId: issue.versionId,
-        issueId: issue.issueId,
-      },
-      ctx(review),
-    );
-  }
-}
-
 describe('timecode and frame rate', () => {
   it.each([
     [24, 1, 1000, 24, '00:00:01:00'],
@@ -1265,7 +1250,7 @@ describe('generated HTTP envelope client', () => {
       current_version_no: 1,
       ui_status: 'pending_review',
       active_finalization_id: null,
-      unresolved_current_version_count: 0,
+      unresolved_current_version_count: 1,
       resolved_current_version_count: 0,
       historical_version_count: 0,
       is_finalized: false,
@@ -1749,7 +1734,6 @@ describe('final cut review core invariants', () => {
       .flat()
       .map((issue) => issue.issueId)
       .sort();
-    await resolveAllCurrentSeedIssues(review);
     await review.finalizeCurrentVersion(
       {
         projectRefId: 'prj_seed_final_cut',
@@ -1885,7 +1869,6 @@ describe('final cut review core invariants', () => {
 
   it('blocks finalized item write paths before storing appended upload files', async () => {
     const { edit, review, storage } = makeHarness();
-    await resolveAllCurrentSeedIssues(review);
     await review.finalizeCurrentVersion(
       {
         projectRefId: 'prj_seed_final_cut',
@@ -1955,10 +1938,10 @@ describe('final cut review core invariants', () => {
     await expect(review.reopenIssue({ ...writeInput, issueId: 'issue_v2_001' }, ctx(review))).rejects.toMatchObject({
       code: 'FINALIZED_READONLY',
     });
-    await expect(review.resolveIssue({ ...writeInput, issueId: 'issue_v2_001' }, ctx(review))).rejects.toMatchObject({
+    await expect(edit.resolveIssue({ ...writeInput, issueId: 'issue_v2_001' }, ctx(edit))).rejects.toMatchObject({
       code: 'FINALIZED_READONLY',
     });
-    await expect(review.requestChanges(writeInput, ctx(review))).rejects.toMatchObject({ code: 'FINALIZED_READONLY' });
+    await expect(review.requestChanges(writeInput, ctx(review))).rejects.toMatchObject({ code: 'CAPABILITY_DENIED' });
   });
 
   it('requires the item-delete confirmation at the port boundary', async () => {
@@ -2001,14 +1984,6 @@ describe('final cut review core invariants', () => {
 
   it('does not inherit or copy issues when a new version is appended', async () => {
     const { edit, review } = makeHarness();
-    await review.requestChanges(
-      {
-        projectRefId: 'prj_seed_final_cut',
-        reviewItemId: 'item_ep28',
-        versionId: 'ver_ep28_v2',
-      },
-      ctx(review),
-    );
     const v3 = await edit.appendVersion(
       {
         projectRefId: 'prj_seed_final_cut',
@@ -2039,7 +2014,7 @@ describe('final cut review core invariants', () => {
     ]);
   });
 
-  it('starts review explicitly or implicitly on first issue and blocks in-review upload', async () => {
+  it('starts review implicitly on first issue and then allows the next version upload', async () => {
     const { edit, review } = makeHarness();
     const project = await edit.createProject({ name: '新项目', code: 'NEW', description: '状态机测试项目。' }, ctx(edit));
     const created = await edit.createReviewItemWithVersion(
@@ -2062,7 +2037,18 @@ describe('final cut review core invariants', () => {
         },
         ctx(edit),
       ),
-    ).rejects.toMatchObject({ code: 'SUPERSEDE_REASON_REQUIRED' });
+    ).rejects.toMatchObject({ code: 'NEXT_VERSION_REQUIRES_ISSUE' });
+
+    await expect(
+      review.startReview(
+        {
+          projectRefId: project.projectRefId,
+          reviewItemId: created.item.reviewItemId,
+          versionId: created.version.versionId,
+        },
+        ctx(review),
+      ),
+    ).rejects.toMatchObject({ code: 'CAPABILITY_DENIED' });
 
     const issue = await review.createIssue(
       {
@@ -2085,17 +2071,21 @@ describe('final cut review core invariants', () => {
     const workspace = await review.getWorkspace({ projectRefId: project.projectRefId, reviewItemId: created.item.reviewItemId });
     expect(workspace.item.status).toBe('in_review');
 
-    await expect(
-      edit.appendVersion(
-        {
-          projectRefId: project.projectRefId,
-          reviewItemId: created.item.reviewItemId,
-          file: demoFile('new-v2.mp4'),
-          supersedeReason: '补版',
-        },
-        ctx(edit),
-      ),
-    ).rejects.toMatchObject({ code: 'IN_REVIEW_UPLOAD_FORBIDDEN' });
+    const nextVersion = await edit.appendVersion(
+      {
+        projectRefId: project.projectRefId,
+        reviewItemId: created.item.reviewItemId,
+        file: demoFile('new-v2.mp4'),
+      },
+      ctx(edit),
+    );
+    expect(nextVersion.label).toBe('V2');
+    const nextWorkspace = await review.getWorkspace({
+      projectRefId: project.projectRefId,
+      reviewItemId: created.item.reviewItemId,
+    });
+    expect(nextWorkspace.currentIssues).toHaveLength(0);
+    expect(nextWorkspace.historicalIssues.map((candidate) => candidate.issueId)).toEqual([issue.issueId]);
   });
 
   it('edits issue by creating a current revision and keeps replies separate from playback', async () => {
@@ -2156,23 +2146,10 @@ describe('final cut review core invariants', () => {
     expect(playbackTargetFromIssue(replied).revisionId).toBe(edited.currentRevisionId);
   });
 
-  it('blocks finalization only on unresolved current-version issues and freezes exact media fields', async () => {
+  it('allows finalization with unresolved current-version issues and freezes exact media fields', async () => {
     const { review } = makeHarness();
-
-    await expect(
-      review.finalizeCurrentVersion(
-        {
-          projectRefId: 'prj_seed_final_cut',
-          reviewItemId: 'item_ep28',
-          versionId: 'ver_ep28_v2',
-          confirmed: true,
-        },
-        ctx(review),
-      ),
-    ).rejects.toMatchObject({ code: 'CURRENT_VERSION_HAS_OPEN_ISSUES' });
-
-    await resolveAllCurrentSeedIssues(review);
     const before = await review.getWorkspace({ projectRefId: 'prj_seed_final_cut', reviewItemId: 'item_ep28' });
+    expect(before.currentIssues.some((issue) => issue.status === 'unresolved')).toBe(true);
     const finalization = await review.finalizeCurrentVersion(
       {
         projectRefId: 'prj_seed_final_cut',
@@ -2192,7 +2169,6 @@ describe('final cut review core invariants', () => {
 
   it('packages only active finalizations in the requested project', async () => {
     const { edit, review } = makeHarness();
-    await resolveAllCurrentSeedIssues(review);
     await review.finalizeCurrentVersion(
       {
         projectRefId: 'prj_seed_final_cut',
@@ -2357,14 +2333,14 @@ describe('final cut review core invariants', () => {
     ).rejects.toMatchObject({ code: 'PROJECT_SCOPE_MISMATCH' });
 
     await expect(
-      review.resolveIssue(
+      edit.resolveIssue(
         {
           projectRefId: project.projectRefId,
           reviewItemId: created.item.reviewItemId,
           versionId: created.version.versionId,
           issueId: 'issue_v2_001',
         },
-        ctx(review),
+        ctx(edit),
       ),
     ).rejects.toMatchObject({ code: 'PROJECT_SCOPE_MISMATCH' });
   });
@@ -2372,18 +2348,23 @@ describe('final cut review core invariants', () => {
   it('builds precise playback target from issue current revision and sorts next/previous issues', async () => {
     const { review } = makeHarness();
     const workspace = await review.getWorkspace({ projectRefId: 'prj_seed_final_cut', reviewItemId: 'item_ep28' });
-    const sorted = sortedIssuesForPlayback(workspace.currentIssues);
-    expect(sorted.map((issue) => issue.issueId)).toEqual(['issue_v2_001', 'issue_v2_002', 'issue_v2_003']);
+    const [first, second, third] = workspace.currentIssues;
+    const sorted = sortedIssuesForPlayback([
+      { ...first, status: 'resolved', timestampMs: 1 },
+      { ...third, status: 'unresolved', timestampMs: 240 },
+      { ...second, status: 'unresolved', timestampMs: 240 },
+    ]);
+    expect(sorted.map((issue) => issue.issueId)).toEqual(['issue_v2_002', 'issue_v2_003', 'issue_v2_001']);
     const target = playbackTargetFromIssue(sorted[0]);
     expect(target).toMatchObject({
       projectRefId: 'prj_seed_final_cut',
       reviewItemId: 'item_ep28',
       versionId: 'ver_ep28_v2',
-      issueId: 'issue_v2_001',
-      revisionId: 'rev_issue_v2_001_001',
-      annotationSetId: 'aset_issue_v2_001_001',
-      timestampMs: 160,
-      frameNumber: 4,
+      issueId: 'issue_v2_002',
+      revisionId: 'rev_issue_v2_002_001',
+      annotationSetId: 'aset_issue_v2_002_001',
+      timestampMs: 240,
+      frameNumber: 6,
     });
   });
 

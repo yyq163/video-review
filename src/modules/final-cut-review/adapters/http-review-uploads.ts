@@ -268,7 +268,7 @@ export class HttpReviewUploads implements UploadApi {
       const itemDto = await this.transport.requestJson<ReviewItemDTO>(
         `/api/v1/final-cut-review/projects/${input.projectRefId}/items/${input.reviewItemId}`,
       );
-      assertCanAppendVersion(itemDto, input.supersedeReason);
+      assertCanAppendVersion(itemDto);
       operation.item = itemDto;
     }
     const itemDto = operation.item;
@@ -340,14 +340,11 @@ export class HttpReviewUploads implements UploadApi {
   }
 }
 
-function assertCanAppendVersion(item: ReviewItemDTO, supersedeReason?: string): void {
+function assertCanAppendVersion(item: ReviewItemDTO): void {
   if (item.workflow_status === 'finalized') {
     throw new ReviewDomainError('已定稿后不能追加版本', 'FINALIZED_READONLY');
   }
-  if (item.workflow_status === 'in_review') {
-    throw new ReviewDomainError('审阅中不能追加版本，请先要求修改或完成当前审阅', 'IN_REVIEW_UPLOAD_FORBIDDEN');
-  }
-  if (item.workflow_status === 'pending_review' && !supersedeReason?.trim()) {
-    throw new ReviewDomainError('待审状态主动补版必须填写原因', 'SUPERSEDE_REASON_REQUIRED');
+  if (item.unresolved_current_version_count + item.resolved_current_version_count < 1) {
+    throw new ReviewDomainError('当前版本至少需要一条意见才能上传下一版本', 'NEXT_VERSION_REQUIRES_ISSUE');
   }
 }

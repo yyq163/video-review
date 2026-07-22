@@ -75,13 +75,6 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
             <span>{controller.readonlyReason}</span>
           </section>
         ) : null}
-        {!controller.readonlyReason && data.item.status === 'pending_review' && controller.isSelectedCurrent ? (
-          <CapabilityGate entryMode={props.entryMode} capability="review.session.start">
-            <button className="fj-review-secondary" onClick={actions.startReview} disabled={controller.pending}>
-              开始审阅
-            </button>
-          </CapabilityGate>
-        ) : null}
         <DecisionBar
           entryMode={props.entryMode}
           version={data.currentVersion}
@@ -91,7 +84,6 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
           readonlyReason={controller.readonlyReason}
           pending={controller.pending}
           packageState={packageState}
-          onRequestChanges={actions.requestChanges}
           onFinalize={actions.finalize}
           onDownload={actions.download}
           onPackage={actions.packageProject}
@@ -130,7 +122,6 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
             <AppendVersionPanel
               key={controller.nextLabel}
               nextLabel={controller.nextLabel}
-              requiresSupersedeReason={data.item.status === 'pending_review'}
               pending={mutations.appendVersion.isPending}
               progress={controller.uploadProgress}
               onSubmit={actions.appendVersion}

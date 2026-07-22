@@ -1,10 +1,10 @@
 # FRONTEND DESIGN
 
-Source of truth: `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md`.
+Source of truth: the V1.4 normative amendment in `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md`.
 
 ## Product Boundary
 
-- Frontend delivers the final cut review cockpit only: project browsing/management, item/version review, playback, annotation, issue threads, request changes, finalization, finalized original download, and review-side project package download.
+- Frontend delivers the final cut review cockpit only: project browsing/management, sequential batch V1 upload, item/version review, polling, playback, annotation, issue threads, role-split issue status actions, finalization, finalized original download, and review-side project package download.
 - V1 must not add account/login/member/role pages, notification center, task center, delivery center, download center, mobile layout, AI features, delete UI, revoke-finalization UI, or cross-version automatic issue tracking.
 - Entry surface is workflow context, not user identity. The server owns `ExecutionContext`, capability enforcement, write guard validation, resource ownership checks, and state machine checks.
 
@@ -23,6 +23,7 @@ Source of truth: `FJ_Final_Cut_Review_SPEC_V1.3_Reviewed.md`.
 - Upload UI uses the independent file upload API under `/api/v1/files/uploads/...`; aborting an incomplete upload session is not a business delete.
 - Binary part PUT uses an upload-progress-capable transport compatible with Safari and Chrome. Init and complete keep retry-stable fetch/idempotency behavior; the PUT transport emits byte progress while the request is in flight, preserves credentials and request identity, and parses the same success/error envelope without logging response bodies.
 - The existing single bottom-edge progress line is the only visual upload progress surface. It receives monotonic global bytes across dynamically sized parts; no wide white footer, duplicate progress card, or decorative indeterminate bar is introduced.
+- V1 selection uses one stable row per `File`. Title/episode edits stay bound to that row. Submission is sequential, explicit failures continue and remain, successes are removed, and a second click submits only the retained failures. A successful command followed by list-refetch failure shows the fixed success warning and never reuploads.
 - A bounded in-memory operation registry is keyed by the file metadata signature so reselecting a settled failed operation during the mounted page can resume the known upload instead of creating a new session. Before a different `File` object adopts that failed operation, the client compares the already-uploaded prefix of the old and new files byte-for-byte in bounded chunks; only an exact prefix match may reuse the session. A mismatch fails closed without sending another part or completing a mixed file. While an operation is in flight or completed but not yet released, a different `File` object with the same metadata signature also fails closed and cannot share the first file's promise or `file_id`. Network/timeout/malformed-response outcomes remain uncertain and retry the same part; only an explicit abandon action may invoke the server abort endpoint.
 
 ## Shared Pages And Components
@@ -55,15 +56,13 @@ Edit profile UI allows:
 - project read/create/update
 - item read/create/update and conditional pre-review physical delete with native confirmation
 - version read/upload/compare
-- issue read
+- issue read and resolve-as-modified
 - finalization read
 - finalized original download
 
 Edit profile UI forbids:
 
-- issue create/update/reply/resolve/reopen
-- start review
-- request changes
+- issue create/update/reply/reopen
 - finalization create
 - finalized project package create/read/download
 - project archive/restore/soft delete
@@ -74,9 +73,7 @@ Review profile UI allows:
 - project read/archive/restore and conditional active-project soft delete
 - item/version read
 - version compare
-- issue read/create/update/reply/resolve/reopen and current-version soft delete
-- start review
-- request changes
+- issue read/create/update/reply/reopen and current-version soft delete
 - finalization read/create
 - finalized original download
 - finalized project package create/read/download
@@ -216,19 +213,19 @@ Coordinates are normalized against the actual contained video rectangle, not the
 
 Issue rules:
 
-- Only review entry can create, edit, reply, resolve, reopen, request changes, or finalize.
-- Edit entry can read issues, replies, status, and annotations.
+- Only review entry can create, edit, reply, reopen, soft-delete, annotate, or finalize.
+- Edit entry can read issues, replies, status, and annotations, and can mark an unresolved issue modified through the edit resolve facade.
 - Issue creation requires current version, content, timecode, and frame number; annotation is optional.
-- Creating the first issue may implicitly start review in the same transaction.
+- Creating the first issue implicitly starts review in the same transaction; no start-review control is rendered.
 - Editing issue text or marks creates a new immutable `ReviewIssueRevision`.
-- Resolved issues must be reopened before editing.
+- Resolved/“已修改” issues remain editable while their version is current and non-final.
 - Replies are text-only, version-bound, issue-bound, and read-only in edit entry.
 - Current-version issue soft delete is review-entry only and requires confirmation; revisions, annotations, messages, and audit history remain physically retained. Historical-version issue delete is never exposed.
 - No attachments, mentions, or notifications are exposed.
 
 ## Timeline And Version Rules
 
-- Current version unresolved markers are red; resolved markers are cyan-green; selected markers are enlarged or highlighted.
+- Current version “未修改” markers are red; “已修改” markers are cyan-green; selected markers are enlarged or highlighted.
 - The current-version timeline must not mix historical issue markers.
 - Clicking a historical issue must explicitly switch to its owning `versionId`.
 - Version compare is manual only and must not infer matching, fixes, leftovers, new issues, or timecode mapping.
@@ -282,7 +279,9 @@ Fixed `setTimeout` delays are not valid substitutes for media events.
 
 Selected annotations must match selected Issue, current Revision, current AnnotationSet, and current `versionId`. The default unselected strategy is no saved issue annotation overlay.
 
-Previous/next issue navigation is scoped to the current version issue list, sorted by `timestampMs + issueNo`, and disabled at list boundaries.
+Previous/next issue navigation is scoped to the current version issue list, sorted by unresolved/“未修改” first, resolved/“已修改” second, then `timestampMs + issueNo`, and disabled at list boundaries. The visible list uses the same order in both entry surfaces.
+
+The current workspace query polls the existing bounded read endpoints every 2.5 seconds while mounted, including in background tabs, and stops on unmount. Historical version queries do not poll. No SSE or WebSocket channel is introduced.
 
 Automatic pause applies only to unresolved issues in the current version during natural forward playback. Historical unresolved issues, resolved issues, and manual seeks must not trigger current-version auto pause.
 
@@ -309,4 +308,4 @@ Unit tests must cover:
 
 Component tests must cover issue card, timecode, keyboard trigger, timeline marker, shared playback flow, selected highlight, and historical read-only display.
 
-E2E tests must cover current-version playback, historical switch before playback, consecutive-click race, 1920/1366 coordinate restore, V1 marks absent from V2, V1 unresolved issues not blocking V2 finalization, and current-version unresolved auto pause.
+E2E tests must cover real multi-select batch order/partial-failure retry, two-tab polling visibility, role-split modified/reopen actions, current-version playback and status-group ordering, historical switch/read-only behavior, consecutive-click race, 1920/1366 coordinate restore, V1 marks absent from V2, and unresolved current issues not blocking finalization.

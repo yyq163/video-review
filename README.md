@@ -200,15 +200,15 @@ Vite 开发服务器仅为 React Refresh 预加载脚本额外允许 inline scri
 ```bash
 FCR_E2E_BASE_URL=http://127.0.0.1:5173 \
 FCR_E2E_API_BASE_URL=http://127.0.0.1:8000 \
-FCR_E2E_VIDEO_PATH=/absolute/path/to/disposable-video.mp4 \
 FCR_E2E_DISPOSABLE_DATABASE=1 \
+WRITE_GUARD_SESSION_SECRET=<same-isolated-runtime-signing-secret> \
 FCR_PLAYWRIGHT_CHANNEL=chrome \
-  npm run test:e2e:integration
+  backend/.venv/bin/python scripts/run-project-scoped-real-stack-e2e.py
 ```
 
-`FCR_PLAYWRIGHT_CHANNEL` 是可选覆盖项。macOS 本地门禁默认复用已安装 Chrome，避免测试命令隐式安装或更新浏览器；其他平台未设置时使用 Playwright 管理的 Chromium。CI 必须显式准备所选浏览器，缺失时按测试环境失败处理。
+测试视频固定读取 `/Volumes/App_Dev/审阅平台/test-video/01.mp4`、`02.mp4`、`03.mp4`；可选的 `FCR_E2E_VIDEO_PATH[_V2|_V3]` 覆盖值也必须仍位于该目录，禁止生成或使用彩条占位视频。runner 只接受 loopback HTTP API，先以无项目权限的短时 service principal 创建一个空项目，再为该精确 `project_ref_id` 签发用户 principal；token 只存在于子进程环境，不输出、不落盘，也不得复用生产身份。`FCR_PLAYWRIGHT_CHANNEL` 是可选覆盖项。macOS 本地门禁默认复用已安装 Chrome，避免测试命令隐式安装或更新浏览器；其他平台未设置时使用 Playwright 管理的 Chromium。CI 必须显式准备所选浏览器，缺失时按测试环境失败处理。
 
-该 profile 只允许连接独立可丢弃的测试数据库和隔离测试存储；`FCR_E2E_DISPOSABLE_DATABASE=1` 是显式确认，不得对应用数据库设置。用例会在 `afterEach` 清除可见项目，但审核后的项目删除按产品合同保留审计行和文件，因此 runner 仍必须在停止测试 backend 后重置该独立测试库与测试存储。profile 会先要求页面声明 HTTP runtime，再直接核对后端 `/runtimez` 的 PostgreSQL engine 与 Alembic current/head，重载后重复核对，因此不能指向持久化 mock 页面冒充真实栈。它仍不替代 22 项可见 Chrome/Computer Use 验收。
+该 profile 只允许连接独立可丢弃的测试数据库和隔离测试存储；`FCR_E2E_DISPOSABLE_DATABASE=1` 只是调用方的显式确认，runner 本身不能证明实例身份，绝不得对应用数据库设置。成功路径会精确软删除本轮可见项目；若用例中途失败，测试数据可能保留。审核后的项目删除按产品合同保留审计行和文件，因此无论用例成功或失败，调用方都必须在停止测试 backend 后丢弃或重置该独立测试库与测试存储。profile 会先要求页面声明 HTTP runtime，再直接核对后端 `/runtimez` 的 PostgreSQL engine 与 Alembic current/head，重载后重复核对，因此不能指向持久化 mock 页面冒充真实栈；调用方仍须用容器、数据库名、存储根或等价运行事实绑定本次隔离实例。它也不替代 22 项可见 Chrome/Computer Use 验收。
 
 Docker daemon 不可用而使用永久 Homebrew PostgreSQL 16 作为开发联调 fallback 时，可在加载忽略的本地环境文件后运行：
 

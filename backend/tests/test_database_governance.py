@@ -1099,28 +1099,13 @@ def test_database_constraints_reject_revision_mutation_cross_project_freeze_and_
         drift_project = create_project(client, "PDRIFT")
         drift_item = create_project_item_for_project(client, drift_project["project_ref_id"])
         old_version_id = drift_item["current_version_id"]
-        start_review = command("StartReview", {"project_ref_id": drift_project["project_ref_id"], "review_item_id": drift_item["id"]})
-        started = client.post(
-            f"/api/v1/final-cut-review/review/projects/{drift_project['project_ref_id']}/items/{drift_item['id']}/start",
-            json=start_review,
-            headers={"If-Match": str(drift_item["lock_version"])},
-        )
-        assert started.status_code == 200, started.text
-        drift_item = api_data(started)
         create_issue(client, drift_project["project_ref_id"], drift_item, content="needs v2")
         drift_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{drift_project['project_ref_id']}/items/{drift_item['id']}"))
-        request_changes = command("RequestChanges", {"project_ref_id": drift_project["project_ref_id"], "review_item_id": drift_item["id"], "version_id": old_version_id, "summary": "need v2"})
-        changed = client.post(
-            f"/api/v1/final-cut-review/review/projects/{drift_project['project_ref_id']}/items/{drift_item['id']}/versions/{old_version_id}/request-changes",
-            json=request_changes,
-            headers={"Idempotency-Key": request_changes["command_id"], "If-Match": str(drift_item["lock_version"])},
-        )
-        assert changed.status_code == 200, changed.text
         upload = command("UploadReviewVersion", {"project_ref_id": drift_project["project_ref_id"], "review_item_id": drift_item["id"], "original_file_id": upload_video(client, filename="drift-v2.mp4", seed=b"d"), "change_summary": "v2"})
         uploaded = client.post(
             f"/api/v1/final-cut-review/edit/projects/{drift_project['project_ref_id']}/items/{drift_item['id']}/versions",
             json=upload,
-            headers={"Idempotency-Key": upload["command_id"], "If-Match": str(api_data(changed)["lock_version"])},
+            headers={"Idempotency-Key": upload["command_id"], "If-Match": str(drift_item["lock_version"])},
         )
         assert uploaded.status_code == 200, uploaded.text
         old_version = session.get(ReviewVersionModel, old_version_id)
@@ -1241,13 +1226,7 @@ def test_runtime_rejects_missing_optimistic_lock_archived_project_and_historical
     active = create_project(client, "PHIST")
     active_item = create_project_item_for_project(client, active["project_ref_id"])
     created_issue = create_issue(client, active["project_ref_id"], active_item)
-    request_changes = command("RequestChanges", {"project_ref_id": active["project_ref_id"], "review_item_id": active_item["id"], "version_id": active_item["current_version_id"], "summary": "need v2"})
-    changed = client.post(
-        f"/api/v1/final-cut-review/review/projects/{active['project_ref_id']}/items/{active_item['id']}/versions/{active_item['current_version_id']}/request-changes",
-        json=request_changes,
-        headers={"Idempotency-Key": request_changes["command_id"], "If-Match": "2"},
-    )
-    assert changed.status_code == 200, changed.text
+    active_current = api_data(client.get(f"/api/v1/final-cut-review/projects/{active['project_ref_id']}/items/{active_item['id']}"))
     upload = command("UploadReviewVersion", {"project_ref_id": active["project_ref_id"], "review_item_id": active_item["id"], "original_file_id": upload_video(client, filename="hist-v2.mp4", seed=b"h"), "change_summary": "v2"})
     missing_upload_lock = client.post(
         f"/api/v1/final-cut-review/edit/projects/{active['project_ref_id']}/items/{active_item['id']}/versions",
@@ -1258,7 +1237,7 @@ def test_runtime_rejects_missing_optimistic_lock_archived_project_and_historical
     uploaded = client.post(
         f"/api/v1/final-cut-review/edit/projects/{active['project_ref_id']}/items/{active_item['id']}/versions",
         json=upload,
-        headers={"Idempotency-Key": upload["command_id"], "If-Match": str(api_data(changed)["lock_version"])},
+        headers={"Idempotency-Key": upload["command_id"], "If-Match": str(active_current["lock_version"])},
     )
     assert uploaded.status_code == 200, uploaded.text
     message = command("AddReviewMessage", {"project_ref_id": active["project_ref_id"], "review_item_id": active_item["id"], "version_id": active_item["current_version_id"], "issue_id": created_issue["id"], "content": "late historical reply"})

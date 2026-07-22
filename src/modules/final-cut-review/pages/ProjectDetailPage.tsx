@@ -4,7 +4,7 @@ import type { EntryMode, ReviewItem, UploadProgress } from '../contracts/types';
 import { entryLinksFor } from '../entry/entry-links';
 import { useProjectDetail, useReviewMutations } from '../entry/use-review-queries';
 import { AppShell, CapabilityGate, ErrorView, LoadingBlock, StatusBadge, actionError } from '../components/shared';
-import { CreateItemUploadPanel, DEFAULT_CREATE_ITEM_EPISODE, DEFAULT_CREATE_ITEM_TITLE } from '../components/UploadPanel';
+import { CreateItemUploadPanel } from '../components/UploadPanel';
 import { ProjectMetadataEditor, type ReviewItemMetadataValues } from '../components/MetadataEditors';
 import { uploadSchema, type ProjectFormValues } from '../components/ProjectForms';
 import type { ReviewItemWithMetadata } from '../ports';
@@ -20,14 +20,9 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const [projectActionError, setProjectActionError] = useState<string | null>(null);
   const [projectActionMessage, setProjectActionMessage] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | undefined>(undefined);
-  const [uploadResetToken, setUploadResetToken] = useState(0);
   const [v1ListProtectionState, setV1ListProtectionState] = useState(() => props.entryMode === 'edit' ? getV1ListProtectionState(projectRefId) : 'clear');
   const v1ListConfirmationRequired = v1ListProtectionState !== 'clear';
   const [v1ListConfirmationPending, setV1ListConfirmationPending] = useState(false);
-  const [createItemDraft, setCreateItemDraft] = useState({
-    title: DEFAULT_CREATE_ITEM_TITLE,
-    episode: DEFAULT_CREATE_ITEM_EPISODE,
-  });
   if (detail.isLoading) {
     return (
       <AppShell entryMode={props.entryMode} homeHref={`/${props.entryMode}/projects`} entryLinks={entryLinksFor(props.entryMode)}>
@@ -222,19 +217,19 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
         ) : (
           <CapabilityGate entryMode={props.entryMode} capability="review.item.create">
             <CreateItemUploadPanel
-              key={uploadResetToken}
-              initialTitle={createItemDraft.title}
-              initialEpisode={createItemDraft.episode}
               pending={mutations.createReviewItemWithVersion.isPending || Boolean(uploadProgress)}
               blockedForListConfirmation={v1ListConfirmationRequired}
               progress={uploadProgress}
-              onDraftChange={setCreateItemDraft}
               onSubmit={async (input) => {
                 const parsedInput = uploadSchema.safeParse(input);
                 if (!parsedInput.success) {
-                  throw new Error(parsedInput.error.issues[0]?.message ?? '成片信息校验失败。');
+                  return {
+                    outcome: 'failed' as const,
+                    message: parsedInput.error.issues[0]?.message ?? '成片信息校验失败。',
+                  };
                 }
                 const validatedInput = parsedInput.data;
+                setProjectActionError(null);
                 setUploadProgress({ stage: 'validating', percent: 0, totalBytes: validatedInput.file.size });
                 try {
                   const created = await mutations.createReviewItemWithVersion.mutateAsync({
@@ -248,29 +243,36 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
                     bytesSent: validatedInput.file.size,
                     totalBytes: validatedInput.file.size,
                   });
-                  try {
-                    const refreshed = await detail.refetch({ throwOnError: true });
+                  clearV1ListConfirmationRequired(projectRefId);
+                  const nextProtectionState = getV1ListProtectionState(projectRefId);
+                  setV1ListProtectionState(nextProtectionState);
+                  const stopBatch = nextProtectionState === 'storage-unavailable';
+                  if (stopBatch) {
+                    setProjectActionError('浏览器会话存储不可用，后续 V1 上传已停止；已成功的文件不会重传。');
+                  }
+                  setUploadProgress(undefined);
+                  void detail.refetch({ throwOnError: true }).then((refreshed) => {
                     const confirmedInList = refreshed.data?.items.some(
                       (item) => item.reviewItemId === created.item.reviewItemId,
                     );
                     if (!confirmedInList) {
-                      throw new Error('刷新后的列表尚未出现新建 V1。');
+                      setProjectActionMessage('文件已上传成功，待审列表暂时刷新失败，请刷新页面查看。');
                     }
-                  } catch (cause) {
-                    throw new Error('V1 已上传，但列表刷新失败。请保持当前页面并重试；如已重新载入页面，请先在列表确认结果。', { cause });
-                  }
-                  clearV1ListConfirmationRequired(projectRefId);
-                  const nextProtectionState = getV1ListProtectionState(projectRefId);
-                  setV1ListProtectionState(nextProtectionState);
-                  if (nextProtectionState === 'storage-unavailable') {
-                    throw new Error('V1 已上传，但浏览器会话存储不可用。请恢复站点存储并重新载入页面。');
-                  }
-                  setUploadResetToken((current) => current + 1);
-                  setUploadProgress(undefined);
+                  }).catch(() => {
+                    setProjectActionMessage('文件已上传成功，待审列表暂时刷新失败，请刷新页面查看。');
+                  });
+                  return { outcome: 'success' as const, stopBatch };
                 } catch (caught) {
                   setUploadProgress(undefined);
-                  setV1ListProtectionState(getV1ListProtectionState(projectRefId));
-                  throw caught;
+                  const nextProtectionState = getV1ListProtectionState(projectRefId);
+                  setV1ListProtectionState(nextProtectionState);
+                  if (nextProtectionState !== 'clear') {
+                    return {
+                      outcome: 'uncertain' as const,
+                      message: '上传结果不确定，请先核对待审列表；确认前不会继续本批次或重传。',
+                    };
+                  }
+                  return { outcome: 'failed' as const, message: actionError(caught) };
                 }
               }}
             />

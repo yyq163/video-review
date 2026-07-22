@@ -170,7 +170,7 @@ function ComparePane({
             <li key={issue.issueId}>
               <span>#{issue.issueNo.toString().padStart(3, '0')}</span>
               <span>{issueTimecode(issue, version)}</span>
-              <span>{issue.status === 'resolved' ? '已解决' : '未解决'}</span>
+              <span>{issue.status === 'resolved' ? '已修改' : '未修改'}</span>
               <p>{issue.body}</p>
             </li>
           ))

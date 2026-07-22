@@ -1328,9 +1328,21 @@ class SqlAlchemyReviewRepository:
         self._assert_project_active(project)
         item = self._get_item(project.id, payload["review_item_id"], for_update=True)
         self._expect_lock(item, expected_version)
-        invariants.ensure_can_upload_version(item.workflow_status, payload.get("supersede_reason"))
-        file = self._get_ready_file(payload["original_file_id"], context)
         current = self._get_version(project.id, item.id, item.current_version_id or "")
+        current_issue_count = (
+            self.session.scalar(
+                select(func.count())
+                .select_from(ReviewIssueModel)
+                .where(
+                    ReviewIssueModel.review_item_id == item.id,
+                    ReviewIssueModel.version_id == current.id,
+                    ReviewIssueModel.deleted_at.is_(None),
+                )
+            )
+            or 0
+        )
+        invariants.ensure_can_upload_version(item.workflow_status, int(current_issue_count))
+        file = self._get_ready_file(payload["original_file_id"], context)
         item.current_version_id = None
         self.session.flush()
         self.session.execute(
@@ -1470,8 +1482,6 @@ class SqlAlchemyReviewRepository:
         issue = self._get_issue(project.id, item.id, payload["version_id"], payload["issue_id"])
         invariants.ensure_issue_writable(item.workflow_status)
         invariants.ensure_current_version(issue.version_id, item.current_version_id or "")
-        if issue.status == "resolved":
-            raise ReviewError("RESOURCE_STATE_CONFLICT", "已解决意见必须先 reopen 后才能编辑")
         self._expect_lock(issue, expected_version)
         current_revision = self._get_revision(issue.id, issue.current_revision_id or "")
         annotation_id = self._create_annotation_if_present(issue, payload.get("annotation"))
@@ -1682,20 +1692,7 @@ class SqlAlchemyReviewRepository:
         invariants.ensure_current_version(version.id, item.current_version_id or "")
         self._assert_playback_ready(version)
         self._expect_lock(item, expected_version)
-        unresolved = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(ReviewIssueModel)
-                .where(
-                    ReviewIssueModel.review_item_id == item.id,
-                    ReviewIssueModel.version_id == version.id,
-                    ReviewIssueModel.status == "unresolved",
-                    ReviewIssueModel.deleted_at.is_(None),
-                )
-            )
-            or 0
-        )
-        invariants.ensure_finalizable(item.workflow_status, unresolved)
+        invariants.ensure_finalizable(item.workflow_status)
         if item.active_finalization_id:
             raise ReviewError("REVIEW_ITEM_FINALIZED", "当前版本已存在 active finalization")
         file = self.session.get(FileObjectModel, version.original_file_id)
@@ -2644,7 +2641,11 @@ class SqlAlchemyReviewRepository:
         issues = self.session.scalars(
             select(ReviewIssueModel)
             .where(*filters)
-            .order_by(ReviewIssueModel.timestamp_ms, ReviewIssueModel.issue_no)
+            .order_by(
+                case((ReviewIssueModel.status == "unresolved", 0), else_=1),
+                ReviewIssueModel.timestamp_ms,
+                ReviewIssueModel.issue_no,
+            )
             .offset(self._page_offset(page, page_size))
             .limit(page_size)
         ).all()
@@ -2782,7 +2783,11 @@ class SqlAlchemyReviewRepository:
                     ReviewIssueModel.version_id == version_id,
                     ReviewIssueModel.deleted_at.is_(None),
                 )
-                .order_by(ReviewIssueModel.timestamp_ms, ReviewIssueModel.issue_no)
+                .order_by(
+                    case((ReviewIssueModel.status == "unresolved", 0), else_=1),
+                    ReviewIssueModel.timestamp_ms,
+                    ReviewIssueModel.issue_no,
+                )
             )
         ]
 

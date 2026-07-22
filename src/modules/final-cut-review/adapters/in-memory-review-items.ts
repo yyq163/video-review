@@ -172,19 +172,12 @@ export class InMemoryReviewItems {
   readonly ensureAppendVersionWritable = (input: {
     projectRefId: ProjectRefId;
     reviewItemId: ReviewItemId;
-    supersedeReason?: string;
   }): ReviewItemWithMetadata => {
     this.store.assertProjectWritable(input.projectRefId);
     const item = this.store.getItem(input.projectRefId, input.reviewItemId);
     invariant(item.status !== 'finalized', '已定稿后不能追加版本', 'FINALIZED_READONLY');
-    invariant(
-      item.status !== 'in_review',
-      '审阅中不能追加版本，请先要求修改或完成当前审阅',
-      'IN_REVIEW_UPLOAD_FORBIDDEN',
-    );
-    if (item.status === 'pending_review') {
-      invariant(Boolean(input.supersedeReason?.trim()), '待审状态主动补版必须填写原因', 'SUPERSEDE_REASON_REQUIRED');
-    }
+    const currentIssues = this.store.getIssuesForVersion(input.projectRefId, input.reviewItemId, item.currentVersionId);
+    invariant(currentIssues.length > 0, '当前版本至少需要一条意见才能上传下一版本', 'NEXT_VERSION_REQUIRES_ISSUE');
     return item;
   };
 
