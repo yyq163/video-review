@@ -1,0 +1,47 @@
+{
+  "manifest_version": 1,
+  "module_id": "final-cut-review",
+  "module_version": "1.3.0",
+  "contract_version": "1.0",
+  "standalone_routes": {
+    "edit": "/edit",
+    "review": "/review"
+  },
+  "mount_slots": ["workspace.main"],
+  "capabilities": [
+    "review.project.read",
+    "review.project.create",
+    "review.project.update",
+    "review.project.archive",
+    "review.project.restore",
+    "review.project.delete",
+    "review.item.read",
+    "review.item.create",
+    "review.item.update",
+    "review.item.delete",
+    "review.version.read",
+    "review.version.upload",
+    "review.version.compare",
+    "review.issue.read",
+    "review.issue.create",
+    "review.issue.update",
+    "review.issue.reply",
+    "review.issue.resolve",
+    "review.issue.reopen",
+    "review.issue.delete",
+    "review.session.start",
+    "review.session.request_changes",
+    "review.finalization.read",
+    "review.finalization.create",
+    "review.download.finalized_original",
+    "review.package.create",
+    "review.package.read",
+    "review.package.download"
+  ],
+  "required_host_services": [],
+  "optional_host_services": [
+    "project_catalog",
+    "principal_context",
+    "authorization"
+  ]
+}

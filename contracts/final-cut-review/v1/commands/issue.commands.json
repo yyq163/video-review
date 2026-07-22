@@ -1,0 +1,182 @@
+{
+  "contract_version": "1.0",
+  "commands": [
+    {
+      "command_type": "StartReview",
+      "capability": "review.session.start",
+      "idempotent": false,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "command_type": "CreateReviewIssue",
+      "capability": "review.issue.create",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "version_id", "content", "timestamp_ms", "frame_number"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "version_id": {"type": "string", "minLength": 1},
+          "content": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "timestamp_ms": {"type": "integer", "minimum": 0},
+          "frame_number": {"type": "integer", "minimum": 0},
+          "annotation": {"$ref": "#/definitions/review_annotation_set_input"}
+        }
+      }
+    },
+    {
+      "command_type": "UpdateReviewIssue",
+      "capability": "review.issue.update",
+      "idempotent": false,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "version_id", "issue_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "version_id": {"type": "string", "minLength": 1},
+          "issue_id": {"type": "string", "minLength": 1},
+          "content": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "annotation": {"$ref": "#/definitions/review_annotation_set_input"}
+        }
+      }
+    },
+    {
+      "command_type": "AddReviewMessage",
+      "capability": "review.issue.reply",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "version_id", "issue_id", "content"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "version_id": {"type": "string", "minLength": 1},
+          "issue_id": {"type": "string", "minLength": 1},
+          "content": {"type": "string", "minLength": 1, "maxLength": 4000}
+        }
+      }
+    },
+    {
+      "command_type": "ResolveReviewIssue",
+      "capability": "review.issue.resolve",
+      "idempotent": false,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "version_id", "issue_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "version_id": {"type": "string", "minLength": 1},
+          "issue_id": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "command_type": "ReopenReviewIssue",
+      "capability": "review.issue.reopen",
+      "idempotent": false,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "version_id", "issue_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "version_id": {"type": "string", "minLength": 1},
+          "issue_id": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "command_type": "SoftDeleteReviewIssue",
+      "capability": "review.issue.delete",
+      "idempotent": false,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "version_id", "issue_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "version_id": {"type": "string", "minLength": 1},
+          "issue_id": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "command_type": "RequestChanges",
+      "capability": "review.session.request_changes",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "version_id", "summary"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "version_id": {"type": "string", "minLength": 1},
+          "summary": {"type": "string", "minLength": 1, "maxLength": 4000}
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "review_annotation_set_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canvas_width", "canvas_height", "video_width", "video_height", "shapes"],
+      "properties": {
+        "canvas_width": {"type": "integer", "minimum": 1},
+        "canvas_height": {"type": "integer", "minimum": 1},
+        "video_width": {"type": "integer", "minimum": 1},
+        "video_height": {"type": "integer", "minimum": 1},
+        "shapes": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "tool_type", "color", "line_width", "z_index"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1, "maxLength": 128},
+              "tool_type": {"type": "string", "enum": ["pen", "arrow", "rect", "circle", "text"]},
+              "anchor_points": {
+                "type": "array",
+                "maxItems": 2048,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["x", "y"],
+                  "properties": {
+                    "x": {"type": "number", "minimum": 0, "maximum": 1},
+                    "y": {"type": "number", "minimum": 0, "maximum": 1}
+                  }
+                }
+              },
+              "path_data": {"type": "string", "maxLength": 20000},
+              "text_content": {"type": "string", "maxLength": 1000},
+              "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+              "line_width": {"type": "integer", "minimum": 1, "maximum": 64},
+              "font_size": {"type": "integer", "minimum": 12, "maximum": 96},
+              "z_index": {"type": "integer", "minimum": 0, "maximum": 10000}
+            }
+          }
+        }
+      }
+    }
+  }
+}

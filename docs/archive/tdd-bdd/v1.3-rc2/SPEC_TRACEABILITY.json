@@ -1,0 +1,330 @@
+[
+  {
+    "requirement_id": "FCR-S00-001",
+    "spec_location": "§00",
+    "spec_topic": "修订结论",
+    "tdd_section": "§0",
+    "bdd_scenario": "CON-011",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S01-002",
+    "spec_location": "§01",
+    "spec_topic": "产品定位",
+    "tdd_section": "§1",
+    "bdd_scenario": "CON-001",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S02-003",
+    "spec_location": "§02",
+    "spec_topic": "核心业务原则",
+    "tdd_section": "§7/§8",
+    "bdd_scenario": "WFL-010/011",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S03-004",
+    "spec_location": "§03",
+    "spec_topic": "双入口",
+    "tdd_section": "§5/§11",
+    "bdd_scenario": "ACC-001/002",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S04-005",
+    "spec_location": "§04",
+    "spec_topic": "写保护",
+    "tdd_section": "§25",
+    "bdd_scenario": "ACC-008..014",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S05-006",
+    "spec_location": "§05",
+    "spec_topic": "架构模块边界",
+    "tdd_section": "§2",
+    "bdd_scenario": "CON-009",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S06-007",
+    "spec_location": "§06",
+    "spec_topic": "统一契约层",
+    "tdd_section": "§3",
+    "bdd_scenario": "CON-001..020",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S07-008",
+    "spec_location": "§07",
+    "spec_topic": "执行上下文",
+    "tdd_section": "§4",
+    "bdd_scenario": "ACC-019/020",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S08-009",
+    "spec_location": "§08",
+    "spec_topic": "Capability Registry",
+    "tdd_section": "§5",
+    "bdd_scenario": "CON-009/018",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S09-010",
+    "spec_location": "§09",
+    "spec_topic": "项目目录抽象",
+    "tdd_section": "§6/§9",
+    "bdd_scenario": "PRJ-011/012/013",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S10-011",
+    "spec_location": "§10",
+    "spec_topic": "核心领域模型",
+    "tdd_section": "§7",
+    "bdd_scenario": "UPL-009/022, ANN-018",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S11-012",
+    "spec_location": "§11",
+    "spec_topic": "全局不变量",
+    "tdd_section": "§8",
+    "bdd_scenario": "WFL-001..020, CC-022",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S12-013",
+    "spec_location": "§12",
+    "spec_topic": "状态机",
+    "tdd_section": "§7.6",
+    "bdd_scenario": "WFL-003..009",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S13-014",
+    "spec_location": "§13",
+    "spec_topic": "项目管理",
+    "tdd_section": "§6/§12",
+    "bdd_scenario": "PRJ-001..010",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S14-015",
+    "spec_location": "§14",
+    "spec_topic": "成片条目与版本",
+    "tdd_section": "§10/§11",
+    "bdd_scenario": "UPL-006..014",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S15-016",
+    "spec_location": "§15",
+    "spec_topic": "播放器与时间码",
+    "tdd_section": "§20",
+    "bdd_scenario": "UI-004/005",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S16-017",
+    "spec_location": "§16",
+    "spec_topic": "画面批注",
+    "tdd_section": "§21",
+    "bdd_scenario": "ANN-001..026",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S17-018",
+    "spec_location": "§17",
+    "spec_topic": "修改意见与回复",
+    "tdd_section": "§10/§13",
+    "bdd_scenario": "ISS-001..028",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S18-019",
+    "spec_location": "§18",
+    "spec_topic": "要求修改",
+    "tdd_section": "§10",
+    "bdd_scenario": "DEC-001..008",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S19-020",
+    "spec_location": "§19",
+    "spec_topic": "定稿",
+    "tdd_section": "§15",
+    "bdd_scenario": "FIN-001..018",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S20-021",
+    "spec_location": "§20",
+    "spec_topic": "文件播放上传",
+    "tdd_section": "§14",
+    "bdd_scenario": "UPL-001..021",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S21-022",
+    "spec_location": "§21",
+    "spec_topic": "定稿原片下载与项目打包",
+    "tdd_section": "§15",
+    "bdd_scenario": "DLD-001..010, PKG-001..022",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S22-023",
+    "spec_location": "§22",
+    "spec_topic": "统一命令契约",
+    "tdd_section": "§10",
+    "bdd_scenario": "CON-004/005/010",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S23-024",
+    "spec_location": "§23",
+    "spec_topic": "统一查询契约",
+    "tdd_section": "§6/§11",
+    "bdd_scenario": "QRY-001..013",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S24-025",
+    "spec_location": "§24",
+    "spec_topic": "HTTP API",
+    "tdd_section": "§11",
+    "bdd_scenario": "CON-013/014/015/016",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S25-026",
+    "spec_location": "§25",
+    "spec_topic": "并发幂等事务",
+    "tdd_section": "§10/§12",
+    "bdd_scenario": "CC-001..021",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S26-027",
+    "spec_location": "§26",
+    "spec_topic": "统一错误契约",
+    "tdd_section": "§5/§10",
+    "bdd_scenario": "CON-011",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S27-028",
+    "spec_location": "§27",
+    "spec_topic": "领域事件与 Outbox",
+    "tdd_section": "§16",
+    "bdd_scenario": "CON-012, PKG-017/018",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S28-029",
+    "spec_location": "§28",
+    "spec_topic": "宿主平台集成",
+    "tdd_section": "§18",
+    "bdd_scenario": "HOST-001..013",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S29-030",
+    "spec_location": "§29",
+    "spec_topic": "前端模块化",
+    "tdd_section": "§19",
+    "bdd_scenario": "UI-012/017, QRY-008",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S30-031",
+    "spec_location": "§30",
+    "spec_topic": "后端模块化",
+    "tdd_section": "§2",
+    "bdd_scenario": "CON-009",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S31-032",
+    "spec_location": "§31",
+    "spec_topic": "数据库约束",
+    "tdd_section": "§12",
+    "bdd_scenario": "CC-024",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S32-033",
+    "spec_location": "§32",
+    "spec_topic": "安全与部署",
+    "tdd_section": "§25",
+    "bdd_scenario": "SEC-001..025",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S33-034",
+    "spec_location": "§33",
+    "spec_topic": "可观察性",
+    "tdd_section": "§17",
+    "bdd_scenario": "SEC-017",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S34-035",
+    "spec_location": "§34",
+    "spec_topic": "视觉交互基线",
+    "tdd_section": "§23",
+    "bdd_scenario": "DES-001..009, UI-013",
+    "evidence": "statically validated"
+  },
+  {
+    "requirement_id": "FCR-S35-036",
+    "spec_location": "§35",
+    "spec_topic": "性能容量",
+    "tdd_section": "§24",
+    "bdd_scenario": "CON-009",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S36-037",
+    "spec_location": "§36",
+    "spec_topic": "未来扩展",
+    "tdd_section": "§26",
+    "bdd_scenario": "—",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S37-038",
+    "spec_location": "§37",
+    "spec_topic": "严格验收场景",
+    "tdd_section": "§11/§19",
+    "bdd_scenario": "ACC-003/004",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S38-039",
+    "spec_location": "§38",
+    "spec_topic": "开发准入",
+    "tdd_section": "§26",
+    "bdd_scenario": "—",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S39-040",
+    "spec_location": "§39",
+    "spec_topic": "最终产品口径",
+    "tdd_section": "§1",
+    "bdd_scenario": "—",
+    "evidence": "specified"
+  },
+  {
+    "requirement_id": "FCR-S40-041",
+    "spec_location": "§40",
+    "spec_topic": "精确回放批注",
+    "tdd_section": "§22",
+    "bdd_scenario": "PBK-001..041",
+    "evidence": "statically validated"
+  }
+]

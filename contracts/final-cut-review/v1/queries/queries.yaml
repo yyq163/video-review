@@ -1,0 +1,20 @@
+contract_version: "1.0"
+queries:
+  - module_manifest
+  - list_projects
+  - get_project
+  - list_items
+  - get_item
+  - list_versions
+  - get_version
+  - list_issues
+  - get_issue
+  - list_revisions
+  - list_messages
+  - stream_review_version
+  - get_finalization
+  - download_finalized_original
+  - get_package
+  - download_package
+  - get_upload
+identity_rule: all resource queries must include complete ancestry ids.

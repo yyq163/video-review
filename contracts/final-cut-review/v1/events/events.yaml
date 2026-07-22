@@ -1,0 +1,60 @@
+contract_version: "1.0"
+events:
+  - review.project.created
+  - review.project.updated
+  - review.project.archived
+  - review.project.restored
+  - review.project.deleted
+  - review.item.created
+  - review.item.updated
+  - review.item.deleted
+  - review.version.uploaded
+  - review.session.started
+  - review.issue.created
+  - review.issue.updated
+  - review.issue.message_added
+  - review.issue.resolved
+  - review.issue.reopened
+  - review.issue.deleted
+  - review.changes_requested
+  - review.version.finalized
+  - review.finalized_original.download_requested
+  - review.package.requested
+  - review.package.ready
+  - review.package.failed
+payload_schemas:
+  review.project.created:
+    type: object
+    additionalProperties: false
+    required: [project_code]
+    properties:
+      project_code: {type: string, minLength: 1}
+  review.project.updated: &emptyPayload
+    type: object
+    additionalProperties: false
+    properties: {}
+  review.project.archived: *emptyPayload
+  review.project.restored: *emptyPayload
+  review.project.deleted: *emptyPayload
+  review.item.created: *emptyPayload
+  review.item.updated: *emptyPayload
+  review.item.deleted: *emptyPayload
+  review.version.uploaded: *emptyPayload
+  review.session.started: *emptyPayload
+  review.issue.created: *emptyPayload
+  review.issue.updated: *emptyPayload
+  review.issue.message_added: *emptyPayload
+  review.issue.resolved: *emptyPayload
+  review.issue.reopened: *emptyPayload
+  review.issue.deleted: *emptyPayload
+  review.changes_requested: *emptyPayload
+  review.version.finalized: *emptyPayload
+  review.finalized_original.download_requested: *emptyPayload
+  review.package.requested: *emptyPayload
+  review.package.ready: *emptyPayload
+  review.package.failed:
+    type: object
+    additionalProperties: false
+    required: [error_code]
+    properties:
+      error_code: {type: string, minLength: 1}

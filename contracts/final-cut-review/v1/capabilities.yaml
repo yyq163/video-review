@@ -1,0 +1,39 @@
+contract_version: "1.0"
+capabilities:
+  edit:
+    - review.project.read
+    - review.project.create
+    - review.project.update
+    - review.item.read
+    - review.item.create
+    - review.item.update
+    - review.item.delete
+    - review.version.read
+    - review.version.upload
+    - review.version.compare
+    - review.issue.read
+    - review.finalization.read
+    - review.download.finalized_original
+  review:
+    - review.project.read
+    - review.project.archive
+    - review.project.restore
+    - review.project.delete
+    - review.item.read
+    - review.version.read
+    - review.version.compare
+    - review.issue.read
+    - review.issue.create
+    - review.issue.update
+    - review.issue.reply
+    - review.issue.resolve
+    - review.issue.reopen
+    - review.issue.delete
+    - review.session.start
+    - review.session.request_changes
+    - review.finalization.read
+    - review.finalization.create
+    - review.download.finalized_original
+    - review.package.create
+    - review.package.read
+    - review.package.download

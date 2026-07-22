@@ -1,0 +1,46 @@
+{
+  "status": "PASS_PROMPT_AUTHOR_READY_FOR_VALIDATION",
+  "candidate_bundle_hash": "69460ec2c1fa235b7f9264f736a02025926c0669f53912f4b562e4124e3bb4fe",
+  "package_version": "v11_slices1_after_8612d99_r1_repair",
+  "workspace": "<repository-root>",
+  "run_dir": "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1",
+  "files_written": [
+    "reviews/stability/candidate-69460ec/round-1/FULL_REVIEW_PROMPT.md",
+    "reviews/stability/candidate-69460ec/round-1/FULL_REVIEW_ASSIGNMENT_PLAN.json",
+    "reviews/stability/candidate-69460ec/round-1/FULL_REVIEW_PROMPT_AUTHOR_69460EC_R1_OUTPUT.json"
+  ],
+  "input_hashes": {
+    "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/reports/BDD_TDD_BASELINE_FREEZE_V11_AFTER_8612D99_R1_REPAIR.json": "1ccf58dd8116caec749ec545029ecec883b6a02d6464f5679b9f047e97feac8c",
+    "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/reports/CROSS_PACKAGE_VERIFIER_69460EC_PASS_GATE.json": "33a4f9572447ec7409fb98a0db35d9c57f4be3bf98c7a44cb1b1006fb0089e41",
+    "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/subagent-outputs/finding-validation/STABILITY_R1_8612D99/8612D99_R1_REPAIR_INDEPENDENT_VERIFIER_OUTPUT.json": "7011784aeb285a214f685233cf3f0de29d3c6e0568ff101fcf90c6b589f10f8f",
+    "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/batches/cross_review_v11_slices1/CROSS_REVIEW_PACKAGE_MANIFEST_V11_SLICES1.json": "fefc79f6afefdd6138bd7563039051d9bd2e5a87f1b17adaaaa66654d269bc0a"
+  },
+  "checks": {
+    "wrote_only_allowed_target_files": true,
+    "did_not_modify_bdd_tdd_package_artifacts": true,
+    "did_not_reset_checkout_revert": true,
+    "did_not_use_docs_tdd_bdd_output_v1_as_authority": true,
+    "resolved_package_dir_under_run_dir": true,
+    "resolved_reports_under_run_dir": true,
+    "included_five_reviewer_classes": true,
+    "included_new_candidate_not_inheriting_old_not_clean_rule": true,
+    "included_old_findings_as_regression_focus": true,
+    "included_independent_review_not_pass_gate_only_rule": true,
+    "included_bdd_shard_payload_global_render_package_sync_check": true,
+    "included_repaired_scenario_ids_and_shards_011_013_020": true,
+    "included_tdd_trace_mapping_exact_match_check": true,
+    "included_package_metadata_hash_version_freeze_counts_check": true,
+    "included_false_pass_guard_check": true,
+    "included_forbidden_references_check": true,
+    "included_hard_status_and_severity_rules": true,
+    "included_json_output_schema": true,
+    "author_does_not_claim_candidate_clean": true,
+    "self_sha256_not_embedded": true
+  },
+  "browser_status": "UNVERIFIED_NOT_APPLICABLE",
+  "secret_safety_status": "PASS_NO_SECRET_CONFIG_READ_OR_OUTPUT",
+  "notes": [
+    "Author output intentionally omits its own sha256 to avoid a self-referential placeholder; validation gate should compute file hashes after write.",
+    "Root-level reports/ and batches/cross_review_v11_slices1 were not used as input authority because the resolved current evidence is under the specified run dir."
+  ]
+}

@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 160
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008", "E501", "I001", "UP017", "UP037", "UP043"]
+
+[tool.mypy]
+python_version = "3.13"
+plugins = []
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = false
+exclude = ["backend/alembic"]

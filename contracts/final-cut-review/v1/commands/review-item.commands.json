@@ -1,0 +1,72 @@
+{
+  "contract_version": "1.0",
+  "commands": [
+    {
+      "command_type": "CreateReviewItem",
+      "capability": "review.item.create",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "item_code", "title", "original_file_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "item_code": {"type": "string", "minLength": 1, "maxLength": 128},
+          "episode_no": {"type": "integer", "minimum": 1},
+          "title": {"type": "string", "minLength": 1, "maxLength": 512},
+          "original_file_id": {"type": "string", "minLength": 1},
+          "version_note": {"type": "string"}
+        }
+      }
+    },
+    {
+      "command_type": "UpdateReviewItem",
+      "capability": "review.item.update",
+      "idempotent": false,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "episode_no": {"type": "integer", "minimum": 1},
+          "title": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      }
+    },
+    {
+      "command_type": "DeleteReviewItem",
+      "capability": "review.item.delete",
+      "idempotent": false,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "confirmed"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "confirmed": {"type": "boolean", "const": true}
+        }
+      }
+    },
+    {
+      "command_type": "UploadReviewVersion",
+      "capability": "review.version.upload",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "review_item_id", "original_file_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "review_item_id": {"type": "string", "minLength": 1},
+          "original_file_id": {"type": "string", "minLength": 1},
+          "version_note": {"type": "string"},
+          "change_summary": {"type": "string"},
+          "supersede_reason": {"type": "string"}
+        }
+      }
+    }
+  ]
+}

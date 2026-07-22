@@ -1,0 +1,18 @@
+{
+  "contract_version": "1.0",
+  "commands": [
+    {
+      "command_type": "PrepareFinalizedPackage",
+      "capability": "review.package.create",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ]
+}

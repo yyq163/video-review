@@ -1,0 +1,288 @@
+{
+  "plan_id": "STABILITY_R1_FULL_REVIEW_ASSIGNMENT_PLAN_69460EC_ROUND_1",
+  "status": "READY_FOR_REVIEWER_DISPATCH",
+  "workspace": "<repository-root>",
+  "run_dir": "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1",
+  "candidate_bundle_hash": "69460ec2c1fa235b7f9264f736a02025926c0669f53912f4b562e4124e3bb4fe",
+  "package_version": "v11_slices1_after_8612d99_r1_repair",
+  "package_dir": "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/batches/cross_review_v11_slices1",
+  "review_round": "round-1",
+  "prompt_path": "reviews/stability/candidate-69460ec/round-1/FULL_REVIEW_PROMPT.md",
+  "global_constraints": {
+    "read_only_review": true,
+    "do_not_modify_bdd_tdd_package_artifacts": true,
+    "do_not_reset_checkout_revert": true,
+    "do_not_use_output_v1_as_authority": true,
+    "do_not_read_or_output_real_secret_config": true,
+    "browser_status": "UNVERIFIED_NOT_APPLICABLE",
+    "hard_statuses": [
+      "CLEAN",
+      "NOT_CLEAN",
+      "BLOCKED",
+      "UNVERIFIED"
+    ],
+    "severity_levels": [
+      "P0",
+      "P1",
+      "P2",
+      "P3"
+    ],
+    "new_candidate_rule": "69460ec is a repaired new candidate; old 8612d99 NOT_CLEAN is not inherited, but old findings are regression-focus checks.",
+    "pass_gate_rule": "Package verifier pass gate is evidence input only; reviewers must independently reproduce role-relevant checks."
+  },
+  "baseline_inputs": {
+    "freeze_report": {
+      "path": "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/reports/BDD_TDD_BASELINE_FREEZE_V11_AFTER_8612D99_R1_REPAIR.json",
+      "sha256": "1ccf58dd8116caec749ec545029ecec883b6a02d6464f5679b9f047e97feac8c"
+    },
+    "package_verifier_pass_gate": {
+      "path": "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/reports/CROSS_PACKAGE_VERIFIER_69460EC_PASS_GATE.json",
+      "sha256": "33a4f9572447ec7409fb98a0db35d9c57f4be3bf98c7a44cb1b1006fb0089e41"
+    },
+    "independent_repair_verifier": {
+      "path": "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/subagent-outputs/finding-validation/STABILITY_R1_8612D99/8612D99_R1_REPAIR_INDEPENDENT_VERIFIER_OUTPUT.json",
+      "sha256": "7011784aeb285a214f685233cf3f0de29d3c6e0568ff101fcf90c6b589f10f8f"
+    },
+    "package_manifest": {
+      "path": "docs/TDD-BDD/output/.runs/20260622T094326Z-2bec36d1/batches/cross_review_v11_slices1/CROSS_REVIEW_PACKAGE_MANIFEST_V11_SLICES1.json",
+      "sha256": "fefc79f6afefdd6138bd7563039051d9bd2e5a87f1b17adaaaa66654d269bc0a"
+    }
+  },
+  "expected_counts": {
+    "package_json_file_count": 829,
+    "slice_json_count": 827,
+    "requirement_count": 1157,
+    "scenario_count": 547,
+    "exclusion_count": 515,
+    "matrix_row_unique_count": 1701,
+    "repaired_scenario_id_count": 32,
+    "business_user_authority_occurrence_count": 0,
+    "output_v1_authority_reference_count": 0
+  },
+  "regression_focus": {
+    "old_candidate_hash": "8612d99a950af21ccc25f23f1b4228d71a66fc23c7b3cdf0995f9d4308196332",
+    "old_findings": [
+      {
+        "old_id": "BDD-R1-8612D99-P1-001",
+        "validator_id": "VAL-8612D99-R1-P1-BDD-SHARD-RENDER-SYNC",
+        "focus": "BDD shard payload, manifest, global registry, render, and package sync"
+      },
+      {
+        "old_id": "BDD-R1-8612D99-P2-002",
+        "validator_id": "VAL-8612D99-R1-P2-BDD-ACTOR-TERMINOLOGY-STALE",
+        "focus": "business actor terminology and forbidden business-user authority occurrence"
+      },
+      {
+        "old_id": "TDD-8612D99-R1-P2-001",
+        "validator_id": "VAL-8612D99-R1-P2-TDD-TRACE-SECTION-OBJECT-SYNC",
+        "focus": "TDD trace mapping section/object executable refs exact-match registries"
+      },
+      {
+        "old_id": "ADV-8612D99-R1-P2-003",
+        "validator_id": "VAL-8612D99-R1-P2-INDEPENDENT-FALSE-PASS-GUARD",
+        "focus": "false-pass guard; ID-only readback cannot substitute payload/category sync"
+      }
+    ],
+    "repaired_scenario_ids": [
+      "BDD_SCENARIO_011_004",
+      "BDD_BATCH013_SCENARIO_010",
+      "BDD-020-001",
+      "BDD-020-002",
+      "BDD-020-003",
+      "BDD-020-004",
+      "BDD-020-005",
+      "BDD-020-006",
+      "BDD-020-007",
+      "BDD-020-008",
+      "BDD-020-009",
+      "BDD-020-016",
+      "BDD-020-017",
+      "BDD-020-018",
+      "BDD-020-019",
+      "BDD-020-020",
+      "BDD-020-021",
+      "BDD-020-022",
+      "BDD-020-023",
+      "BDD-020-024",
+      "BDD-020-025",
+      "BDD-020-026",
+      "BDD-020-027",
+      "BDD-020-028",
+      "BDD-020-029",
+      "BDD-020-030",
+      "BDD-020-031",
+      "BDD-020-032",
+      "BDD-020-033",
+      "BDD-020-034",
+      "BDD-020-035",
+      "BDD-020-036"
+    ],
+    "repaired_shards": [
+      "011",
+      "013",
+      "020"
+    ]
+  },
+  "assignments": [
+    {
+      "assignment_id": "STABILITY-R1-69460EC-REQ-REVIEW",
+      "reviewer_role": "Requirement",
+      "preferred_subagent_role": "analyst",
+      "scope": [
+        "Requirement baseline authority",
+        "1157 primary requirement closure",
+        "515 exclusion closure",
+        "forbidden business-user authority check",
+        "output/V1 authority rejection"
+      ],
+      "required_inputs": [
+        "artifacts/REQUIREMENT_BASELINE.json",
+        "batches/cross_review_v11_slices1/CROSS_REVIEW_PACKAGE_MANIFEST_V11_SLICES1.json",
+        "reports/BDD_TDD_BASELINE_FREEZE_V11_AFTER_8612D99_R1_REPAIR.json",
+        "reports/CROSS_PACKAGE_VERIFIER_69460EC_PASS_GATE.json"
+      ],
+      "required_mismatch_counts": [
+        "missing_primary_requirement_count",
+        "extra_primary_requirement_count",
+        "requirement_payload_mismatch_count",
+        "missing_exclusion_count",
+        "extra_exclusion_count",
+        "exclusion_payload_mismatch_count",
+        "business_user_authority_occurrence_count",
+        "output_v1_authority_reference_count"
+      ],
+      "planned_output_path": "reviews/stability/candidate-69460ec/round-1/reviewer-outputs/REQUIREMENT_REVIEWER_OUTPUT.json"
+    },
+    {
+      "assignment_id": "STABILITY-R1-69460EC-BDD-REVIEW",
+      "reviewer_role": "BDD",
+      "preferred_subagent_role": "test-engineer",
+      "scope": [
+        "BDD shard payload/global/render/package sync",
+        "32 repaired scenario IDs",
+        "shards 011/013/020",
+        "render readback must be payload/category aware"
+      ],
+      "required_inputs": [
+        "artifacts/BDD_SCENARIO_REGISTRY.json",
+        "artifacts/BDD_FEATURES.md",
+        "reports/BDD_RENDER_READBACK_GATE_V11_AFTER_8612D99_R1_REPAIR_RERUN.json",
+        "batches/cross_review_v11_slices1/CROSS_REVIEW_PACKAGE_MANIFEST_V11_SLICES1.json"
+      ],
+      "required_mismatch_counts": [
+        "bdd_shard_payload_mismatch_count",
+        "bdd_shard_manifest_mismatch_count",
+        "bdd_render_mismatch_count",
+        "bdd_missing_global_scenario_count",
+        "bdd_missing_shard_scenario_count",
+        "bdd_duplicate_global_scenario_id_count",
+        "repaired_scenario_missing_or_payload_mismatch_count"
+      ],
+      "planned_output_path": "reviews/stability/candidate-69460ec/round-1/reviewer-outputs/BDD_REVIEWER_OUTPUT.json"
+    },
+    {
+      "assignment_id": "STABILITY-R1-69460EC-TDD-REVIEW",
+      "reviewer_role": "TDD",
+      "preferred_subagent_role": "code-reviewer",
+      "scope": [
+        "TDD_TRACE_MAPPING section executable refs exact-match section registry",
+        "TDD_TRACE_MAPPING object executable refs exact-match object registry",
+        "BDD trace matrix count and current BDD authority sync",
+        "package-local TDD ref integrity"
+      ],
+      "required_inputs": [
+        "artifacts/TDD_TRACE_MAPPING.json",
+        "artifacts/TDD_SECTION_REGISTRY.json",
+        "artifacts/TDD_DESIGN_OBJECT_REGISTRY.json",
+        "artifacts/TDD_TECHNICAL_DESIGN_DOCUMENT.md",
+        "reports/TDD_TRACE_SYNC_GATE_V11_AFTER_8612D99_R1_REPAIR.json"
+      ],
+      "required_mismatch_counts": [
+        "tdd_section_executable_refs_mismatch_count",
+        "tdd_object_executable_refs_mismatch_count",
+        "tdd_bdd_trace_matrix_mismatch_count",
+        "package_tdd_ref_mismatch_count",
+        "package_tdd_local_row_body_ref_mismatch_count"
+      ],
+      "planned_output_path": "reviews/stability/candidate-69460ec/round-1/reviewer-outputs/TDD_REVIEWER_OUTPUT.json"
+    },
+    {
+      "assignment_id": "STABILITY-R1-69460EC-CROSS-PACKAGE-REVIEW",
+      "reviewer_role": "Cross Package",
+      "preferred_subagent_role": "verifier",
+      "scope": [
+        "package metadata/hash/version/freeze linkage",
+        "829 package JSON files",
+        "827 slice JSON files",
+        "1157/547/515/1701 count closure",
+        "slice manifest hash/size and metadata integrity",
+        "stale matrix row removal and repair projection consistency"
+      ],
+      "required_inputs": [
+        "batches/cross_review_v11_slices1/CROSS_REVIEW_PACKAGE_MANIFEST_V11_SLICES1.json",
+        "reports/BDD_TDD_BASELINE_FREEZE_V11_AFTER_8612D99_R1_REPAIR.json",
+        "reports/CROSS_PACKAGE_69460EC_R1_REPAIR_REBUILD_GATE.json",
+        "reports/CROSS_PACKAGE_VERIFIER_69460EC_PASS_GATE.json"
+      ],
+      "required_mismatch_counts": [
+        "candidate_hash_mismatch_count",
+        "metadata_mismatch_count",
+        "artifact_hash_mismatch_count",
+        "slice_manifest_hash_or_size_mismatch_count",
+        "slice_metadata_mismatch_count",
+        "missing_matrix_row_count",
+        "extra_matrix_row_count",
+        "duplicate_matrix_row_count"
+      ],
+      "planned_output_path": "reviews/stability/candidate-69460ec/round-1/reviewer-outputs/CROSS_PACKAGE_REVIEWER_OUTPUT.json"
+    },
+    {
+      "assignment_id": "STABILITY-R1-69460EC-ADVERSARIAL-IMPLEMENTABILITY-REVIEW",
+      "reviewer_role": "Adversarial Implementability",
+      "preferred_subagent_role": "security-reviewer",
+      "scope": [
+        "try to falsify pass gate",
+        "false-pass guard against ID-only readback",
+        "payload/category sync guard strength",
+        "TDD registry drift guard strength",
+        "forbidden authority hiding check",
+        "count-pass but payload-stale counterexample search"
+      ],
+      "required_inputs": [
+        "reports/CROSS_PACKAGE_VERIFIER_69460EC_PASS_GATE.json",
+        "subagent-outputs/finding-validation/STABILITY_R1_8612D99/8612D99_R1_REPAIR_INDEPENDENT_VERIFIER_OUTPUT.json",
+        "reports/BDD_RENDER_READBACK_GATE_V11_AFTER_8612D99_R1_REPAIR_RERUN.json",
+        "reports/TDD_TRACE_SYNC_GATE_V11_AFTER_8612D99_R1_REPAIR.json"
+      ],
+      "required_mismatch_counts": [
+        "false_pass_guard_gap_count",
+        "id_only_readback_gap_count",
+        "payload_category_sync_gap_count",
+        "forbidden_reference_count",
+        "stale_payload_counterexample_count"
+      ],
+      "planned_output_path": "reviews/stability/candidate-69460ec/round-1/reviewer-outputs/ADVERSARIAL_IMPLEMENTABILITY_REVIEWER_OUTPUT.json"
+    }
+  ],
+  "reviewer_output_schema_required_fields": [
+    "reviewer_role",
+    "candidate_bundle_hash",
+    "package_version",
+    "status",
+    "findings",
+    "mismatch_counts",
+    "evidence_paths",
+    "evidence_hashes",
+    "final_decision",
+    "browser_status",
+    "secret_safety_status"
+  ],
+  "dispatch_order": [
+    "STABILITY-R1-69460EC-CROSS-PACKAGE-REVIEW",
+    "STABILITY-R1-69460EC-BDD-REVIEW",
+    "STABILITY-R1-69460EC-TDD-REVIEW",
+    "STABILITY-R1-69460EC-REQ-REVIEW",
+    "STABILITY-R1-69460EC-ADVERSARIAL-IMPLEMENTABILITY-REVIEW"
+  ],
+  "aggregate_gate_rule": "Final candidate decision must be worst-status convergence across all five reviewer JSON outputs. Any NOT_CLEAN or BLOCKED prevents CLEAN."
+}

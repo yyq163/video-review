@@ -1,0 +1,325 @@
+{
+  "validation_version": "V1.3 RC2",
+  "total_checks": 63,
+  "passed": 63,
+  "failed": 0,
+  "static_status": "PASS_STATIC",
+  "failures": [],
+  "checks": [
+    {
+      "name": "no_spec_missing_claim",
+      "passed": true,
+      "detail": "TDD/BDD 不再声明 SPEC 缺失"
+    },
+    {
+      "name": "error_registry_26",
+      "passed": true,
+      "detail": "count=26"
+    },
+    {
+      "name": "no_METHOD_NOT_ALLOWED_registered",
+      "passed": true,
+      "detail": "METHOD_NOT_ALLOWED 仅在删除语境出现"
+    },
+    {
+      "name": "no_RANGE_NOT_SATISFIABLE_registered",
+      "passed": true,
+      "detail": "RANGE_NOT_SATISFIABLE 删除声明存在"
+    },
+    {
+      "name": "command_16",
+      "passed": true,
+      "detail": "count=16"
+    },
+    {
+      "name": "event_18",
+      "passed": true,
+      "detail": "count=18"
+    },
+    {
+      "name": "event_present_review.project.created",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.project.updated",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.project.archived",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.project.restored",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.item.created",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.version.uploaded",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.session.started",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.issue.created",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.issue.updated",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.issue.message_added",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.issue.resolved",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.issue.reopened",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.changes_requested",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.version.finalized",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.finalized_original.download_requested",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.package.requested",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.package.ready",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event_present_review.package.failed",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "capability_25",
+      "passed": true,
+      "detail": "count=25"
+    },
+    {
+      "name": "shared_get_13",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "edit_write_7",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "review_write_11",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "upload_api_5",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_delete_endpoint",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "write_guard_verify",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_write_guard_session_old",
+      "passed": true,
+      "detail": "旧路径不存在"
+    },
+    {
+      "name": "create_item_double_event",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "episode_no_integer",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_episode_no_text",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_playback_status_in_review_versions",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "annotation_rect",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_rectangle_shape",
+      "passed": true,
+      "detail": "rectangle 不作为 discriminator"
+    },
+    {
+      "name": "idempotency_scope_hash",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_nullable_unique_idempotency",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "manifest_module_version",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "finalizations_status_check",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "package_snapshots_status_check",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "invariants_18",
+      "passed": true,
+      "detail": "INV refs=20"
+    },
+    {
+      "name": "scenario_id_unique",
+      "passed": true,
+      "detail": "total=329 unique=313"
+    },
+    {
+      "name": "coordinate_clamp",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_null_for_black_bar",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_target_http_api",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "frame_exact_equal",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "patch_semantics",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "download_token_404_410",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no_normative_ambiguity",
+      "passed": true,
+      "detail": "found=[]"
+    },
+    {
+      "name": "wire_snake_case",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "deadlock_503",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "playback_status_media_module",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "five_layers",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "inv_006_present",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "inv_011_present",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "inv_012_present",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "feature_files_16",
+      "passed": true,
+      "detail": "count=16"
+    },
+    {
+      "name": "scenarios_single_behavior",
+      "passed": true,
+      "detail": "scenarios=150"
+    },
+    {
+      "name": "completion_status_derivation",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "host_cookie_adr_nonnormative",
+      "passed": true,
+      "detail": ""
+    }
+  ]
+}

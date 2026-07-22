@@ -1,0 +1,336 @@
+name: fj-final-cut-review
+
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: ops/postgres/Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_ADMIN_DB:-postgres}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+    secrets:
+      - postgres_admin_password
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          PGPASSWORD="$$(cat /run/secrets/postgres_admin_password)"
+          psql -w -h 127.0.0.1 -U "$${POSTGRES_USER}"
+          -d "$${POSTGRES_DB}" -v ON_ERROR_STOP=1 -Atqc 'SELECT 1'
+          | grep -qx 1
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - fj-final-cut-review-postgres:/var/lib/postgresql/data
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: "no"
+    command:
+      - python
+      - backend/scripts/run_database_migrations.py
+    environment:
+      POSTGRES_ADMIN_HOST: postgres
+      POSTGRES_ADMIN_PORT: 5432
+      POSTGRES_ADMIN_DB: ${POSTGRES_ADMIN_DB:-postgres}
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_ADMIN_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_OWNER_USER: ${POSTGRES_OWNER_USER:-final_cut_review_owner}
+      POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_owner_password
+      POSTGRES_APP_DB: ${POSTGRES_APP_DB:-final_cut_review}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-final_cut_review_app}
+      POSTGRES_APP_PASSWORD_FILE: /run/secrets/postgres_app_password
+      POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-final_cut_review_test}
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_APP_DB:-final_cut_review}
+      DATABASE_USER: ${POSTGRES_OWNER_USER:-final_cut_review_owner}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_owner_password
+      DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}
+      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
+      STORAGE_ROOT: /tmp/storage
+      PACKAGE_ROOT: /tmp/packages
+    secrets:
+      - postgres_admin_password
+      - postgres_owner_password
+      - postgres_app_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/lib/fj-runtime-state
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETGID
+      - SETUID
+
+  backend:
+    image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - python -c 'from backend.app.main import database_readiness; database_readiness()' && exec uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1
+    deploy:
+      replicas: 1
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_APP_DB:-final_cut_review}
+      DATABASE_USER: ${POSTGRES_APP_USER:-final_cut_review_app}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_app_password
+      DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
+      FORCE_DATA_OWNERSHIP_MIGRATION: ${FORCE_DATA_OWNERSHIP_MIGRATION:-0}
+      STORAGE_ROOT: /data/storage
+      PACKAGE_ROOT: /data/packages
+      PACKAGE_TTL_SECONDS: ${PACKAGE_TTL_SECONDS:-86400}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-5368709120}
+      MAX_UPLOAD_PARTS: ${MAX_UPLOAD_PARTS:-256}
+      UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-900}
+      UPLOAD_PART_READ_TIMEOUT_SECONDS: ${UPLOAD_PART_READ_TIMEOUT_SECONDS:-120}
+      UPLOAD_PART_IO_WORKERS: ${UPLOAD_PART_IO_WORKERS:-4}
+      MAX_INFLIGHT_UPLOAD_PARTS_PER_PRINCIPAL: ${MAX_INFLIGHT_UPLOAD_PARTS_PER_PRINCIPAL:-16}
+      MAX_INFLIGHT_UPLOAD_PARTS_PER_SESSION: ${MAX_INFLIGHT_UPLOAD_PARTS_PER_SESSION:-1}
+      MAX_INFLIGHT_UPLOAD_PART_CANDIDATES: ${MAX_INFLIGHT_UPLOAD_PART_CANDIDATES:-64}
+      MAX_ACTIVE_UPLOAD_SESSIONS_GLOBAL: ${MAX_ACTIVE_UPLOAD_SESSIONS_GLOBAL:-128}
+      MAX_ACTIVE_UPLOAD_SESSIONS_PER_PRINCIPAL: ${MAX_ACTIVE_UPLOAD_SESSIONS_PER_PRINCIPAL:-16}
+      MAX_RESERVED_UPLOAD_BYTES_GLOBAL: ${MAX_RESERVED_UPLOAD_BYTES_GLOBAL:-107374182400}
+      MAX_RESERVED_UPLOAD_BYTES_PER_PRINCIPAL: ${MAX_RESERVED_UPLOAD_BYTES_PER_PRINCIPAL:-21474836480}
+      UPLOAD_STORAGE_LOW_WATERMARK_BYTES: ${UPLOAD_STORAGE_LOW_WATERMARK_BYTES:-1073741824}
+      UPLOAD_FINALIZATION_LEASE_SECONDS: ${UPLOAD_FINALIZATION_LEASE_SECONDS:-7200}
+      UPLOAD_RUNTIME_WORKER_COUNT: 1
+      MAX_PACKAGE_FILES: ${MAX_PACKAGE_FILES:-100}
+      MAX_PACKAGE_BYTES: ${MAX_PACKAGE_BYTES:-5368709120}
+      MAX_PENDING_PACKAGE_BUILDS: ${MAX_PENDING_PACKAGE_BUILDS:-8}
+      MAX_PACKAGE_STORAGE_BYTES: ${MAX_PACKAGE_STORAGE_BYTES:-21474836480}
+      PACKAGE_WORKER_MAX_ATTEMPTS: ${PACKAGE_WORKER_MAX_ATTEMPTS:-3}
+      PACKAGE_WORKER_RETRY_DELAY_SECONDS: ${PACKAGE_WORKER_RETRY_DELAY_SECONDS:-30}
+      PACKAGE_DOWNLOAD_SESSION_TTL_SECONDS: ${PACKAGE_DOWNLOAD_SESSION_TTL_SECONDS:-120}
+      PACKAGE_DOWNLOAD_LEASE_SECONDS: ${PACKAGE_DOWNLOAD_LEASE_SECONDS:-7200}
+      PACKAGE_DOWNLOAD_COOLDOWN_SECONDS: ${PACKAGE_DOWNLOAD_COOLDOWN_SECONDS:-10}
+      DATA_OWNERSHIP_LOCK_TIMEOUT_SECONDS: ${DATA_OWNERSHIP_LOCK_TIMEOUT_SECONDS:-120}
+      DATA_OWNERSHIP_LOCK_STALE_SECONDS: ${DATA_OWNERSHIP_LOCK_STALE_SECONDS:-30}
+      WRITE_GUARD_MODE: ${WRITE_GUARD_MODE:-reverse_proxy}
+      WRITE_GUARD_CODE_FILE: /run/secrets/write_guard_code
+      REVERSE_PROXY_WRITE_HEADER: ${REVERSE_PROXY_WRITE_HEADER:-x-write-guard-verified}
+      REVERSE_PROXY_TRUSTED_HOSTS: ${REVERSE_PROXY_TRUSTED_HOSTS:?REVERSE_PROXY_TRUSTED_HOSTS is required for reverse_proxy write guard mode}
+      BROWSER_ALLOWED_ORIGINS: ${BROWSER_ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5175,http://localhost:5175}
+      WRITE_GUARD_SESSION_SECRET_FILE: /run/secrets/write_guard_session_secret
+      LOG_LEVEL: INFO
+    secrets:
+      - postgres_app_password
+      - write_guard_code
+      - write_guard_session_secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "gosu", "app", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/runtimez', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETGID
+      - SETUID
+    volumes:
+      - fj-final-cut-review-data:/data
+      - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+
+  maintenance:
+    image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - backend.app.maintenance
+      - run
+      - --interval-seconds
+      - ${MAINTENANCE_INTERVAL_SECONDS:-300}
+      - --cycle-timeout-seconds
+      - ${MAINTENANCE_CYCLE_TIMEOUT_SECONDS:-60}
+      - --max-consecutive-errors
+      - ${MAINTENANCE_MAX_CONSECUTIVE_ERRORS:-3}
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_APP_DB:-final_cut_review}
+      DATABASE_USER: ${POSTGRES_APP_USER:-final_cut_review_app}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_app_password
+      DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
+      STORAGE_ROOT: /data/storage
+      PACKAGE_ROOT: /data/packages
+      PACKAGE_TTL_SECONDS: ${PACKAGE_TTL_SECONDS:-86400}
+      UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-900}
+      DATA_OWNERSHIP_LOCK_TIMEOUT_SECONDS: ${DATA_OWNERSHIP_LOCK_TIMEOUT_SECONDS:-120}
+      DATA_OWNERSHIP_LOCK_STALE_SECONDS: ${DATA_OWNERSHIP_LOCK_STALE_SECONDS:-30}
+      MAINTENANCE_CYCLE_TIMEOUT_SECONDS: ${MAINTENANCE_CYCLE_TIMEOUT_SECONDS:-60}
+      MAINTENANCE_HEALTH_MAX_AGE_SECONDS: ${MAINTENANCE_HEALTH_MAX_AGE_SECONDS:-420}
+    secrets:
+      - postgres_app_password
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - gosu
+        - app
+        - python
+        - -c
+        - >-
+          import os,time; from pathlib import Path;
+          p=Path('/tmp/fj-maintenance-heartbeat'); s=Path('/tmp/fj-maintenance-status');
+          limit=max(int(os.environ['MAINTENANCE_HEALTH_MAX_AGE_SECONDS']),int(os.environ['MAINTENANCE_CYCLE_TIMEOUT_SECONDS'])+30);
+          raise SystemExit(0 if p.is_file() and s.is_file() and s.read_text().strip()=='ok' and time.time()-p.stat().st_mtime <= limit else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: ${MAINTENANCE_CYCLE_TIMEOUT_SECONDS:-60}s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETGID
+      - SETUID
+    volumes:
+      - fj-final-cut-review-data:/data
+      - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+
+  package-worker:
+    image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - backend.app.package_builds
+      - run
+      - --interval-seconds
+      - ${PACKAGE_WORKER_INTERVAL_SECONDS:-2}
+      - --cycle-timeout-seconds
+      - ${PACKAGE_WORKER_CYCLE_TIMEOUT_SECONDS:-7200}
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_APP_DB:-final_cut_review}
+      DATABASE_USER: ${POSTGRES_APP_USER:-final_cut_review_app}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_app_password
+      DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
+      STORAGE_ROOT: /data/storage
+      PACKAGE_ROOT: /data/packages
+      PACKAGE_TTL_SECONDS: ${PACKAGE_TTL_SECONDS:-86400}
+      MAX_PACKAGE_FILES: ${MAX_PACKAGE_FILES:-100}
+      MAX_PACKAGE_BYTES: ${MAX_PACKAGE_BYTES:-5368709120}
+      MAX_PENDING_PACKAGE_BUILDS: ${MAX_PENDING_PACKAGE_BUILDS:-8}
+      MAX_PACKAGE_STORAGE_BYTES: ${MAX_PACKAGE_STORAGE_BYTES:-21474836480}
+      PACKAGE_WORKER_MAX_ATTEMPTS: ${PACKAGE_WORKER_MAX_ATTEMPTS:-3}
+      PACKAGE_WORKER_RETRY_DELAY_SECONDS: ${PACKAGE_WORKER_RETRY_DELAY_SECONDS:-30}
+      PACKAGE_WORKER_HEALTH_MAX_AGE_SECONDS: ${PACKAGE_WORKER_HEALTH_MAX_AGE_SECONDS:-90}
+      DATA_OWNERSHIP_LOCK_TIMEOUT_SECONDS: ${DATA_OWNERSHIP_LOCK_TIMEOUT_SECONDS:-120}
+      DATA_OWNERSHIP_LOCK_STALE_SECONDS: ${DATA_OWNERSHIP_LOCK_STALE_SECONDS:-30}
+    secrets:
+      - postgres_app_password
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - gosu
+        - app
+        - python
+        - -c
+        - >-
+          import os,time; from pathlib import Path;
+          p=Path('/tmp/fj-package-worker-heartbeat'); s=Path('/tmp/fj-package-worker-status');
+          allowed={'ok','running'}; limit=int(os.environ['PACKAGE_WORKER_HEALTH_MAX_AGE_SECONDS']);
+          raise SystemExit(0 if p.is_file() and s.is_file() and s.read_text().strip() in allowed and time.time()-p.stat().st_mtime <= limit else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETGID
+      - SETUID
+    volumes:
+      - fj-final-cut-review-data:/data
+      - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+
+volumes:
+  fj-final-cut-review-postgres:
+    name: ${POSTGRES_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-postgres}
+  fj-final-cut-review-data:
+    name: ${DATA_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-data}
+  fj-final-cut-review-runtime-state:
+    name: ${RUNTIME_STATE_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-runtime-state}
+
+secrets:
+  postgres_admin_password:
+    file: ${COMPOSE_POSTGRES_ADMIN_PASSWORD_FILE:?COMPOSE_POSTGRES_ADMIN_PASSWORD_FILE is required}
+  postgres_owner_password:
+    file: ${COMPOSE_POSTGRES_OWNER_PASSWORD_FILE:?COMPOSE_POSTGRES_OWNER_PASSWORD_FILE is required}
+  postgres_app_password:
+    file: ${COMPOSE_POSTGRES_APP_PASSWORD_FILE:?COMPOSE_POSTGRES_APP_PASSWORD_FILE is required}
+  write_guard_session_secret:
+    file: ${COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE:?COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE is required}
+  write_guard_code:
+    file: ${COMPOSE_WRITE_GUARD_CODE_FILE:?COMPOSE_WRITE_GUARD_CODE_FILE is required}

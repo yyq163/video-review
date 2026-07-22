@@ -1,0 +1,37 @@
+node_modules/
+dist/
+test-results/
+coverage/
+.env
+.env.*
+!.env.example
+backend/.venv/
+backend/.data/
+backend/.pytest_cache/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+.DS_Store
+/.code-index/
+.codegraph/
+.understand-anything/
+/.codex-agent-team/
+.visual-review/
+/playwright-report/
+/htmlcov/
+/.coverage
+/tmp/
+
+# User-supplied test videos and images are private, local-only fixtures.
+/test-video/
+/test-images/
+/private-test-assets/
+
+# Historical TDD/BDD pipeline runs are local archives, not repository docs.
+/docs/TDD-BDD/output/
+tools/**/.venv/
+tools/**/.pytest_cache/

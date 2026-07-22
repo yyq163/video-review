@@ -1,0 +1,227 @@
+{
+  "validation_version": "V1.3 RC2",
+  "total_logical_scenarios": 358,
+  "total_concrete_extra": 82,
+  "fail_scenarios_repaired": 28,
+  "review_scenarios_repaired": 55,
+  "remaining_fail": 0,
+  "remaining_review": 0,
+  "features": {
+    "00_contracts": {
+      "prefix": "BDD-CON",
+      "logical": 20,
+      "concrete_extra": 6,
+      "fail_repaired": [
+        "BDD-CON-011",
+        "BDD-CON-016",
+        "BDD-DLD-009"
+      ],
+      "review_repaired": [
+        "BDD-CON-007",
+        "BDD-CON-008"
+      ]
+    },
+    "01_entry": {
+      "prefix": "BDD-ACC",
+      "logical": 22,
+      "concrete_extra": 4,
+      "fail_repaired": [
+        "BDD-ACC-012",
+        "BDD-ACC-013",
+        "BDD-ACC-014"
+      ],
+      "review_repaired": []
+    },
+    "02_project": {
+      "prefix": "BDD-PRJ",
+      "logical": 13,
+      "concrete_extra": 21,
+      "fail_repaired": [],
+      "review_repaired": [
+        "BDD-PRJ-007"
+      ]
+    },
+    "03_upload": {
+      "prefix": "BDD-UPL",
+      "logical": 25,
+      "concrete_extra": 0,
+      "fail_repaired": [
+        "BDD-UPL-011",
+        "BDD-UPL-012"
+      ],
+      "review_repaired": [
+        "BDD-UPL-008",
+        "BDD-UPL-017",
+        "BDD-UPL-018",
+        "BDD-UPL-019",
+        "BDD-UPL-020"
+      ]
+    },
+    "04_workflow": {
+      "prefix": "BDD-WFL",
+      "logical": 20,
+      "concrete_extra": 0,
+      "fail_repaired": [],
+      "review_repaired": [
+        "BDD-WFL-003",
+        "BDD-WFL-014"
+      ]
+    },
+    "05_issues": {
+      "prefix": "BDD-ISS",
+      "logical": 28,
+      "concrete_extra": 0,
+      "fail_repaired": [
+        "BDD-ISS-007",
+        "BDD-ISS-008",
+        "BDD-ISS-009",
+        "BDD-ISS-025",
+        "BDD-ISS-026"
+      ],
+      "review_repaired": [
+        "BDD-ISS-015",
+        "BDD-ISS-020",
+        "BDD-ISS-021",
+        "BDD-ISS-027"
+      ]
+    },
+    "06_playback": {
+      "prefix": "BDD-PBK",
+      "logical": 41,
+      "concrete_extra": 5,
+      "fail_repaired": [
+        "BDD-PBK-035",
+        "BDD-PBK-036",
+        "BDD-PBK-037"
+      ],
+      "review_repaired": [
+        "BDD-PBK-004",
+        "BDD-PBK-005",
+        "BDD-PBK-020",
+        "BDD-PBK-023"
+      ]
+    },
+    "07_annotation": {
+      "prefix": "BDD-ANN",
+      "logical": 26,
+      "concrete_extra": 7,
+      "fail_repaired": [
+        "BDD-ANN-004",
+        "BDD-ANN-018",
+        "BDD-ANN-019",
+        "BDD-ANN-020",
+        "BDD-ANN-021",
+        "BDD-ANN-022",
+        "BDD-ANN-023",
+        "BDD-ANN-024",
+        "BDD-ANN-025",
+        "BDD-ANN-026"
+      ],
+      "review_repaired": []
+    },
+    "08_finalization": {
+      "prefix": "BDD-DEC/FIN",
+      "logical": 26,
+      "concrete_extra": 0,
+      "fail_repaired": [],
+      "review_repaired": [
+        "BDD-DEC-007",
+        "BDD-DEC-008",
+        "BDD-FIN-001",
+        "BDD-FIN-006",
+        "BDD-FIN-009",
+        "BDD-FIN-011",
+        "BDD-FIN-013",
+        "BDD-FIN-014"
+      ]
+    },
+    "09_download": {
+      "prefix": "BDD-DLD/PKG",
+      "logical": 32,
+      "concrete_extra": 0,
+      "fail_repaired": [
+        "BDD-SEC-025"
+      ],
+      "review_repaired": [
+        "BDD-PKG-008",
+        "BDD-PKG-009",
+        "BDD-PKG-010",
+        "BDD-PKG-011",
+        "BDD-PKG-012",
+        "BDD-PKG-013",
+        "BDD-PKG-014"
+      ]
+    },
+    "10_query": {
+      "prefix": "BDD-QRY",
+      "logical": 13,
+      "concrete_extra": 0,
+      "fail_repaired": [],
+      "review_repaired": [
+        "BDD-QRY-002",
+        "BDD-QRY-003",
+        "BDD-QRY-004",
+        "BDD-QRY-005",
+        "BDD-QRY-006",
+        "BDD-QRY-007",
+        "BDD-QRY-008"
+      ]
+    },
+    "11_concurrency": {
+      "prefix": "BDD-CC",
+      "logical": 24,
+      "concrete_extra": 17,
+      "fail_repaired": [],
+      "review_repaired": [
+        "BDD-CC-016",
+        "BDD-CC-017",
+        "BDD-CC-023"
+      ]
+    },
+    "12_frontend": {
+      "prefix": "BDD-UI",
+      "logical": 21,
+      "concrete_extra": 22,
+      "fail_repaired": [],
+      "review_repaired": [
+        "BDD-UI-006",
+        "BDD-UI-007",
+        "BDD-UI-008",
+        "BDD-UI-009",
+        "BDD-UI-010",
+        "BDD-UI-011",
+        "BDD-UI-012",
+        "BDD-UI-017"
+      ]
+    },
+    "13_embedded": {
+      "prefix": "BDD-HOST",
+      "logical": 13,
+      "concrete_extra": 0,
+      "fail_repaired": [],
+      "review_repaired": [
+        "BDD-HOST-011"
+      ]
+    },
+    "14_security": {
+      "prefix": "BDD-SEC",
+      "logical": 25,
+      "concrete_extra": 0,
+      "fail_repaired": [
+        "BDD-SEC-025"
+      ],
+      "review_repaired": [
+        "BDD-SEC-002",
+        "BDD-SEC-008",
+        "BDD-SEC-012"
+      ]
+    },
+    "15_design": {
+      "prefix": "BDD-DES",
+      "logical": 9,
+      "concrete_extra": 0,
+      "fail_repaired": [],
+      "review_repaired": []
+    }
+  }
+}

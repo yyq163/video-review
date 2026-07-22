@@ -1,0 +1,42 @@
+requirement_id,spec_location,spec_topic,tdd_section,bdd_scenario,evidence
+FCR-S00-001,§00,修订结论,§0,CON-011,specified
+FCR-S01-002,§01,产品定位,§1,CON-001,specified
+FCR-S02-003,§02,核心业务原则,§7/§8,WFL-010/011,specified
+FCR-S03-004,§03,双入口,§5/§11,ACC-001/002,specified
+FCR-S04-005,§04,写保护,§25,ACC-008..014,specified
+FCR-S05-006,§05,架构模块边界,§2,CON-009,specified
+FCR-S06-007,§06,统一契约层,§3,CON-001..020,statically validated
+FCR-S07-008,§07,执行上下文,§4,ACC-019/020,specified
+FCR-S08-009,§08,Capability Registry,§5,CON-009/018,statically validated
+FCR-S09-010,§09,项目目录抽象,§6/§9,PRJ-011/012/013,specified
+FCR-S10-011,§10,核心领域模型,§7,"UPL-009/022, ANN-018",statically validated
+FCR-S11-012,§11,全局不变量,§8,"WFL-001..020, CC-022",statically validated
+FCR-S12-013,§12,状态机,§7.6,WFL-003..009,specified
+FCR-S13-014,§13,项目管理,§6/§12,PRJ-001..010,specified
+FCR-S14-015,§14,成片条目与版本,§10/§11,UPL-006..014,specified
+FCR-S15-016,§15,播放器与时间码,§20,UI-004/005,specified
+FCR-S16-017,§16,画面批注,§21,ANN-001..026,specified
+FCR-S17-018,§17,修改意见与回复,§10/§13,ISS-001..028,specified
+FCR-S18-019,§18,要求修改,§10,DEC-001..008,specified
+FCR-S19-020,§19,定稿,§15,FIN-001..018,specified
+FCR-S20-021,§20,文件播放上传,§14,UPL-001..021,specified
+FCR-S21-022,§21,定稿原片下载与项目打包,§15,"DLD-001..010, PKG-001..022",specified
+FCR-S22-023,§22,统一命令契约,§10,CON-004/005/010,specified
+FCR-S23-024,§23,统一查询契约,§6/§11,QRY-001..013,specified
+FCR-S24-025,§24,HTTP API,§11,CON-013/014/015/016,statically validated
+FCR-S25-026,§25,并发幂等事务,§10/§12,CC-001..021,specified
+FCR-S26-027,§26,统一错误契约,§5/§10,CON-011,statically validated
+FCR-S27-028,§27,领域事件与 Outbox,§16,"CON-012, PKG-017/018",specified
+FCR-S28-029,§28,宿主平台集成,§18,HOST-001..013,statically validated
+FCR-S29-030,§29,前端模块化,§19,"UI-012/017, QRY-008",specified
+FCR-S30-031,§30,后端模块化,§2,CON-009,specified
+FCR-S31-032,§31,数据库约束,§12,CC-024,statically validated
+FCR-S32-033,§32,安全与部署,§25,SEC-001..025,specified
+FCR-S33-034,§33,可观察性,§17,SEC-017,specified
+FCR-S34-035,§34,视觉交互基线,§23,"DES-001..009, UI-013",statically validated
+FCR-S35-036,§35,性能容量,§24,CON-009,specified
+FCR-S36-037,§36,未来扩展,§26,—,specified
+FCR-S37-038,§37,严格验收场景,§11/§19,ACC-003/004,specified
+FCR-S38-039,§38,开发准入,§26,—,specified
+FCR-S39-040,§39,最终产品口径,§1,—,specified
+FCR-S40-041,§40,精确回放批注,§22,PBK-001..041,statically validated

@@ -1,0 +1,2187 @@
+openapi: 3.1.0
+info:
+  title: Final Cut Review Contract
+  version: "1.0"
+  x-contract-version: "1.0"
+servers:
+  - url: /api/v1
+
+x-standard-non-200-responses: &standardNon200Responses
+  "400":
+    $ref: "#/components/responses/BadRequest"
+  "401":
+    $ref: "#/components/responses/Unauthorized"
+  "403":
+    $ref: "#/components/responses/Forbidden"
+  "404":
+    $ref: "#/components/responses/NotFound"
+  "409":
+    $ref: "#/components/responses/Conflict"
+  "413":
+    $ref: "#/components/responses/PayloadTooLarge"
+  "422":
+    $ref: "#/components/responses/ValidationError"
+  "500":
+    $ref: "#/components/responses/InternalServerError"
+  "503":
+    $ref: "#/components/responses/StorageUnavailable"
+
+security:
+  - PrincipalContext: []
+  - WriteGuardCookie: []
+  - ReverseProxyWriteGuard: []
+
+paths:
+  /final-cut-review/module-manifest:
+    get:
+      operationId: module_manifest
+      tags: [queries]
+      responses:
+        "200":
+          description: Module manifest envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeModuleManifest"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects:
+    get:
+      operationId: list_projects
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Project list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProjectList"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}:
+    get:
+      operationId: get_project
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+      responses:
+        "200":
+          description: Project envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProject"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items:
+    get:
+      operationId: list_items
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Review item list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItemList"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}:
+    get:
+      operationId: get_item
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Review item envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItem"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/versions:
+    get:
+      operationId: list_versions
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+      responses:
+        "200":
+          description: Review version list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewVersionList"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}:
+    get:
+      operationId: get_version
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Review version envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewVersion"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues:
+    get:
+      operationId: list_issues
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+      responses:
+        "200":
+          description: Review issue list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssueList"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}:
+    get:
+      operationId: get_issue
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Review issue envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssue"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/revisions:
+    get:
+      operationId: list_revisions
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Immutable issue revision list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssueRevisionList"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/messages:
+    get:
+      operationId: list_messages
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+      responses:
+        "200":
+          description: Thread message list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeThreadMessageList"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/stream:
+    get:
+      operationId: stream_review_version
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/RangeHeader"
+      responses:
+        "200":
+          description: Full media stream.
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial media stream.
+          headers:
+            Accept-Ranges:
+              schema: {type: string}
+            Content-Range:
+              schema: {type: string}
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/finalization:
+    get:
+      operationId: get_finalization
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+      responses:
+        "200":
+          description: Active finalization envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeNullableFinalization"
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/finalized-original/download:
+    get:
+      operationId: download_finalized_original
+      tags: [package]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/RangeHeader"
+      responses:
+        "200":
+          description: Frozen finalized original file.
+          headers:
+            Accept-Ranges:
+              schema: {type: string}
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial frozen finalized original file.
+          headers:
+            Accept-Ranges:
+              schema: {type: string}
+            Content-Range:
+              schema: {type: string}
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
+              schema:
+                type: string
+                format: binary
+        <<: *standardNon200Responses
+
+  /final-cut-review/write-guard/session:
+    post:
+      operationId: verify_write_guard
+      tags: [commands]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SharedCodeRequest"
+      responses:
+        "200":
+          description: Write guard verification result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeWriteGuardSession"
+        <<: *standardNon200Responses
+
+  /final-cut-review/edit/projects:
+    post:
+      operationId: edit_create_project
+      tags: [commands]
+      x-command-type: CreateProject
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectCommandEnvelope"
+      responses:
+        "200":
+          description: Created project envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProject"
+        "201":
+          description: Created project envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProject"
+        <<: *standardNon200Responses
+
+  /final-cut-review/edit/projects/{project_ref_id}:
+    patch:
+      operationId: edit_update_project
+      tags: [commands]
+      x-command-type: UpdateProject
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectCommandEnvelope"
+      responses:
+        "200":
+          description: Updated project envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProject"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/archive:
+    post:
+      operationId: review_archive_project
+      tags: [commands]
+      x-command-type: ArchiveProject
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArchiveProjectCommandEnvelope"
+      responses:
+        "200":
+          description: Archived project envelope from review entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProject"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/restore:
+    post:
+      operationId: review_restore_project
+      tags: [commands]
+      x-command-type: RestoreProject
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreProjectCommandEnvelope"
+      responses:
+        "200":
+          description: Restored project envelope from review entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProject"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/soft-delete:
+    post:
+      operationId: review_soft_delete_project
+      tags: [commands]
+      x-command-type: SoftDeleteProject
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SoftDeleteProjectCommandEnvelope"
+      responses:
+        "200":
+          description: Soft-deleted project envelope from review entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProject"
+        <<: *standardNon200Responses
+
+  /final-cut-review/edit/projects/{project_ref_id}/items:
+    post:
+      operationId: edit_create_review_item
+      tags: [commands]
+      x-command-type: CreateReviewItem
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewItemCommandEnvelope"
+      responses:
+        "200":
+          description: Created review item envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItem"
+        "201":
+          description: Created review item envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItem"
+        <<: *standardNon200Responses
+
+  /final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}:
+    patch:
+      operationId: edit_update_review_item
+      tags: [commands]
+      x-command-type: UpdateReviewItem
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateReviewItemCommandEnvelope"
+      responses:
+        "200":
+          description: Updated review item envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItem"
+        <<: *standardNon200Responses
+
+  /final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}/delete:
+    post:
+      operationId: edit_delete_review_item
+      tags: [commands]
+      x-command-type: DeleteReviewItem
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteReviewItemCommandEnvelope"
+      responses:
+        "200":
+          description: Deleted duplicate review item envelope before review starts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItem"
+        <<: *standardNon200Responses
+
+  /final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}/versions:
+    post:
+      operationId: edit_upload_review_version
+      tags: [commands]
+      x-command-type: UploadReviewVersion
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadReviewVersionCommandEnvelope"
+      responses:
+        "200":
+          description: Uploaded review version envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewVersion"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/start:
+    post:
+      operationId: review_start
+      tags: [commands]
+      x-command-type: StartReview
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartReviewCommandEnvelope"
+      responses:
+        "200":
+          description: Started review item envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItem"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues:
+    post:
+      operationId: review_create_issue
+      tags: [commands]
+      x-command-type: CreateReviewIssue
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewIssueCommandEnvelope"
+      responses:
+        "200":
+          description: Created review issue envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssue"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}:
+    patch:
+      operationId: review_update_issue
+      tags: [commands]
+      x-command-type: UpdateReviewIssue
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateReviewIssueCommandEnvelope"
+      responses:
+        "200":
+          description: Updated review issue envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssue"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/messages:
+    post:
+      operationId: review_add_message
+      tags: [commands]
+      x-command-type: AddReviewMessage
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddReviewMessageCommandEnvelope"
+      responses:
+        "200":
+          description: Created thread message envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeThreadMessage"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/resolve:
+    post:
+      operationId: review_resolve_issue
+      tags: [commands]
+      x-command-type: ResolveReviewIssue
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveReviewIssueCommandEnvelope"
+      responses:
+        "200":
+          description: Resolved review issue envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssue"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/reopen:
+    post:
+      operationId: review_reopen_issue
+      tags: [commands]
+      x-command-type: ReopenReviewIssue
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReopenReviewIssueCommandEnvelope"
+      responses:
+        "200":
+          description: Reopened review issue envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssue"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/soft-delete:
+    post:
+      operationId: review_soft_delete_issue
+      tags: [commands]
+      x-command-type: SoftDeleteReviewIssue
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SoftDeleteReviewIssueCommandEnvelope"
+      responses:
+        "200":
+          description: Soft deleted review issue envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewIssue"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/request-changes:
+    post:
+      operationId: review_request_changes
+      tags: [commands]
+      x-command-type: RequestChanges
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestChangesCommandEnvelope"
+      responses:
+        "200":
+          description: Changes requested item envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItem"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/finalize:
+    post:
+      operationId: review_finalize_version
+      tags: [commands]
+      x-command-type: FinalizeVersion
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FinalizeVersionCommandEnvelope"
+      responses:
+        "200":
+          description: Finalization envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeFinalization"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages:
+    post:
+      operationId: review_prepare_package
+      tags: [package]
+      x-command-type: PrepareFinalizedPackage
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrepareFinalizedPackageCommandEnvelope"
+      responses:
+        "202":
+          description: Package preparation accepted envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopePackageSnapshot"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}:
+    get:
+      operationId: get_package
+      tags: [package]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/PackageId"
+      responses:
+        "200":
+          description: Package snapshot envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopePackageSnapshot"
+        "410":
+          $ref: "#/components/responses/Gone"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}/download-session:
+    post:
+      operationId: authorize_package_download
+      tags: [package]
+      description: Exchanges a ready-package header token for a 120-second, path-scoped, HttpOnly browser download cookie. Trusted proxies must provide a valid X-Forwarded-Proto value.
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/PackageId"
+        - $ref: "#/components/parameters/PackageDownloadToken"
+      responses:
+        "200":
+          description: Browser download session envelope. The response sets the short-lived package download cookie.
+          headers:
+            Set-Cookie:
+              description: Path-scoped, HttpOnly, SameSite=Strict package download cookie; Secure when the trusted request scheme is HTTPS.
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopePackageDownloadSession"
+        "410":
+          $ref: "#/components/responses/Gone"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}/download:
+    get:
+      operationId: download_package
+      tags: [package]
+      description: Streams the ready ZIP only after atomically consuming the one-shot, path-scoped browser download session cookie. One active lease per package limits concurrent integrity scans and streams.
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/PackageId"
+      responses:
+        "200":
+          description: Finalized originals ZIP package.
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "410":
+          $ref: "#/components/responses/Gone"
+        <<: *standardNon200Responses
+
+  /files/uploads/init:
+    post:
+      operationId: init_upload
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadInitRequest"
+      responses:
+        "200":
+          description: Upload session envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeUploadSession"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        <<: *standardNon200Responses
+
+  /files/uploads/{upload_id}/parts/{part_no}:
+    put:
+      operationId: upload_part
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - $ref: "#/components/parameters/PartNo"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Upload session envelope after part write.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeUploadSession"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        <<: *standardNon200Responses
+
+  /files/uploads/{upload_id}:
+    get:
+      operationId: get_upload
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+      responses:
+        "200":
+          description: Upload session envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeUploadSession"
+        <<: *standardNon200Responses
+
+  /files/uploads/{upload_id}/complete:
+    post:
+      operationId: complete_upload
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Completed upload session envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeUploadSession"
+        <<: *standardNon200Responses
+
+  /files/uploads/{upload_id}/abort:
+    post:
+      operationId: abort_upload
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+      responses:
+        "200":
+          description: Aborted upload session envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeUploadSession"
+        <<: *standardNon200Responses
+
+components:
+  securitySchemes:
+    PrincipalContext:
+      type: apiKey
+      in: header
+      name: X-Principal-Context
+      description: Signed principal context token issued by the trusted host.
+    WriteGuardCookie:
+      type: apiKey
+      in: cookie
+      name: fj_write_guard
+    ReverseProxyWriteGuard:
+      type: apiKey
+      in: header
+      name: X-Write-Guard-Verified
+
+  parameters:
+    ProjectRefId:
+      name: project_ref_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+    ReviewItemId:
+      name: review_item_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+    VersionId:
+      name: version_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+    IssueId:
+      name: issue_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+    PackageId:
+      name: package_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+    PackageDownloadToken:
+      name: X-Package-Download-Token
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+    UploadId:
+      name: upload_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+    PartNo:
+      name: part_no
+      in: path
+      required: true
+      schema: {type: integer, minimum: 1, maximum: 256}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 256}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: {type: string, pattern: '^"?[0-9]+"?$'}
+    RangeHeader:
+      name: Range
+      in: header
+      required: false
+      schema: {type: string, pattern: "^bytes=[0-9]*-[0-9]*$"}
+    Page:
+      name: page
+      in: query
+      required: false
+      schema: {type: integer, minimum: 1, default: 1}
+    PageSize:
+      name: page_size
+      in: query
+      required: false
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+
+  responses:
+    CreatedEnvelope:
+      description: Created response envelope for asynchronous compatible clients.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/EnvelopeAny"
+    AcceptedEnvelope:
+      description: Accepted response envelope for asynchronous compatible clients.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/EnvelopeAny"
+    BadRequest:
+      description: Bad request error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Unauthorized:
+      description: Missing or invalid caller identity envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Forbidden:
+      description: Capability, principal, or write guard denial envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    NotFound:
+      description: Resource not found envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Conflict:
+      description: State, idempotency, lock, or database conflict envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    PayloadTooLarge:
+      description: Request payload exceeds the bounded endpoint limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Gone:
+      description: Expired resource error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ValidationError:
+      description: Contract validation error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    InternalServerError:
+      description: Internal server error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    StorageUnavailable:
+      description: Storage backend unavailable error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    ErrorBody:
+      type: object
+      required: [code, message, http_status, details, request_id, timestamp, contract_version]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - RESOURCE_NOT_FOUND
+            - METHOD_NOT_ALLOWED
+            - ENTRY_CAPABILITY_DENIED
+            - PRINCIPAL_AUTHENTICATION_REQUIRED
+            - PRINCIPAL_PERMISSION_DENIED
+            - WRITE_GUARD_REQUIRED
+            - WRITE_GUARD_INVALID
+            - RESOURCE_STATE_CONFLICT
+            - PORT_OPERATION_NOT_SUPPORTED
+            - PLAYBACK_NOT_READY
+            - VERSION_NOT_CURRENT
+            - REVIEW_IN_PROGRESS
+            - REVIEW_ITEM_FINALIZED
+            - UNRESOLVED_ISSUES_EXIST
+            - NO_UNRESOLVED_ISSUE
+            - VERSION_FILE_NOT_READY
+            - FILE_HASH_MISMATCH
+            - UPLOAD_INCOMPLETE
+            - IDEMPOTENCY_CONFLICT
+            - OPTIMISTIC_LOCK_CONFLICT
+            - PACKAGE_NO_FINALIZED_FILES
+            - PACKAGE_SOURCE_MISSING
+            - PACKAGE_NOT_READY
+            - PACKAGE_EXPIRED
+            - FILE_TYPE_NOT_ALLOWED
+            - FILE_TOO_LARGE
+            - STORAGE_UNAVAILABLE
+            - INTERNAL_SERVER_ERROR
+        message: {type: string}
+        http_status: {type: integer, minimum: 400, maximum: 599}
+        details:
+          type: object
+          additionalProperties: true
+        request_id: {type: string}
+        timestamp: {type: string, format: date-time}
+        contract_version: {type: string, const: "1.0"}
+
+    ResponseMeta:
+      type: object
+      required: [request_id, contract_version]
+      additionalProperties: false
+      properties:
+        request_id: {type: string}
+        contract_version: {type: string, const: "1.0"}
+        total_count: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1}
+
+    ListResponseMeta:
+      type: object
+      required: [request_id, contract_version, total_count, page, page_size]
+      additionalProperties: false
+      properties:
+        request_id: {type: string}
+        contract_version: {type: string, const: "1.0"}
+        total_count: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1}
+
+    EnvelopeAny:
+      type: object
+      required: [data, meta]
+      additionalProperties: false
+      properties:
+        data: {}
+        meta:
+          $ref: "#/components/schemas/ResponseMeta"
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+
+    EnvelopeProjectList:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            meta:
+              $ref: "#/components/schemas/ListResponseMeta"
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ProjectDTO"
+    EnvelopeProject:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectDTO"
+    EnvelopeReviewItemList:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            meta:
+              $ref: "#/components/schemas/ListResponseMeta"
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewItemDTO"
+    EnvelopeReviewItem:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ReviewItemDTO"
+    EnvelopeReviewVersionList:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            meta:
+              $ref: "#/components/schemas/ListResponseMeta"
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewVersionDTO"
+    EnvelopeReviewVersion:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ReviewVersionDTO"
+    EnvelopeReviewIssueList:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            meta:
+              $ref: "#/components/schemas/ListResponseMeta"
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewIssueDTO"
+    EnvelopeReviewIssue:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ReviewIssueDTO"
+    EnvelopeReviewIssueRevisionList:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            meta:
+              $ref: "#/components/schemas/ListResponseMeta"
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewIssueRevisionDTO"
+    EnvelopeThreadMessageList:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            meta:
+              $ref: "#/components/schemas/ListResponseMeta"
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ThreadMessageDTO"
+    EnvelopeThreadMessage:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ThreadMessageDTO"
+    EnvelopeNullableFinalization:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              anyOf:
+                - $ref: "#/components/schemas/FinalizationDTO"
+                - type: "null"
+    EnvelopeFinalization:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/FinalizationDTO"
+    EnvelopePackageSnapshot:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/PackageSnapshotDTO"
+    EnvelopePackageDownloadSession:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/PackageDownloadSessionDTO"
+    EnvelopeUploadSession:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/UploadSessionDTO"
+    EnvelopeWriteGuardSession:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/WriteGuardSessionDTO"
+    EnvelopeModuleManifest:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ModuleManifest"
+
+    CommandEnvelopeBase:
+      type: object
+      required: [command_id, command_type, contract_version, payload]
+      additionalProperties: false
+      properties:
+        command_id: {type: string, minLength: 1, maxLength: 256}
+        command_type: {$ref: "#/components/schemas/CommandType"}
+        contract_version: {type: string, const: "1.0"}
+        expected_aggregate_version:
+          type: integer
+          minimum: 1
+        payload:
+          type: object
+
+    CommandType:
+      type: string
+      enum:
+        - CreateProject
+        - UpdateProject
+        - ArchiveProject
+        - RestoreProject
+        - SoftDeleteProject
+        - CreateReviewItem
+        - UpdateReviewItem
+        - DeleteReviewItem
+        - UploadReviewVersion
+        - StartReview
+        - CreateReviewIssue
+        - UpdateReviewIssue
+        - AddReviewMessage
+        - ResolveReviewIssue
+        - ReopenReviewIssue
+        - SoftDeleteReviewIssue
+        - RequestChanges
+        - FinalizeVersion
+        - PrepareFinalizedPackage
+
+    CreateProjectCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: CreateProject}
+            payload: {$ref: "#/components/schemas/CreateProjectPayload"}
+    UpdateProjectCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: UpdateProject}
+            payload: {$ref: "#/components/schemas/UpdateProjectPayload"}
+    ArchiveProjectCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: ArchiveProject}
+            payload: {$ref: "#/components/schemas/ProjectAncestryPayload"}
+    RestoreProjectCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: RestoreProject}
+            payload: {$ref: "#/components/schemas/ProjectAncestryPayload"}
+    SoftDeleteProjectCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: SoftDeleteProject}
+            payload: {$ref: "#/components/schemas/SoftDeleteProjectPayload"}
+    CreateReviewItemCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: CreateReviewItem}
+            payload: {$ref: "#/components/schemas/CreateReviewItemPayload"}
+    UpdateReviewItemCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: UpdateReviewItem}
+            payload: {$ref: "#/components/schemas/UpdateReviewItemPayload"}
+    DeleteReviewItemCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: DeleteReviewItem}
+            payload: {$ref: "#/components/schemas/DeleteReviewItemPayload"}
+    UploadReviewVersionCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: UploadReviewVersion}
+            payload: {$ref: "#/components/schemas/UploadReviewVersionPayload"}
+    StartReviewCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: StartReview}
+            payload: {$ref: "#/components/schemas/StartReviewPayload"}
+    CreateReviewIssueCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: CreateReviewIssue}
+            payload: {$ref: "#/components/schemas/CreateReviewIssuePayload"}
+    UpdateReviewIssueCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: UpdateReviewIssue}
+            payload: {$ref: "#/components/schemas/UpdateReviewIssuePayload"}
+    AddReviewMessageCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: AddReviewMessage}
+            payload: {$ref: "#/components/schemas/AddReviewMessagePayload"}
+    ResolveReviewIssueCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: ResolveReviewIssue}
+            payload: {$ref: "#/components/schemas/IssueAncestryPayload"}
+    ReopenReviewIssueCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: ReopenReviewIssue}
+            payload: {$ref: "#/components/schemas/IssueAncestryPayload"}
+    SoftDeleteReviewIssueCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: SoftDeleteReviewIssue}
+            payload: {$ref: "#/components/schemas/IssueAncestryPayload"}
+    RequestChangesCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: RequestChanges}
+            payload: {$ref: "#/components/schemas/RequestChangesPayload"}
+    FinalizeVersionCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: FinalizeVersion}
+            payload: {$ref: "#/components/schemas/FinalizeVersionPayload"}
+    PrepareFinalizedPackageCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: PrepareFinalizedPackage}
+            payload: {$ref: "#/components/schemas/PrepareFinalizedPackagePayload"}
+
+    CreateProjectPayload:
+      type: object
+      required: [project_code, project_name]
+      additionalProperties: false
+      properties:
+        project_code: {type: string, minLength: 1, maxLength: 128}
+        project_name: {type: string, minLength: 1, maxLength: 255}
+        description: {type: string, maxLength: 2000}
+        external_project_id: {type: string, minLength: 1, maxLength: 128}
+    UpdateProjectPayload:
+      type: object
+      required: [project_ref_id, project_name, description]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        project_name: {type: string, minLength: 1, maxLength: 255}
+        description: {type: string, maxLength: 2000}
+    ProjectAncestryPayload:
+      type: object
+      required: [project_ref_id]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+    SoftDeleteProjectPayload:
+      type: object
+      required: [project_ref_id, confirmed]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        confirmed: {type: boolean, const: true}
+    CreateReviewItemPayload:
+      type: object
+      required: [project_ref_id, item_code, title, original_file_id]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        item_code: {type: string, minLength: 1, maxLength: 128}
+        episode_no: {type: integer, minimum: 1}
+        title: {type: string, minLength: 1, maxLength: 512}
+        original_file_id: {type: string, minLength: 1}
+        version_note: {type: string}
+    UpdateReviewItemPayload:
+      type: object
+      required: [project_ref_id, review_item_id]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        episode_no: {type: integer, minimum: 1}
+        title: {type: string, minLength: 1, maxLength: 512}
+    DeleteReviewItemPayload:
+      type: object
+      required: [project_ref_id, review_item_id, confirmed]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        confirmed: {type: boolean, const: true}
+    UploadReviewVersionPayload:
+      type: object
+      required: [project_ref_id, review_item_id, original_file_id]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        original_file_id: {type: string, minLength: 1}
+        version_note: {type: string}
+        change_summary: {type: string}
+        supersede_reason: {type: string}
+    StartReviewPayload:
+      type: object
+      required: [project_ref_id, review_item_id]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+    CreateReviewIssuePayload:
+      type: object
+      required: [project_ref_id, review_item_id, version_id, content, timestamp_ms, frame_number]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        version_id: {type: string, minLength: 1}
+        content: {type: string, minLength: 1, maxLength: 4000}
+        timestamp_ms: {type: integer, minimum: 0}
+        frame_number: {type: integer, minimum: 0}
+        annotation:
+          $ref: "#/components/schemas/ReviewAnnotationSetInput"
+    UpdateReviewIssuePayload:
+      type: object
+      required: [project_ref_id, review_item_id, version_id, issue_id]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        version_id: {type: string, minLength: 1}
+        issue_id: {type: string, minLength: 1}
+        content: {type: string, minLength: 1, maxLength: 4000}
+        annotation:
+          $ref: "#/components/schemas/ReviewAnnotationSetInput"
+    AddReviewMessagePayload:
+      type: object
+      required: [project_ref_id, review_item_id, version_id, issue_id, content]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        version_id: {type: string, minLength: 1}
+        issue_id: {type: string, minLength: 1}
+        content: {type: string, minLength: 1, maxLength: 4000}
+    IssueAncestryPayload:
+      type: object
+      required: [project_ref_id, review_item_id, version_id, issue_id]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        version_id: {type: string, minLength: 1}
+        issue_id: {type: string, minLength: 1}
+    RequestChangesPayload:
+      type: object
+      required: [project_ref_id, review_item_id, version_id, summary]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        version_id: {type: string, minLength: 1}
+        summary: {type: string, minLength: 1, maxLength: 4000}
+    FinalizeVersionPayload:
+      type: object
+      required: [project_ref_id, review_item_id, version_id, confirmed]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        version_id: {type: string, minLength: 1}
+        confirmed: {type: boolean, const: true}
+    PrepareFinalizedPackagePayload:
+      type: object
+      required: [project_ref_id]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+
+    SharedCodeRequest:
+      type: object
+      required: [code]
+      additionalProperties: false
+      properties:
+        code: {type: string, minLength: 1, maxLength: 256}
+    WriteGuardSessionDTO:
+      type: object
+      required: [verified, mode]
+      additionalProperties: false
+      properties:
+        verified: {type: boolean}
+        mode: {type: string, enum: [shared_code, reverse_proxy, none]}
+
+    UploadInitRequest:
+      type: object
+      required: [original_filename, mime_type, file_size, sha256]
+      additionalProperties: false
+      properties:
+        original_filename: {type: string, minLength: 1, maxLength: 512}
+        mime_type: {type: string, enum: [video/mp4, video/quicktime, application/octet-stream]}
+        file_size: {type: integer, minimum: 1}
+        sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        duration_ms: {type: integer, minimum: 1, default: 1000}
+        width: {type: integer, minimum: 1, default: 1920}
+        height: {type: integer, minimum: 1, default: 1080}
+        fps_num: {type: integer, minimum: 1, default: 25}
+        fps_den: {type: integer, minimum: 1, default: 1}
+    UploadSessionDTO:
+      type: object
+      required: [upload_id, status, original_filename, mime_type, declared_size, received_size]
+      additionalProperties: false
+      properties:
+        upload_id: {type: string}
+        status: {type: string, enum: [initiated, receiving, completed, aborted]}
+        original_filename: {type: string}
+        mime_type: {type: string}
+        declared_size: {type: integer}
+        received_size: {type: integer}
+        file_id:
+          type: string
+
+    OriginalMediaSnapshotDTO:
+      type: object
+      required: [original_file_id, original_filename, mime_type, file_size, sha256, duration_ms, width, height, fps_num, fps_den, media_probe_version]
+      additionalProperties: false
+      properties:
+        original_file_id: {type: string}
+        original_filename: {type: string}
+        mime_type: {type: string}
+        file_size: {type: integer}
+        sha256: {type: string}
+        duration_ms: {type: integer}
+        width: {type: integer}
+        height: {type: integer}
+        fps_num: {type: integer}
+        fps_den: {type: integer}
+        media_probe_version: {type: string}
+    ProjectDTO:
+      type: object
+      required: [project_ref_id, project_code, project_name, description, source, lifecycle_status, completion_status, deleted_at, lock_version, created_at, updated_at]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string}
+        project_code: {type: string}
+        project_name: {type: string}
+        description: {type: string}
+        source: {type: string, enum: [local, host]}
+        external_project_id:
+          type: string
+        lifecycle_status: {type: string, enum: [active, archived]}
+        completion_status: {type: string, enum: [empty, in_progress, completed]}
+        deleted_at: {type: string, format: date-time, nullable: true}
+        lock_version: {type: integer, minimum: 1}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ReviewVersionDTO:
+      type: object
+      required: [id, project_ref_id, review_item_id, version_no, version_label, is_current, original_media, playback_status, lock_version, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string, minLength: 1, maxLength: 128}
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        previous_version_id: {type: string}
+        version_no: {type: integer}
+        version_label: {type: string}
+        is_current: {type: boolean}
+        original_media: {$ref: "#/components/schemas/OriginalMediaSnapshotDTO"}
+        playback_status: {type: string, enum: [processing, ready, failed]}
+        playback_asset_id: {type: string}
+        thumbnail_asset_id: {type: string}
+        version_note: {type: string}
+        change_summary: {type: string}
+        lock_version: {type: integer, minimum: 1}
+        created_at: {type: string, format: date-time}
+    ReviewItemDTO:
+      type: object
+      required: [id, project_ref_id, item_code, title, workflow_status, current_version_id, current_version_no, ui_status, unresolved_current_version_count, resolved_current_version_count, historical_version_count, is_finalized, lock_version, created_at, updated_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        project_ref_id: {type: string}
+        item_code: {type: string}
+        episode_no: {type: integer}
+        title: {type: string}
+        workflow_status: {type: string, enum: [pending_review, in_review, changes_requested, finalized]}
+        current_version_id: {type: string}
+        current_version_no: {type: integer}
+        ui_status: {type: string}
+        active_finalization_id: {type: string}
+        unresolved_current_version_count: {type: integer}
+        resolved_current_version_count: {type: integer}
+        historical_version_count: {type: integer}
+        is_finalized: {type: boolean}
+        lock_version: {type: integer, minimum: 1}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ReviewPlaybackTarget:
+      type: object
+      required: [project_ref_id, review_item_id, version_id, issue_id, revision_id, timestamp_ms, frame_number]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        version_id: {type: string}
+        issue_id: {type: string}
+        revision_id: {type: string}
+        annotation_set_id: {type: string}
+        timestamp_ms: {type: integer}
+        frame_number: {type: integer}
+    ReviewIssueRevisionDTO:
+      type: object
+      required: [id, project_ref_id, review_item_id, version_id, issue_id, revision_no, content, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        version_id: {type: string}
+        issue_id: {type: string}
+        revision_no: {type: integer}
+        content: {type: string}
+        annotation_set_id: {type: string}
+        created_at: {type: string, format: date-time}
+    ReviewAnnotationShape:
+      type: object
+      required: [id, tool_type, color, line_width, z_index]
+      additionalProperties: false
+      properties:
+        id: {type: string, minLength: 1, maxLength: 128}
+        tool_type: {type: string, enum: [pen, arrow, rect, circle, text]}
+        anchor_points:
+          type: array
+          maxItems: 2048
+          items:
+            type: object
+            required: [x, y]
+            additionalProperties: false
+            properties:
+              x: {type: number, minimum: 0, maximum: 1}
+              y: {type: number, minimum: 0, maximum: 1}
+        path_data: {type: string, maxLength: 20000}
+        text_content: {type: string, maxLength: 1000}
+        color: {type: string, pattern: "^#[0-9A-Fa-f]{6}$"}
+        line_width: {type: integer, minimum: 1, maximum: 64}
+        font_size: {type: integer, minimum: 12, maximum: 96}
+        z_index: {type: integer, minimum: 0, maximum: 10000}
+    ReviewAnnotationSetInput:
+      type: object
+      required: [canvas_width, canvas_height, video_width, video_height, shapes]
+      additionalProperties: false
+      properties:
+        canvas_width: {type: integer, minimum: 1}
+        canvas_height: {type: integer, minimum: 1}
+        video_width: {type: integer, minimum: 1}
+        video_height: {type: integer, minimum: 1}
+        shapes:
+          type: array
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/ReviewAnnotationShape"
+    ReviewAnnotationSetDTO:
+      type: object
+      required: [id, project_ref_id, review_item_id, version_id, issue_id, timestamp_ms, frame_number, canvas_width, canvas_height, video_width, video_height, shapes, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        version_id: {type: string}
+        issue_id: {type: string}
+        timestamp_ms: {type: integer}
+        frame_number: {type: integer}
+        canvas_width: {type: integer, minimum: 1}
+        canvas_height: {type: integer, minimum: 1}
+        video_width: {type: integer, minimum: 1}
+        video_height: {type: integer, minimum: 1}
+        shapes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewAnnotationShape"
+        created_at: {type: string, format: date-time}
+    ReviewIssueDTO:
+      type: object
+      required: [id, project_ref_id, review_item_id, version_id, issue_no, status, current_revision_id, timestamp_ms, frame_number, playback_target, current_revision, lock_version, created_at, updated_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        version_id: {type: string}
+        issue_no: {type: integer}
+        status: {type: string, enum: [unresolved, resolved]}
+        current_revision_id: {type: string}
+        timestamp_ms: {type: integer}
+        frame_number: {type: integer}
+        playback_target: {$ref: "#/components/schemas/ReviewPlaybackTarget"}
+        current_revision: {$ref: "#/components/schemas/ReviewIssueRevisionDTO"}
+        current_annotation_set:
+          anyOf:
+            - $ref: "#/components/schemas/ReviewAnnotationSetDTO"
+            - type: "null"
+        deleted_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        lock_version: {type: integer, minimum: 1}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ThreadMessageDTO:
+      type: object
+      required: [id, project_ref_id, review_item_id, version_id, issue_id, content, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        version_id: {type: string}
+        issue_id: {type: string}
+        content: {type: string}
+        created_at: {type: string, format: date-time}
+    FinalizationDTO:
+      type: object
+      required: [id, project_ref_id, review_item_id, version_id, version_no, original_media, status, finalized_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        version_id: {type: string}
+        version_no: {type: integer}
+        original_media: {$ref: "#/components/schemas/OriginalMediaSnapshotDTO"}
+        status: {type: string, enum: [active]}
+        finalized_at: {type: string, format: date-time}
+    PackageSnapshotDTO:
+      type: object
+      required: [id, project_ref_id, status, package_filename, expires_at, file_count, total_bytes, items, created_at, updated_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        project_ref_id: {type: string}
+        status: {type: string, enum: [preparing, ready, failed, expired]}
+        package_filename: {type: string}
+        expires_at: {type: string, format: date-time}
+        file_count: {type: integer}
+        total_bytes: {type: integer, minimum: 0}
+        sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        download_token: {type: string}
+        download_token_expires_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        failure_details:
+          type: object
+          additionalProperties: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PackageSnapshotItem"
+    PackageDownloadSessionDTO:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status: {type: string, enum: [ready]}
+    PackageSnapshotItem:
+      type: object
+      required: [review_item_id, version_id, finalization_id, original_file_id, original_filename, sha256, archive_name]
+      additionalProperties: false
+      properties:
+        review_item_id: {type: string}
+        version_id: {type: string}
+        finalization_id: {type: string}
+        original_file_id: {type: string}
+        original_filename: {type: string}
+        sha256: {type: string}
+        archive_name: {type: string}
+    ModuleManifest:
+      type: object
+      required: [manifest_version, module_id, module_version, contract_version, standalone_routes, mount_slots, capabilities, required_host_services, optional_host_services]
+      additionalProperties: true
+      properties:
+        manifest_version: {type: integer}
+        module_id: {type: string, const: final-cut-review}
+        module_version: {type: string}
+        contract_version: {type: string, const: "1.0"}
+        standalone_routes:
+          type: object
+          additionalProperties: {type: string}
+        mount_slots:
+          type: array
+          items: {type: string}
+        capabilities:
+          type: array
+          items: {$ref: "#/components/schemas/Capability"}
+        required_host_services:
+          type: array
+          items: {type: string}
+        optional_host_services:
+          type: array
+          items: {type: string}
+    Capability:
+      type: string
+      enum:
+        - review.project.read
+        - review.project.create
+        - review.project.update
+        - review.project.archive
+        - review.project.restore
+        - review.project.delete
+        - review.item.read
+        - review.item.create
+        - review.item.update
+        - review.item.delete
+        - review.version.read
+        - review.version.upload
+        - review.version.compare
+        - review.issue.read
+        - review.issue.create
+        - review.issue.update
+        - review.issue.reply
+        - review.issue.resolve
+        - review.issue.reopen
+        - review.issue.delete
+        - review.session.start
+        - review.session.request_changes
+        - review.finalization.read
+        - review.finalization.create
+        - review.download.finalized_original
+        - review.package.create
+        - review.package.read
+        - review.package.download
+
+    EventEmptyPayload:
+      type: object
+      additionalProperties: false
+      properties: {}
+    ReviewProjectCreatedEventPayload:
+      type: object
+      required: [project_code]
+      additionalProperties: false
+      properties:
+        project_code: {type: string, minLength: 1}
+    ReviewProjectUpdatedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewProjectArchivedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewProjectRestoredEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewProjectDeletedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewItemCreatedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewItemUpdatedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewItemDeletedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewVersionUploadedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewSessionStartedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewIssueCreatedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewIssueUpdatedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewIssueMessageAddedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewIssueResolvedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewIssueReopenedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewIssueDeletedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewChangesRequestedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewVersionFinalizedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewFinalizedOriginalDownloadRequestedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewPackageRequestedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewPackageReadyEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewPackageFailedEventPayload:
+      type: object
+      required: [error_code]
+      additionalProperties: false
+      properties:
+        error_code: {type: string, minLength: 1}
+    DomainEventPayload:
+      anyOf:
+        - $ref: "#/components/schemas/ReviewProjectCreatedEventPayload"
+        - $ref: "#/components/schemas/ReviewProjectUpdatedEventPayload"
+        - $ref: "#/components/schemas/ReviewProjectArchivedEventPayload"
+        - $ref: "#/components/schemas/ReviewProjectRestoredEventPayload"
+        - $ref: "#/components/schemas/ReviewProjectDeletedEventPayload"
+        - $ref: "#/components/schemas/ReviewItemCreatedEventPayload"
+        - $ref: "#/components/schemas/ReviewItemUpdatedEventPayload"
+        - $ref: "#/components/schemas/ReviewItemDeletedEventPayload"
+        - $ref: "#/components/schemas/ReviewVersionUploadedEventPayload"
+        - $ref: "#/components/schemas/ReviewSessionStartedEventPayload"
+        - $ref: "#/components/schemas/ReviewIssueCreatedEventPayload"
+        - $ref: "#/components/schemas/ReviewIssueUpdatedEventPayload"
+        - $ref: "#/components/schemas/ReviewIssueMessageAddedEventPayload"
+        - $ref: "#/components/schemas/ReviewIssueResolvedEventPayload"
+        - $ref: "#/components/schemas/ReviewIssueReopenedEventPayload"
+        - $ref: "#/components/schemas/ReviewIssueDeletedEventPayload"
+        - $ref: "#/components/schemas/ReviewChangesRequestedEventPayload"
+        - $ref: "#/components/schemas/ReviewVersionFinalizedEventPayload"
+        - $ref: "#/components/schemas/ReviewFinalizedOriginalDownloadRequestedEventPayload"
+        - $ref: "#/components/schemas/ReviewPackageRequestedEventPayload"
+        - $ref: "#/components/schemas/ReviewPackageReadyEventPayload"
+        - $ref: "#/components/schemas/ReviewPackageFailedEventPayload"
+
+    DomainEventEnvelope:
+      type: object
+      required: [event_id, event_type, event_version, occurred_at, aggregate_type, aggregate_id, aggregate_version, sequence, project_ref_id, correlation_id, metadata, payload]
+      additionalProperties: false
+      properties:
+        event_id: {type: string}
+        event_type: {$ref: "#/components/schemas/DomainEventType"}
+        event_version: {type: integer, minimum: 1}
+        occurred_at: {type: string, format: date-time}
+        aggregate_type: {type: string}
+        aggregate_id: {type: string}
+        aggregate_version: {type: integer, minimum: 1}
+        sequence: {type: integer, minimum: 1}
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        version_id: {type: string}
+        issue_id: {type: string}
+        finalization_id: {type: string}
+        package_id: {type: string}
+        correlation_id: {type: string}
+        causation_id: {type: string}
+        metadata:
+          type: object
+          additionalProperties: true
+        payload:
+          $ref: "#/components/schemas/DomainEventPayload"
+    DomainEventType:
+      type: string
+      enum:
+        - review.project.created
+        - review.project.updated
+        - review.project.archived
+        - review.project.restored
+        - review.project.deleted
+        - review.item.created
+        - review.item.updated
+        - review.item.deleted
+        - review.version.uploaded
+        - review.session.started
+        - review.issue.created
+        - review.issue.updated
+        - review.issue.message_added
+        - review.issue.resolved
+        - review.issue.reopened
+        - review.issue.deleted
+        - review.changes_requested
+        - review.version.finalized
+        - review.finalized_original.download_requested
+        - review.package.requested
+        - review.package.ready
+        - review.package.failed
