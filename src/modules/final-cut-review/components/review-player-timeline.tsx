@@ -1,4 +1,5 @@
 import { useRef, type PointerEvent } from 'react';
+import { UserRound } from 'lucide-react';
 import type { ReviewIssue } from '../contracts/types';
 import { formatTimestampTimecode } from '../core/timecode';
 
@@ -45,48 +46,62 @@ export function ReviewTimeline(props: ReviewTimelineProps) {
   };
   const progress = Math.min(100, Math.max(0, (props.currentMs / durationMs) * 100));
   return (
-    <label
-      className="fj-review-range fj-review-edge-timeline"
-      data-testid="video-edge-timeline"
-      onPointerDown={beginTimelineDrag}
-      onPointerMove={moveTimelineDrag}
-      onPointerUp={endTimelineDrag}
-      onPointerCancel={endTimelineDrag}
-    >
-      <input
-        type="range"
-        aria-label="视频时间轴"
-        min={0}
-        max={durationMs}
-        value={props.currentMs}
-        onChange={(event) => props.onSeek(Number(event.target.value))}
-      />
-      <span style={{ width: `${progress}%` }} />
-      <div className="fj-review-timeline-markers" data-testid="timeline-markers">
+    <div className="fj-review-timeline-stack">
+      <label
+        className="fj-review-range fj-review-edge-timeline"
+        data-testid="video-edge-timeline"
+        onPointerDown={beginTimelineDrag}
+        onPointerMove={moveTimelineDrag}
+        onPointerUp={endTimelineDrag}
+        onPointerCancel={endTimelineDrag}
+      >
+        <input
+          type="range"
+          aria-label="视频时间轴"
+          min={0}
+          max={durationMs}
+          value={props.currentMs}
+          onChange={(event) => props.onSeek(Number(event.target.value))}
+        />
+        <span style={{ width: `${progress}%` }} />
+      </label>
+      <div
+        aria-label="意见时间轨道"
+        className="fj-review-opinion-track fj-review-timeline-markers"
+        data-testid="opinion-avatar-track"
+        role="group"
+      >
         {props.issues.map((issue) => {
           const left = Math.min(100, Math.max(0, (issue.timestampMs / durationMs) * 100));
           const selected = issue.issueId === props.selectedIssueId;
+          const activateIssue = () => {
+            props.onSeek(issue.timestampMs);
+            props.onSelect(issue);
+          };
           return (
             <button
               key={issue.issueId}
               type="button"
               className={`fj-review-timeline-marker ${issue.status === 'resolved' ? 'is-resolved' : 'is-open'} ${selected ? 'is-selected' : ''}`}
               data-testid={`timeline-marker-${issue.issueId}`}
-              style={{ left: `${left}%` }}
+              style={{ left: `clamp(22px, ${left}%, calc(100% - 22px))` }}
               title={`#${issue.issueNo} ${formatTimestampTimecode(issue.timestampMs, props.fpsNum, props.fpsDen)} ${issue.status === 'unresolved' ? '未修改' : '已修改'} ${issue.body}`}
               aria-label={`意见 #${issue.issueNo} ${issue.status === 'unresolved' ? '未修改' : '已修改'}`}
-              onPointerDown={(event) => {
-                event.stopPropagation();
+              onClick={activateIssue}
+              onKeyDown={(event) => {
+                if (event.key === ' ' || event.key === 'Spacebar') {
+                  event.preventDefault();
+                  activateIssue();
+                }
               }}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                props.onSelect(issue);
-              }}
-            />
+            >
+              <span className="fj-review-opinion-avatar" aria-hidden="true">
+                <UserRound />
+              </span>
+            </button>
           );
         })}
       </div>
-    </label>
+    </div>
   );
 }

@@ -238,24 +238,24 @@ FCR_COMPOSE_PROJECT=fj-final-cut-review \
 ```
 
 上传运行时必须显式配置 `UPLOAD_PART_READ_TIMEOUT_SECONDS=120`、`UPLOAD_PART_IO_WORKERS=4`、
-`MAX_INFLIGHT_UPLOAD_PARTS_PER_PRINCIPAL=16`、`MAX_INFLIGHT_UPLOAD_PARTS_PER_SESSION=1` 和
-`MAX_INFLIGHT_UPLOAD_PART_CANDIDATES=64`。120 秒覆盖 body read、write、flush 和 fsync 的总时长；
-阻塞文件 I/O 进入有界专用 executor，16/1/64 admission 同时限制排队。单个 upload id 同时只允许
-一个 PUT 候选，防止同一分片并发重传互相竞态；同一共享主体仍可用不同 upload id 同时占用 16 个
-admission，至少覆盖 10 个客户端并行上传。PUT 在读流前用独立短 session
+`MAX_INFLIGHT_UPLOAD_PARTS_PER_PRINCIPAL=80`、`MAX_INFLIGHT_UPLOAD_PARTS_PER_SESSION=1` 和
+`MAX_INFLIGHT_UPLOAD_PART_CANDIDATES=128`。120 秒覆盖 body read、write、flush 和 fsync 的总时长；
+阻塞文件 I/O 进入有界专用 executor，80/1/128 admission 同时限制排队。单个 upload id 同时只允许
+一个 PUT 候选，防止同一分片并发重传互相竞态；当前无账号 LAN 的共享主体按 15 个客户端、每客户端
+最多 5 条上传流水线，预留 75 条并发。PUT 在读流前用独立短 session
 取得短行锁，校验 identity/owner/status、续写活动时间并计算排除被替换分片后的剩余声明字节，随后立即
 提交并关闭连接；已知超限 Content-Length 在候选创建前拒绝，stream writer 也以该剩余额度为硬上限，
 读流后再用行锁复检。`UPLOAD_SESSION_TTL_SECONDS` 必须大于 body 总超时加 60 秒安全余量。当前 limiter 是进程内状态，Compose
 因此强制单 Uvicorn worker 和单 backend replica；水平扩容前必须接入外部协调器。
 
-`MAX_ACTIVE_UPLOAD_SESSIONS_GLOBAL=128`、`MAX_ACTIVE_UPLOAD_SESSIONS_PER_PRINCIPAL=16`、
-`MAX_RESERVED_UPLOAD_BYTES_GLOBAL=107374182400`、`MAX_RESERVED_UPLOAD_BYTES_PER_PRINCIPAL=21474836480`
+`MAX_ACTIVE_UPLOAD_SESSIONS_GLOBAL=128`、`MAX_ACTIVE_UPLOAD_SESSIONS_PER_PRINCIPAL=80`、
+`MAX_RESERVED_UPLOAD_BYTES_GLOBAL=1099511627776`、`MAX_RESERVED_UPLOAD_BYTES_PER_PRINCIPAL=1099511627776`
 和 `UPLOAD_STORAGE_LOW_WATERMARK_BYTES=1073741824` 约束持久上传占用。`POST /files/uploads/init`
 必须携带由同一次前端上传操作稳定复用的 `Idempotency-Key`；幂等记录、会话和配额在一个事务提交，
 提交确认丢失时由独立连接核对已提交结果，不会重复预留。PostgreSQL advisory xact lock
 串行化 init；每个会话按 `2 * declared_size` 预留分片与完整 staging 同时存在的峰值，低水位也按该峰值
 判断。active 及分片物理清理未确认的 completed/aborted 都计入，只有 cleanup confirmation 才释放。
-无账号 LAN 部署由同一可信 principal 承载多个客户端，上述 `16` 个主体会话和 `16` 个主体 PUT admission 必须通过至少 10 个并发客户端的压力门禁；四线程 I/O executor 可以有界串行磁盘工作。默认 `UPLOAD_SESSION_TTL_SECONDS=900`，高于 120 秒 body 超时与 60 秒安全余量，并让断线或刷新遗留会话在 15 分钟无活动后进入受控回收。字节预留和磁盘低水位仍优先，不能把 10 人并发解释为 10 个 5 GiB 文件在任意磁盘上都可接受。
+无账号 LAN 部署由同一可信 principal 承载多个客户端，上述 `80` 个主体会话、`80` 个主体 PUT admission 和 `128` 个全局候选必须通过同一主体 15 个客户端、每客户端 5 条在途流水线的容量门禁；每个客户端可一次选择 100 集，但其余 95 集只在浏览器排队，不提前 init 或占用服务端配额。四线程 I/O executor 可以有界串行磁盘工作。默认 `UPLOAD_SESSION_TTL_SECONDS=900`，高于 120 秒 body 超时与 60 秒安全余量，并让断线或刷新遗留会话在 15 分钟无活动后进入受控回收。按单文件上限 5 GiB 和双份 staging 预留，75 条在途流水线的最坏声明峰值为 750 GiB，主体与全局各保留 1 TiB 上限；字节预留和磁盘低水位仍优先，不能把容量上限解释为任意磁盘都可接受。
 
 `UPLOAD_FINALIZATION_LEASE_SECONDS=7200` 控制 complete 的可恢复 lease：短事务 claim 后关闭数据库连接，
 完成拼接/hash/ffprobe/fsync，再用新短事务发布。以上配置只注入 backend，不进入 maintenance、

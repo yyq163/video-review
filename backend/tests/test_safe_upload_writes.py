@@ -912,18 +912,18 @@ def test_upload_part_admission_bounds_principal_session_and_total() -> None:
     exclusive.release()
 
 
-def test_shared_principal_holds_ten_distinct_upload_admissions() -> None:
+def test_shared_principal_holds_seventy_five_distinct_upload_admissions() -> None:
     from backend.app.upload_parts import UploadPartAdmissionLimiter
 
     limiter = UploadPartAdmissionLimiter()
     leases = []
-    for index in range(10):
+    for index in range(75):
         lease = limiter.try_acquire(
             "system:shared-lan-principal",
             f"upl_{index:032x}",
-            max_per_principal=16,
+            max_per_principal=80,
             max_per_upload=1,
-            max_total=64,
+            max_total=128,
         )
         assert lease is not None
         leases.append(lease)
@@ -932,9 +932,9 @@ def test_shared_principal_holds_ten_distinct_upload_admissions() -> None:
         limiter.try_acquire(
             "system:shared-lan-principal",
             "upl_00000000000000000000000000000000",
-            max_per_principal=16,
+            max_per_principal=80,
             max_per_upload=1,
-            max_total=64,
+            max_total=128,
         )
         is None
     )
@@ -959,7 +959,11 @@ def test_compose_keeps_process_local_upload_limiter_single_worker_and_replica() 
     assert environment["UPLOAD_RUNTIME_WORKER_COUNT"] == 1
     assert "MAX_INFLIGHT_UPLOAD_PART_CANDIDATES" in environment
     assert "MAX_ACTIVE_UPLOAD_SESSIONS_GLOBAL" in environment
-    assert "MAX_RESERVED_UPLOAD_BYTES_GLOBAL" in environment
+    assert environment["MAX_INFLIGHT_UPLOAD_PARTS_PER_PRINCIPAL"] == "${MAX_INFLIGHT_UPLOAD_PARTS_PER_PRINCIPAL:-80}"
+    assert environment["MAX_INFLIGHT_UPLOAD_PART_CANDIDATES"] == "${MAX_INFLIGHT_UPLOAD_PART_CANDIDATES:-128}"
+    assert environment["MAX_ACTIVE_UPLOAD_SESSIONS_PER_PRINCIPAL"] == "${MAX_ACTIVE_UPLOAD_SESSIONS_PER_PRINCIPAL:-80}"
+    assert environment["MAX_RESERVED_UPLOAD_BYTES_GLOBAL"] == "${MAX_RESERVED_UPLOAD_BYTES_GLOBAL:-1099511627776}"
+    assert environment["MAX_RESERVED_UPLOAD_BYTES_PER_PRINCIPAL"] == "${MAX_RESERVED_UPLOAD_BYTES_PER_PRINCIPAL:-1099511627776}"
 
 
 def test_competing_slow_body_is_rejected_before_lock_and_leaves_one_candidate(

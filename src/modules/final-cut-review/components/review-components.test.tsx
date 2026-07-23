@@ -8,6 +8,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ReviewRuntimeProvider, createReviewRuntime, type ReviewRuntime } from '../entry/runtime';
 import { FinalCutReviewClient } from '../contracts-generated/backend-contract';
+import type { UploadProgress } from '../contracts/types';
 import { createSeedData } from '../core/seed';
 import { playbackTargetFromIssue } from '../core/playback';
 import { IssuePanel } from './IssuePanel';
@@ -23,7 +24,11 @@ import { ProjectListPage } from '../pages/ProjectListPage';
 import { ProjectDetailPage } from '../pages/ProjectDetailPage';
 import { ReviewWorkspacePage } from '../pages/ReviewWorkspacePage';
 import { HttpReviewApiAdapter } from '../adapters/http-review-api-adapter';
-import { isV1ListConfirmationRequired } from '../adapters/http-review-uploads';
+import {
+  V1UploadResultUncertainError,
+  isV1ListConfirmationRequired,
+  markV1ListConfirmationRequired,
+} from '../adapters/http-review-uploads';
 import { NoAccountEntryPolicyAdapter } from '../adapters/no-account-permission-adapter';
 
 function renderWithRuntime(ui: React.ReactElement) {
@@ -959,13 +964,14 @@ describe('ProjectDetailPage archive workflow', () => {
     const titleInput = within(row).getByLabelText('成片标题');
     const episodeInput = within(row).getByLabelText('集数');
     await userEvent.clear(titleInput);
-    await userEvent.type(titleInput, '02');
+    await userEvent.type(titleInput, '不作为卡片大标题');
     await userEvent.clear(episodeInput);
     await userEvent.type(episodeInput, '02');
     await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
 
-    expect(await screen.findByText('02')).toBeInTheDocument();
-    expect(await screen.findByText(/第 02 集 · 1 个版本 · 当前 V1/)).toBeInTheDocument();
+    expect(await screen.findByText('第 02 集', { selector: 'strong' })).toBeInTheDocument();
+    expect(screen.queryByText('不作为卡片大标题', { selector: 'strong' })).not.toBeInTheDocument();
+    expect(await screen.findByText('原文件：王爷02.mp4 · 1个版本 · 当前 V1')).toBeInTheDocument();
     expect(screen.queryByTestId('item-workspace')).not.toBeInTheDocument();
     expect(screen.queryByTestId('upload-row-0')).not.toBeInTheDocument();
     expect((screen.getByTestId('create-item-file') as HTMLInputElement).files).toHaveLength(0);
@@ -1090,6 +1096,138 @@ describe('ProjectDetailPage archive workflow', () => {
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
 
+  it('keeps the project protected when a concurrent success settles before an uncertain V1', async () => {
+    const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
+    expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    const editApi = runtimeResult.runtime.getApi('edit');
+    const originalCreate = editApi.createReviewItemWithVersion.bind(editApi);
+    type CreateResult = Awaited<ReturnType<typeof originalCreate>>;
+    type CreateArgs = Parameters<typeof originalCreate>;
+    let successArgs: CreateArgs | undefined;
+    let resolveSuccess!: (value: CreateResult) => void;
+    let rejectUncertain!: (reason: unknown) => void;
+    const successPromise = new Promise<CreateResult>((resolve) => {
+      resolveSuccess = resolve;
+    });
+    const uncertainPromise = new Promise<CreateResult>((_resolve, reject) => {
+      rejectUncertain = reject;
+    });
+    const createSpy = vi.spyOn(editApi, 'createReviewItemWithVersion').mockImplementation((...args) => {
+      if (args[0].file.name === 'success-first.mp4') {
+        successArgs = args;
+        return successPromise;
+      }
+      return uncertainPromise;
+    });
+
+    await userEvent.upload(screen.getByTestId('create-item-file'), [
+      new File(['success'], 'success-first.mp4', { type: 'video/mp4' }),
+      new File(['uncertain'], 'uncertain-later.mp4', { type: 'video/mp4' }),
+    ]);
+    const uploadRows = screen.getAllByTestId(/upload-row-\d+$/);
+    await userEvent.type(within(uploadRows[0]).getByLabelText('集数'), '41');
+    await userEvent.type(within(uploadRows[1]).getByLabelText('集数'), '42');
+    await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(2));
+    if (!successArgs) throw new Error('missing success upload arguments');
+    resolveSuccess(await originalCreate(...successArgs));
+    await waitFor(() => expect(screen.queryByText('success-first.mp4')).not.toBeInTheDocument());
+
+    rejectUncertain(new V1UploadResultUncertainError(new TypeError('version response lost')));
+    expect(await screen.findByTestId('upload-row-1-error')).toHaveTextContent('结果不确定');
+    expect(isV1ListConfirmationRequired('prj_seed_final_cut')).toBe(true);
+    expect(screen.getByTestId('v1-list-confirmation-required')).toHaveTextContent('请先确认上一笔 V1 的列表结果');
+
+    cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
+  });
+
+  it('keeps a provisional V1 protected across another success and a page remount', async () => {
+    const first = renderProjectDetail('/edit/projects/prj_seed_final_cut');
+    expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    const editApi = first.runtime.getApi('edit');
+    const originalCreate = editApi.createReviewItemWithVersion.bind(editApi);
+    type CreateResult = Awaited<ReturnType<typeof originalCreate>>;
+    let rejectProvisional!: (reason: unknown) => void;
+    const provisionalPromise = new Promise<CreateResult>((_resolve, reject) => {
+      rejectProvisional = reject;
+    });
+    const createSpy = vi.spyOn(editApi, 'createReviewItemWithVersion').mockImplementation((...args) => {
+      if (args[0].file.name === 'provisional-first.mp4') {
+        markV1ListConfirmationRequired('prj_seed_final_cut');
+        return provisionalPromise;
+      }
+      return originalCreate(...args);
+    });
+
+    await userEvent.upload(screen.getByTestId('create-item-file'), [
+      new File(['provisional'], 'provisional-first.mp4', { type: 'video/mp4' }),
+      new File(['success'], 'success-second.mp4', { type: 'video/mp4' }),
+    ]);
+    const uploadRows = screen.getAllByTestId(/upload-row-\d+$/);
+    await userEvent.type(within(uploadRows[0]).getByLabelText('集数'), '43');
+    await userEvent.type(within(uploadRows[1]).getByLabelText('集数'), '44');
+    await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText('success-second.mp4')).not.toBeInTheDocument());
+    expect(isV1ListConfirmationRequired('prj_seed_final_cut')).toBe(true);
+
+    first.unmount();
+    cleanupRuntime(first.runtime, first.queryClient);
+    const second = renderProjectDetail('/edit/projects/prj_seed_final_cut');
+    expect(await screen.findByTestId('v1-list-confirmation-required')).toHaveTextContent(
+      '请先确认上一笔 V1 的列表结果',
+    );
+
+    rejectProvisional(new V1UploadResultUncertainError(new TypeError('version response lost')));
+    second.unmount();
+    cleanupRuntime(second.runtime, second.queryClient);
+  });
+
+  it('does not allow early confirmation while another V1 result is still provisional', async () => {
+    const first = renderProjectDetail('/edit/projects/prj_seed_final_cut');
+    expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    const editApi = first.runtime.getApi('edit');
+    type CreateResult = Awaited<ReturnType<typeof editApi.createReviewItemWithVersion>>;
+    let rejectProvisional!: (reason: unknown) => void;
+    const provisionalPromise = new Promise<CreateResult>((_resolve, reject) => {
+      rejectProvisional = reject;
+    });
+    const createSpy = vi.spyOn(editApi, 'createReviewItemWithVersion').mockImplementation((input) => {
+      if (input.file.name === 'uncertain-first.mp4') {
+        return Promise.reject(new V1UploadResultUncertainError(new TypeError('command response lost')));
+      }
+      markV1ListConfirmationRequired('prj_seed_final_cut');
+      return provisionalPromise;
+    });
+
+    await userEvent.upload(screen.getByTestId('create-item-file'), [
+      new File(['uncertain'], 'uncertain-first.mp4', { type: 'video/mp4' }),
+      new File(['provisional'], 'provisional-second.mp4', { type: 'video/mp4' }),
+    ]);
+    const uploadRows = screen.getAllByTestId(/upload-row-\d+$/);
+    await userEvent.type(within(uploadRows[0]).getByLabelText('集数'), '45');
+    await userEvent.type(within(uploadRows[1]).getByLabelText('集数'), '46');
+    await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(2));
+
+    const confirm = await screen.findByRole('button', { name: '我已核对列表，允许新建 V1' });
+    expect(confirm).toBeDisabled();
+    expect(screen.getByTestId('v1-list-confirmation-required')).toHaveTextContent('仍有 1 条 V1 正在结算');
+    fireEvent.click(confirm);
+    expect(isV1ListConfirmationRequired('prj_seed_final_cut')).toBe(true);
+
+    first.unmount();
+    cleanupRuntime(first.runtime, first.queryClient);
+    const second = renderProjectDetail('/edit/projects/prj_seed_final_cut');
+    expect(await screen.findByTestId('v1-list-confirmation-required')).toHaveTextContent(
+      '请先确认上一笔 V1 的列表结果',
+    );
+
+    rejectProvisional(new V1UploadResultUncertainError(new TypeError('version response lost')));
+    second.unmount();
+    cleanupRuntime(second.runtime, second.queryClient);
+  });
+
   it('keeps V1 fail-closed across remounts when session storage writes are unavailable', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('storage blocked', 'QuotaExceededError');
@@ -1129,12 +1267,12 @@ describe('ProjectDetailPage archive workflow', () => {
     await userEvent.type(within(row).getByLabelText('集数'), '28');
     await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
 
-    expect(screen.getAllByText(/第 28 集 · 2 个版本 · 当前 V2/)).toHaveLength(1);
+    expect(screen.getAllByText(/原文件：.* · 2个版本 · 当前 V2/)).toHaveLength(1);
     await userEvent.click(await screen.findByRole('button', { name: '删除分集 第 28 集误传' }));
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('审核开始前去重'));
     await waitFor(() => expect(screen.queryByRole('button', { name: '删除分集 第 28 集误传' })).not.toBeInTheDocument());
-    expect(screen.getAllByText(/第 28 集 · 2 个版本 · 当前 V2/)).toHaveLength(1);
+    expect(screen.getAllByText(/原文件：.* · 2个版本 · 当前 V2/)).toHaveLength(1);
     expect(await screen.findByText('分集已删除，列表已刷新。')).toBeInTheDocument();
 
     confirmSpy.mockRestore();
@@ -1197,6 +1335,20 @@ describe('AppendVersionPanel component', () => {
     expect(screen.getByTestId('create-item-file')).toHaveAttribute('multiple');
   });
 
+  it('uses adjacent matching custom actions while keeping the native file input visually hidden', () => {
+    render(<CreateItemUploadPanel onSubmit={vi.fn()} />);
+
+    const choose = screen.getByRole('button', { name: '选择文件' });
+    const upload = screen.getByRole('button', { name: '上传 V1' });
+    const nativeInput = screen.getByTestId('create-item-file');
+    expect(choose.parentElement).toBe(upload.parentElement);
+    expect(choose).toHaveClass('fj-review-primary');
+    expect(upload).toHaveClass('fj-review-primary');
+    expect(nativeInput).toHaveClass('fj-review-sr-only');
+    expect(nativeInput).toHaveAttribute('aria-label', '原片文件（可多选）');
+    expect(screen.queryByText(/fakepath|本地路径/i)).not.toBeInTheDocument();
+  });
+
   it('derives titles and episodes without guessing ambiguous numeric candidates', () => {
     expect(titleFromUploadFileName('狼王.最终版.第02集.mov')).toBe('狼王.最终版.第02集');
     expect(episodeFromUploadFileName('狼王别跑01.mp4')).toBe('01');
@@ -1229,26 +1381,69 @@ describe('AppendVersionPanel component', () => {
     await waitFor(() => expect(screen.queryByTestId('create-item-upload-rows')).not.toBeInTheDocument());
   });
 
-  it('waits for each V1 result before starting the next selected file', async () => {
-    let finishFirst: ((value: { outcome: 'success' }) => void) | undefined;
-    const firstResult = new Promise<{ outcome: 'success' }>((resolveResult) => {
-      finishFirst = resolveResult;
-    });
-    const onSubmit = vi.fn()
-      .mockReturnValueOnce(firstResult)
-      .mockResolvedValueOnce({ outcome: 'success' });
+  it('runs at most five complete V1 pipelines, keeps queued rows session-free, and backfills slots', async () => {
+    const finishers: Array<() => void> = [];
+    const active = new Set<string>();
+    const progressByFile = new Map<string, (progress: UploadProgress) => void>();
+    let maxActive = 0;
+    const onSubmit = vi.fn((input: { file: File }, onProgress?: (progress: UploadProgress) => void) =>
+      new Promise<{ outcome: 'success' }>((resolveResult) => {
+        active.add(input.file.name);
+        maxActive = Math.max(maxActive, active.size);
+        if (onProgress) progressByFile.set(input.file.name, onProgress);
+        finishers.push(() => {
+          active.delete(input.file.name);
+          resolveResult({ outcome: 'success' });
+        });
+      }));
     render(<CreateItemUploadPanel onSubmit={onSubmit} />);
 
-    await userEvent.upload(screen.getByTestId('create-item-file'), [
-      new File(['a'], '狼王01.mp4', { type: 'video/mp4' }),
-      new File(['b'], '狼王02.mp4', { type: 'video/mp4' }),
-    ]);
+    const files = Array.from({ length: 7 }, (_, index) =>
+      new File([String(index)], `狼王0${index + 1}.mp4`, { type: 'video/mp4' }));
+    await userEvent.upload(screen.getByTestId('create-item-file'), files);
     await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(screen.getByTestId('upload-row-1')).toHaveTextContent('狼王02.mp4');
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(5));
+    expect(maxActive).toBe(5);
+    expect(screen.getByTestId('upload-row-5')).toHaveTextContent('排队中');
+    expect(screen.getByTestId('upload-row-6')).toHaveTextContent('排队中');
+    expect(progressByFile.has('狼王06.mp4')).toBe(false);
 
-    finishFirst?.({ outcome: 'success' });
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    act(() => {
+      progressByFile.get('狼王01.mp4')?.({ stage: 'uploading', percent: 11, bytesSent: 11, totalBytes: 100 });
+      progressByFile.get('狼王02.mp4')?.({ stage: 'uploading', percent: 22, bytesSent: 22, totalBytes: 100 });
+    });
+    expect(within(screen.getByTestId('upload-row-0')).getByRole('status')).toHaveAttribute('aria-label', '上传分片 11%');
+    expect(within(screen.getByTestId('upload-row-1')).getByRole('status')).toHaveAttribute('aria-label', '上传分片 22%');
+    expect(screen.queryByTestId('upload-progress')).not.toBeInTheDocument();
+
+    act(() => finishers[0]?.());
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(6));
+    expect(active.size).toBe(5);
+    expect(progressByFile.has('狼王06.mp4')).toBe(true);
+    expect(progressByFile.has('狼王07.mp4')).toBe(false);
+
+    act(() => finishers[1]?.());
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(7));
+    expect(active.size).toBe(5);
+    expect(maxActive).toBe(5);
+
+    act(() => finishers.slice(2).forEach((finish) => finish()));
+    await waitFor(() => expect(screen.queryByTestId('create-item-upload-rows')).not.toBeInTheDocument());
+  });
+
+  it('accepts one hundred episodes in one batch while only five obtain upload slots', async () => {
+    const onSubmit = vi.fn(() => new Promise<{ outcome: 'success' }>(() => undefined));
+    render(<CreateItemUploadPanel onSubmit={onSubmit} />);
+
+    const files = Array.from({ length: 100 }, (_, index) =>
+      new File([String(index)], `第${index + 1}集.mp4`, { type: 'video/mp4' }));
+    await userEvent.upload(screen.getByTestId('create-item-file'), files);
+    expect(screen.getAllByTestId(/upload-row-\d+$/)).toHaveLength(100);
+
+    await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(5));
+    expect(screen.getByTestId('upload-row-5')).toHaveTextContent('排队中 · 尚未创建上传会话');
+    expect(screen.getByTestId('upload-row-99')).toHaveTextContent('排队中 · 尚未创建上传会话');
   });
 
   it('blocks the entire batch until every row has required metadata', async () => {
@@ -1262,47 +1457,48 @@ describe('AppendVersionPanel component', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('shows V1 upload progress as a bottom-edge status line while pending', () => {
-    render(
-      <CreateItemUploadPanel
-        pending
-        progress={{ stage: 'uploading', percent: 42, bytesSent: 42, totalBytes: 100 }}
-        onSubmit={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByRole('button', { name: '上传中...' })).toBeDisabled();
-    expect(screen.getByTestId('create-item-file')).toBeDisabled();
-    const progress = screen.getByTestId('upload-progress');
-    expect(screen.getByRole('status')).toBe(progress);
-    expect(progress).toHaveAttribute('aria-label', '上传分片 42%');
-    expect(progress).toHaveAttribute('aria-live', 'polite');
-    expect(within(progress).getByText('上传分片 42%')).toHaveClass('fj-review-sr-only');
-  });
-
-  it('continues after explicit failures, retains only failed rows, and retries only those rows', async () => {
-    const accepted = { outcome: 'success' as const };
-    const rejected = { outcome: 'failed' as const, message: '上传校验失败' };
-    const onSubmit = vi.fn()
-      .mockResolvedValueOnce(accepted)
-      .mockResolvedValueOnce(rejected)
-      .mockResolvedValueOnce(accepted)
-      .mockResolvedValueOnce(accepted);
+  it('continues after failed and uncertain rows, reports recovery, and retries only the chosen row', async () => {
+    const attempts = new Map<string, number>();
+    const onSubmit = vi.fn(async (input: { file: File }) => {
+      const count = (attempts.get(input.file.name) ?? 0) + 1;
+      attempts.set(input.file.name, count);
+      if (input.file.name === '狼王02.mp4' && count === 1) {
+        return { outcome: 'failed' as const, message: '上传校验失败' };
+      }
+      if (input.file.name === '狼王03.mp4' && count === 1) {
+        return { outcome: 'uncertain' as const, message: '完成响应丢失，原因未确认' };
+      }
+      return { outcome: 'success' as const };
+    });
     render(<CreateItemUploadPanel onSubmit={onSubmit} />);
-    const first = new File(['a'], '狼王01.mp4', { type: 'video/mp4' });
-    const failed = new File(['b'], '狼王02.mp4', { type: 'video/mp4' });
-    const third = new File(['c'], '狼王03.mp4', { type: 'video/mp4' });
-    await userEvent.upload(screen.getByTestId('create-item-file'), [first, failed, third]);
+    const files = Array.from({ length: 7 }, (_, index) =>
+      new File([String(index)], `狼王0${index + 1}.mp4`, { type: 'video/mp4' }));
+    await userEvent.upload(screen.getByTestId('create-item-file'), files);
     await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(7));
     expect(screen.queryByTestId('upload-row-0')).not.toBeInTheDocument();
     expect(screen.getByTestId('upload-row-1')).toHaveTextContent('狼王02.mp4');
     expect(screen.getByTestId('upload-row-1-error')).toHaveTextContent('上传校验失败');
-    expect(screen.queryByTestId('upload-row-2')).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(4));
-    expect(onSubmit.mock.calls[3]?.[0].file).toBe(failed);
+    expect(screen.getByTestId('upload-row-2-error')).toHaveTextContent('结果不确定');
+    expect(screen.queryByTestId('upload-row-6')).not.toBeInTheDocument();
+    const report = screen.getByTestId('batch-upload-report');
+    expect(report).toHaveTextContent('狼王02.mp4');
+    expect(report).toHaveTextContent('失败阶段');
+    expect(report).toHaveTextContent('恢复方式');
+    expect(report).toHaveTextContent('狼王03.mp4');
+    expect(report).toHaveTextContent('原因未确认');
+
+    await userEvent.click(within(screen.getByTestId('upload-row-1')).getByRole('button', { name: '重试此项' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(8));
+    expect(onSubmit.mock.calls.at(-1)?.[0].file).toBe(files[1]);
     await waitFor(() => expect(screen.queryByTestId('upload-row-1')).not.toBeInTheDocument());
+    expect(screen.getByTestId('upload-row-2')).toBeInTheDocument();
+    expect(attempts.get('狼王01.mp4')).toBe(1);
+
+    await userEvent.click(within(screen.getByTestId('upload-row-2')).getByRole('button', { name: '已核对未成功，重试此项' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(9));
+    expect(onSubmit.mock.calls.at(-1)?.[0].file).toBe(files[2]);
+    await waitFor(() => expect(screen.queryByTestId('upload-row-2')).not.toBeInTheDocument());
   });
 
   it('shows appended-version upload progress without adding a reserved progress row', () => {
@@ -1786,6 +1982,23 @@ describe('ReviewPlayer component', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('requests cross-origin playback media with the same credential policy as review queries', () => {
+    const seed = createSeedData();
+    const { container } = render(
+      <ReviewPlayer
+        version={seed.versions[1]}
+        issues={[]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector('video')).toHaveAttribute('crossorigin', 'use-credentials');
   });
 
   it('draws a real draft shape and supports undo/redo', async () => {
@@ -2487,6 +2700,78 @@ describe('ReviewPlayer component', () => {
     expect(onTimeChange.mock.calls.map(([value]) => value).slice(-3)).toEqual([0, 6000, 12000]);
     expect(screen.getByLabelText('视频时间轴')).toHaveValue('12000');
     expect(timeline.releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it('keeps opinion avatar hit targets below the scrubber and seeks/selects by click or keyboard', async () => {
+    const seed = createSeedData();
+    const baseIssue = seed.issues.find((issue) => issue.versionId === 'ver_ep28_v2')!;
+    const resolvedIssue = {
+      ...baseIssue,
+      issueId: 'issue_avatar_resolved',
+      issueNo: 99,
+      status: 'resolved' as const,
+      timestampMs: baseIssue.timestampMs + 80,
+    };
+    const startIssue = {
+      ...baseIssue,
+      issueId: 'issue_avatar_start',
+      issueNo: 97,
+      timestampMs: 0,
+    };
+    const endIssue = {
+      ...baseIssue,
+      issueId: 'issue_avatar_end',
+      issueNo: 98,
+      timestampMs: seed.versions[1].durationMs,
+    };
+    const onTimeChange = vi.fn();
+    const onSelectIssue = vi.fn();
+    render(
+      <ReviewPlayer
+        version={seed.versions[1]}
+        issues={[baseIssue, resolvedIssue, startIssue, endIssue]}
+        selectedAnnotationSet={null}
+        onTimeChange={onTimeChange}
+        onDraftChange={vi.fn()}
+        onSelectIssue={onSelectIssue}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+
+    const scrubber = screen.getByTestId('video-edge-timeline');
+    const track = screen.getByTestId('opinion-avatar-track');
+    const openMarker = screen.getByRole('button', { name: `意见 #${baseIssue.issueNo} 未修改` });
+    const resolvedMarker = screen.getByRole('button', { name: '意见 #99 已修改' });
+    expect(scrubber).not.toContainElement(openMarker);
+    expect(track).toContainElement(openMarker);
+    expect(track).toContainElement(resolvedMarker);
+    expect(openMarker.querySelector('svg')).toBeInTheDocument();
+    expect(openMarker).toHaveClass('is-open');
+    expect(resolvedMarker).toHaveClass('is-resolved');
+    expect(openMarker.tagName).toBe('BUTTON');
+    expect(openMarker).toHaveAttribute('type', 'button');
+    expect(openMarker.tabIndex).toBe(0);
+    expect(screen.getByRole('button', { name: '意见 #97 未修改' })).toHaveStyle({
+      left: 'clamp(22px, 0%, calc(100% - 22px))',
+    });
+    expect(screen.getByRole('button', { name: '意见 #98 未修改' })).toHaveStyle({
+      left: 'clamp(22px, 100%, calc(100% - 22px))',
+    });
+
+    await userEvent.click(openMarker);
+    expect(onTimeChange).toHaveBeenLastCalledWith(baseIssue.timestampMs);
+    expect(onSelectIssue).toHaveBeenLastCalledWith(baseIssue);
+    openMarker.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(onSelectIssue).toHaveBeenCalledTimes(2);
+    await userEvent.keyboard(' ');
+    expect(onTimeChange).toHaveBeenLastCalledWith(baseIssue.timestampMs);
+    expect(onSelectIssue).toHaveBeenCalledTimes(3);
+
+    const css = readFileSync(resolve(process.cwd(), 'src/modules/final-cut-review/styles/fj-review.css'), 'utf8');
+    expect(css).toMatch(/\.fj-review-opinion-track\s*\{[^}]*min-height:\s*44px;/s);
+    expect(css).toMatch(/\.fj-review-timeline-marker\s*\{[^}]*height:\s*44px;[^}]*width:\s*44px;/s);
+    expect(css).toMatch(/\.fj-review-player-card\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto;/s);
   });
 
   it('keeps a user pause benign when it interrupts a pending play request before repeated seeks', async () => {

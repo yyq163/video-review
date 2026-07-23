@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import type { EntryMode, ReviewItem, UploadProgress } from '../contracts/types';
+import type { EntryMode, ReviewItem } from '../contracts/types';
 import { entryLinksFor } from '../entry/entry-links';
 import { useProjectDetail, useReviewMutations } from '../entry/use-review-queries';
 import { AppShell, CapabilityGate, ErrorView, LoadingBlock, StatusBadge, actionError } from '../components/shared';
@@ -9,7 +9,12 @@ import { ProjectMetadataEditor, type ReviewItemMetadataValues } from '../compone
 import { uploadSchema, type ProjectFormValues } from '../components/ProjectForms';
 import type { ReviewItemWithMetadata } from '../ports';
 import { groupReviewItemsByEpisode } from '../core/episode-dedupe';
-import { clearV1ListConfirmationRequired, getV1ListProtectionState } from '../adapters/http-review-uploads';
+import {
+  V1UploadResultUncertainError,
+  clearV1ListConfirmationRequired,
+  getV1ListProtectionState,
+  markV1ListConfirmationRequired,
+} from '../adapters/http-review-uploads';
 import { ProjectDetailItemList, type ProjectDetailMetadataEpisodeGroup } from './project-detail-item-list';
 
 export function ProjectDetailPage(props: { entryMode: EntryMode }) {
@@ -19,10 +24,27 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const mutations = useReviewMutations(props.entryMode);
   const [projectActionError, setProjectActionError] = useState<string | null>(null);
   const [projectActionMessage, setProjectActionMessage] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | undefined>(undefined);
+  const v1ListRefreshSequenceRef = useRef(0);
+  const activeV1UploadCountRef = useRef(0);
+  const [activeV1UploadCount, setActiveV1UploadCount] = useState(0);
   const [v1ListProtectionState, setV1ListProtectionState] = useState(() => props.entryMode === 'edit' ? getV1ListProtectionState(projectRefId) : 'clear');
+  const v1UncertainRef = useRef(v1ListProtectionState !== 'clear');
   const v1ListConfirmationRequired = v1ListProtectionState !== 'clear';
   const [v1ListConfirmationPending, setV1ListConfirmationPending] = useState(false);
+  const settleV1UploadAttempt = (mayClearProtection: boolean) => {
+    activeV1UploadCountRef.current = Math.max(0, activeV1UploadCountRef.current - 1);
+    setActiveV1UploadCount(activeV1UploadCountRef.current);
+    if (
+      mayClearProtection &&
+      activeV1UploadCountRef.current === 0 &&
+      !v1UncertainRef.current
+    ) {
+      clearV1ListConfirmationRequired(projectRefId);
+    }
+    const nextProtectionState = getV1ListProtectionState(projectRefId);
+    setV1ListProtectionState(nextProtectionState);
+    return nextProtectionState;
+  };
   if (detail.isLoading) {
     return (
       <AppShell entryMode={props.entryMode} homeHref={`/${props.entryMode}/projects`} entryLinks={entryLinksFor(props.entryMode)}>
@@ -116,10 +138,15 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
 
   const confirmV1List = async () => {
     setProjectActionError(null);
+    if (activeV1UploadCountRef.current > 0) {
+      setProjectActionError('仍有 V1 上传正在结算，批次结束前不能解除不确定结果保护。');
+      return;
+    }
     setV1ListConfirmationPending(true);
     try {
       await detail.refetch({ throwOnError: true });
       clearV1ListConfirmationRequired(projectRefId);
+      v1UncertainRef.current = false;
       const nextProtectionState = getV1ListProtectionState(projectRefId);
       setV1ListProtectionState(nextProtectionState);
       if (nextProtectionState === 'storage-unavailable') {
@@ -197,9 +224,12 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
               <>
                 <strong>请先确认上一笔 V1 的列表结果</strong>
                 <span>上一笔 V1 命令的响应不确定。请核对下方成片列表，避免重复创建。</span>
+                {activeV1UploadCount > 0 ? (
+                  <span>仍有 {activeV1UploadCount} 条 V1 正在结算，全部结束后才能确认。</span>
+                ) : null}
                 <button
                   className="fj-review-secondary"
-                  disabled={v1ListConfirmationPending}
+                  disabled={v1ListConfirmationPending || activeV1UploadCount > 0}
                   onClick={() => void confirmV1List()}
                   type="button"
                 >
@@ -217,10 +247,9 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
         ) : (
           <CapabilityGate entryMode={props.entryMode} capability="review.item.create">
             <CreateItemUploadPanel
-              pending={mutations.createReviewItemWithVersion.isPending || Boolean(uploadProgress)}
+              pending={mutations.createReviewItemWithVersion.isPending}
               blockedForListConfirmation={v1ListConfirmationRequired}
-              progress={uploadProgress}
-              onSubmit={async (input) => {
+              onSubmit={async (input, onProgress) => {
                 const parsedInput = uploadSchema.safeParse(input);
                 if (!parsedInput.success) {
                   return {
@@ -230,28 +259,30 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
                 }
                 const validatedInput = parsedInput.data;
                 setProjectActionError(null);
-                setUploadProgress({ stage: 'validating', percent: 0, totalBytes: validatedInput.file.size });
+                setProjectActionMessage(null);
+                onProgress?.({ stage: 'validating', percent: 0, totalBytes: validatedInput.file.size });
+                activeV1UploadCountRef.current += 1;
+                setActiveV1UploadCount(activeV1UploadCountRef.current);
                 try {
                   const created = await mutations.createReviewItemWithVersion.mutateAsync({
                     projectRefId,
                     ...validatedInput,
-                    onProgress: setUploadProgress,
+                    onProgress,
                   });
-                  setUploadProgress({
+                  onProgress?.({
                     stage: 'completed',
                     percent: 100,
                     bytesSent: validatedInput.file.size,
                     totalBytes: validatedInput.file.size,
                   });
-                  clearV1ListConfirmationRequired(projectRefId);
-                  const nextProtectionState = getV1ListProtectionState(projectRefId);
-                  setV1ListProtectionState(nextProtectionState);
+                  const nextProtectionState = settleV1UploadAttempt(true);
                   const stopBatch = nextProtectionState === 'storage-unavailable';
                   if (stopBatch) {
                     setProjectActionError('浏览器会话存储不可用，后续 V1 上传已停止；已成功的文件不会重传。');
                   }
-                  setUploadProgress(undefined);
+                  const refreshSequence = ++v1ListRefreshSequenceRef.current;
                   void detail.refetch({ throwOnError: true }).then((refreshed) => {
+                    if (refreshSequence !== v1ListRefreshSequenceRef.current) return;
                     const confirmedInList = refreshed.data?.items.some(
                       (item) => item.reviewItemId === created.item.reviewItemId,
                     );
@@ -259,19 +290,22 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
                       setProjectActionMessage('文件已上传成功，待审列表暂时刷新失败，请刷新页面查看。');
                     }
                   }).catch(() => {
+                    if (refreshSequence !== v1ListRefreshSequenceRef.current) return;
                     setProjectActionMessage('文件已上传成功，待审列表暂时刷新失败，请刷新页面查看。');
                   });
                   return { outcome: 'success' as const, stopBatch };
                 } catch (caught) {
-                  setUploadProgress(undefined);
-                  const nextProtectionState = getV1ListProtectionState(projectRefId);
-                  setV1ListProtectionState(nextProtectionState);
-                  if (nextProtectionState !== 'clear') {
+                  if (caught instanceof V1UploadResultUncertainError) {
+                    markV1ListConfirmationRequired(projectRefId);
+                    v1UncertainRef.current = true;
+                    const nextProtectionState = settleV1UploadAttempt(false);
                     return {
                       outcome: 'uncertain' as const,
-                      message: '上传结果不确定，请先核对待审列表；确认前不会继续本批次或重传。',
+                      message: '结果不确定/原因未确认，请先核对待审列表；确认未成功前不会自动重传。',
+                      stopBatch: nextProtectionState === 'storage-unavailable',
                     };
                   }
+                  settleV1UploadAttempt(true);
                   return { outcome: 'failed' as const, message: actionError(caught) };
                 }
               }}

@@ -129,6 +129,7 @@ export function ReviewPlayerStage({
         <video
           ref={videoRef}
           src={version.playbackUrl}
+          crossOrigin="use-credentials"
           data-version-id={version.versionId}
           style={containedMediaStyle}
           controls={false}

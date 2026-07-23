@@ -51,6 +51,7 @@ export function ProjectDetailItemList({
         const item = group.representative;
         const versions = versionsByItem[item.reviewItemId] ?? [];
         const currentVersion = versions.find((version) => version.versionId === item.currentVersionId);
+        const currentOriginalFilename = currentVersion?.originalMedia.originalFilename || currentVersion?.fileName || '-';
         const currentIssues = currentVersion ? issuesByVersion[currentVersion.versionId] ?? [] : [];
         const openCount = currentIssues.filter((issue) => issue.status === 'unresolved').length;
         const deletableItems = group.items.filter((candidate) => {
@@ -74,8 +75,8 @@ export function ProjectDetailItemList({
         return (
           <article key={group.episodeKey} className="fj-review-item-row">
             <div>
-              <strong>{item.title}</strong>
-              <span>第 {item.episode} 集 · {versions.length} 个版本 · 当前 {currentVersion?.label ?? '-'}</span>
+              <strong>第 {item.episode} 集</strong>
+              <span>原文件：{currentOriginalFilename} · {versions.length}个版本 · 当前 {currentVersion?.label ?? '-'}</span>
             </div>
             <StatusBadge status={item.status} />
             <span>当前未修改 {openCount}</span>

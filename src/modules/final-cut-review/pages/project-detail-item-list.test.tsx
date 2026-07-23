@@ -240,6 +240,8 @@ describe('ProjectDetailItemList single-item delete gate', () => {
     const fixture = createDeleteGateFixture();
     renderDeleteGate(fixture);
 
+    expect(screen.getByText(`第 ${fixture.item.episode} 集`, { selector: 'strong' })).toBeInTheDocument();
+    expect(screen.queryByText(fixture.item.title, { selector: 'strong' })).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: `删除分集 ${fixture.item.title}` }),
     ).toBeEnabled();

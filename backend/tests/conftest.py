@@ -68,6 +68,7 @@ def _fresh_client(
     monkeypatch.setenv("MEDIA_PROBE_TIMEOUT_SECONDS", "5")
     monkeypatch.setenv("WRITE_GUARD_MODE", "none")
     monkeypatch.setenv("WRITE_GUARD_SESSION_SECRET", TEST_SIGNING_SECRET)
+    monkeypatch.setenv("BROWSER_ALLOWED_ORIGINS", TEST_BROWSER_ORIGIN)
     monkeypatch.delenv("REVERSE_PROXY_TRUSTED_HOSTS", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)

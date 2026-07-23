@@ -35,6 +35,23 @@ def test_default_principal_quota_accepts_ten_active_upload_sessions(client: Test
         assert initialized.status_code == 200, initialized.text
 
 
+def test_default_shared_principal_quota_accepts_fifteen_clients_with_five_active_sessions_each(
+    client: TestClient,
+) -> None:
+    for client_index in range(15):
+        for episode_index in range(5):
+            initialized = upload_init_request(
+                client,
+                json={
+                    "original_filename": f"client-{client_index}-episode-{episode_index}.mp4",
+                    "mime_type": "video/mp4",
+                    "file_size": 1024,
+                    "sha256": "0" * 64,
+                },
+            )
+            assert initialized.status_code == 200, initialized.text
+
+
 @pytest.mark.parametrize("brand", [b"MSNV", b"XAVC"])
 def test_structurally_valid_unknown_mp4_brand_reaches_probe_and_completes(client: TestClient, brand: bytes) -> None:
     blob = iso_bmff_ftyp(brand, b"isom") + b"bounded-test-payload"

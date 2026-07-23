@@ -21,6 +21,16 @@ const STORAGE_PROBE_KEY = 'fj-final-cut-review:confirmation-storage-probe';
 export type V1ListProtectionState = 'clear' | 'required' | 'storage-unavailable';
 export type AppendVersionProtectionState = V1ListProtectionState;
 
+export class V1UploadResultUncertainError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'V1 上传结果不确定');
+    this.name = 'V1UploadResultUncertainError';
+    this.cause = cause;
+  }
+}
+
 function v1ListConfirmationKey(projectRefId: string): string {
   return `${V1_LIST_CONFIRMATION_KEY_PREFIX}${encodeURIComponent(projectRefId)}`;
 }
@@ -67,7 +77,7 @@ function clearListConfirmationRequired(key: string): void {
   }
 }
 
-function markV1ListConfirmationRequired(projectRefId: string): void {
+export function markV1ListConfirmationRequired(projectRefId: string): void {
   markListConfirmationRequired(v1ListConfirmationKey(projectRefId));
 }
 
@@ -200,6 +210,7 @@ export class HttpReviewUploads implements UploadApi {
       } catch (error) {
         if (!(error instanceof FinalCutReviewHttpError) || error.httpStatus >= 500) {
           markV1ListConfirmationRequired(input.projectRefId);
+          throw new V1UploadResultUncertainError(error);
         }
         throw error;
       }
@@ -207,11 +218,17 @@ export class HttpReviewUploads implements UploadApi {
       markV1ListConfirmationRequired(input.projectRefId);
     }
     this.uploadOperation.releaseCompleted(input.file, upload.upload_id);
-    const versionDto =
-      operation.version ??
-      (await this.transport.requestJson<ReviewVersionDTO>(
-        `/api/v1/final-cut-review/projects/${input.projectRefId}/items/${itemDto.id}/versions/${itemDto.current_version_id}`,
-      ));
+    let versionDto = operation.version;
+    if (!versionDto) {
+      try {
+        versionDto = await this.transport.requestJson<ReviewVersionDTO>(
+          `/api/v1/final-cut-review/projects/${input.projectRefId}/items/${itemDto.id}/versions/${itemDto.current_version_id}`,
+        );
+      } catch (error) {
+        markV1ListConfirmationRequired(input.projectRefId);
+        throw new V1UploadResultUncertainError(error);
+      }
+    }
     operation.version = versionDto;
     input.onProgress?.({
       stage: 'completed',

@@ -25,7 +25,7 @@ export function useReviewPlayerKeyboard(options: {
       const target = event.target;
       if (
         target instanceof HTMLElement &&
-        (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+        (target.isContentEditable || ['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
       ) {
         return;
       }
