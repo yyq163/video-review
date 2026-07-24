@@ -38,7 +38,7 @@
     {
       "command_type": "DeleteReviewItem",
       "capability": "review.item.delete",
-      "idempotent": false,
+      "idempotent": true,
       "payload_schema": {
         "type": "object",
         "additionalProperties": false,

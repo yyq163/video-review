@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { EntryMode, ProjectRefId, ReviewItemId, VersionId } from '../contracts/types';
+import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
 import { useReviewApi } from './runtime';
+
+const MAX_CONCURRENT_REVIEW_ITEM_DELETES = 5;
 
 export const reviewKeys = {
   projects: ['fj-review', 'projects'] as const,
@@ -125,6 +128,29 @@ export function useReviewMutations(mode: EntryMode) {
         invalidateProject(item.projectRefId);
         queryClient.removeQueries({ queryKey: reviewKeys.item(item.projectRefId, item.reviewItemId) });
         queryClient.removeQueries({ queryKey: reviewKeys.workspace(item.projectRefId, item.reviewItemId) });
+      },
+    }),
+    bulkDeleteReviewItems: useMutation({
+      mutationFn: async (inputs: Array<Parameters<typeof api.deleteReviewItem>[0]>) => {
+        const projectRefId = inputs[0]?.projectRefId ?? null;
+        if (projectRefId && inputs.some((input) => input.projectRefId !== projectRefId)) {
+          throw new Error('批量删除只能处理同一个项目内的分集。');
+        }
+        const results = await settleWithConcurrencyLimit(
+          inputs,
+          MAX_CONCURRENT_REVIEW_ITEM_DELETES,
+          (input) => api.deleteReviewItem(input, context()),
+        );
+        return { inputs, projectRefId, results };
+      },
+      onSuccess: ({ projectRefId, results }) => {
+        for (const result of results) {
+          if (result.status !== 'fulfilled') continue;
+          const item = result.value;
+          queryClient.removeQueries({ queryKey: reviewKeys.item(item.projectRefId, item.reviewItemId) });
+          queryClient.removeQueries({ queryKey: reviewKeys.workspace(item.projectRefId, item.reviewItemId) });
+        }
+        if (projectRefId) refreshInBackground(invalidateProject(projectRefId));
       },
     }),
     appendVersion: useMutation({

@@ -12,7 +12,7 @@ import type { ReviewVersion } from '../contracts/types';
 import {
   formatReviewTimecode,
   formatTimestampTimecode,
-  frameFromTimestampMs,
+  frameFromPlaybackPosition,
 } from '../core/timecode';
 import type { PlayerDisplayMode } from './review-player-types';
 
@@ -45,7 +45,12 @@ interface PlaybackControlsProps {
 }
 
 export function PlaybackControls(props: PlaybackControlsProps) {
-  const currentFrame = frameFromTimestampMs(props.currentMs, props.version.fpsNum, props.version.fpsDen);
+  const currentFrame = frameFromPlaybackPosition(
+    props.currentMs,
+    props.durationMs,
+    props.version.fpsNum,
+    props.version.fpsDen,
+  );
   const pendingTimecodeInputRef = useRef(props.timecodeInput);
   useEffect(() => {
     pendingTimecodeInputRef.current = props.timecodeInput;

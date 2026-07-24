@@ -59,11 +59,13 @@ interface ReviewPlayerStageProps {
   selectedIssueId?: string;
   draftShapes: ReviewAnnotationShape[];
   activeShape: ReviewAnnotationShape | null;
+  selectedShapeId: string | null;
   activeTextShape: ReviewAnnotationShape | null;
   videoRect: ContainedVideoRect;
   onBeginDraw: PointerEventHandler<HTMLDivElement>;
   onMoveDraw: PointerEventHandler<HTMLDivElement>;
-  onEndDraw(): void;
+  onEndDraw: PointerEventHandler<HTMLDivElement>;
+  onMediaDimensions(video: HTMLVideoElement): void;
   onLoadedMetadata(video: HTMLVideoElement): void;
   onCanPlay(): void;
   onWaiting(): void;
@@ -93,11 +95,13 @@ export function ReviewPlayerStage({
   selectedIssueId,
   draftShapes,
   activeShape,
+  selectedShapeId,
   activeTextShape,
   videoRect,
   onBeginDraw,
   onMoveDraw,
   onEndDraw,
+  onMediaDimensions,
   onLoadedMetadata,
   onCanPlay,
   onWaiting,
@@ -115,7 +119,10 @@ export function ReviewPlayerStage({
     ? createTextEditorStyle(activeTextShape, videoRect, displayVideoWidth)
     : undefined;
   return (
-    <div className="fj-review-player-stage">
+    <div
+      className="fj-review-player-stage"
+      style={{ aspectRatio: `${displayVideoWidth} / ${displayVideoHeight}` }}
+    >
       <div
         ref={stageRef}
         className="fj-review-video-frame"
@@ -136,8 +143,16 @@ export function ReviewPlayerStage({
           muted={muted}
           playsInline
           preload="metadata"
-          onLoadedMetadata={(event) => onLoadedMetadata(event.currentTarget)}
-          onCanPlay={onCanPlay}
+          onLoadedMetadata={(event) => {
+            onMediaDimensions(event.currentTarget);
+            onLoadedMetadata(event.currentTarget);
+          }}
+          onLoadedData={(event) => onMediaDimensions(event.currentTarget)}
+          onCanPlay={(event) => {
+            onMediaDimensions(event.currentTarget);
+            onCanPlay();
+          }}
+          onResize={(event) => onMediaDimensions(event.currentTarget)}
           onWaiting={onWaiting}
           onSeeked={(event) => onSeeked(event.currentTarget)}
           onError={onError}
@@ -160,6 +175,7 @@ export function ReviewPlayerStage({
         <DraftAnnotationLayer
           draftShapes={draftShapes}
           activeShape={activeShape}
+          selectedShapeId={selectedShapeId}
           canvasWidth={displayVideoWidth}
           canvasHeight={displayVideoHeight}
           layerStyle={annotationLayerStyle}

@@ -10,6 +10,7 @@ import { uploadSchema, type ProjectFormValues } from '../components/ProjectForms
 import type { ReviewItemWithMetadata } from '../ports';
 import { groupReviewItemsByEpisode } from '../core/episode-dedupe';
 import {
+  DeleteReviewItemResultUncertainError,
   V1UploadResultUncertainError,
   clearV1ListConfirmationRequired,
   getV1ListProtectionState,
@@ -24,6 +25,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const mutations = useReviewMutations(props.entryMode);
   const [projectActionError, setProjectActionError] = useState<string | null>(null);
   const [projectActionMessage, setProjectActionMessage] = useState<string | null>(null);
+  const [bulkActionsHost, setBulkActionsHost] = useState<HTMLSpanElement | null>(null);
   const v1ListRefreshSequenceRef = useRef(0);
   const activeV1UploadCountRef = useRef(0);
   const [activeV1UploadCount, setActiveV1UploadCount] = useState(0);
@@ -69,7 +71,10 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     mutations.archiveProject.isPending ||
     mutations.restoreProject.isPending ||
     mutations.deleteProject.isPending;
-  const itemActionPending = mutations.updateReviewItem.isPending || mutations.deleteReviewItem.isPending;
+  const itemActionPending =
+    mutations.updateReviewItem.isPending ||
+    mutations.deleteReviewItem.isPending ||
+    mutations.bulkDeleteReviewItems.isPending;
 
   const updateProjectMetadata = async (values: ProjectFormValues) => {
     setProjectActionError(null);
@@ -134,6 +139,63 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     } catch (caught) {
       setProjectActionError(actionError(caught));
     }
+  };
+
+  const bulkDeleteReviewItems = async (selectedItems: ReviewItem[]) => {
+    setProjectActionError(null);
+    setProjectActionMessage(null);
+    const succeededIds: string[] = [];
+    const failures: Record<string, string> = {};
+    let uncertainIds: string[] = [];
+    const settled = await mutations.bulkDeleteReviewItems.mutateAsync(
+      selectedItems.map((item) => ({
+          projectRefId,
+          reviewItemId: item.reviewItemId,
+          confirmed: true,
+      })),
+    );
+    settled.results.forEach((result, index) => {
+      const selectedId = settled.inputs[index].reviewItemId;
+      if (result.status === 'fulfilled') {
+        succeededIds.push(selectedId);
+      } else {
+        const caught = result.reason;
+        if (caught instanceof DeleteReviewItemResultUncertainError) {
+          uncertainIds.push(selectedId);
+        } else {
+          failures[selectedId] = actionError(caught);
+        }
+      }
+    });
+    let refreshFailed = false;
+    if (uncertainIds.length) {
+      try {
+        const refreshed = await detail.refetch({ throwOnError: true });
+        const remainingIds = new Set(refreshed.data?.items.map((item) => item.reviewItemId) ?? []);
+        const stillUncertainIds: string[] = [];
+        for (const id of uncertainIds) {
+          if (remainingIds.has(id)) {
+            stillUncertainIds.push(id);
+          } else {
+            succeededIds.push(id);
+          }
+        }
+        uncertainIds = stillUncertainIds;
+      } catch {
+        refreshFailed = true;
+      }
+    }
+    const failedCount = Object.keys(failures).length;
+    setProjectActionMessage(
+      `批量删除完成：成功 ${succeededIds.length} 条，失败 ${failedCount} 条，不确定 ${uncertainIds.length} 条。${
+        refreshFailed
+          ? '列表刷新失败；不确定项已锁定，请刷新页面核对，切勿重复删除。'
+          : uncertainIds.length
+            ? '即时核对仍可见，原请求可能尚在提交；不确定项保持锁定，切勿用新操作重删。'
+            : ''
+      }`,
+    );
+    return { succeededIds, failures, uncertainIds };
   };
 
   const confirmV1List = async () => {
@@ -249,6 +311,8 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
             <CreateItemUploadPanel
               pending={mutations.createReviewItemWithVersion.isPending}
               blockedForListConfirmation={v1ListConfirmationRequired}
+              setBulkActionsHost={setBulkActionsHost}
+              existingEpisodes={items.map((item) => item.episode)}
               onSubmit={async (input, onProgress) => {
                 const parsedInput = uploadSchema.safeParse(input);
                 if (!parsedInput.success) {
@@ -319,6 +383,8 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
           isArchived={isArchived}
           issuesByVersion={issuesByVersion}
           itemActionPending={itemActionPending}
+          bulkActionHost={bulkActionsHost}
+          onBulkDeleteReviewItems={bulkDeleteReviewItems}
           onDeleteReviewItem={(item) => void deleteReviewItem(item)}
           onUpdateReviewItemMetadata={updateReviewItemMetadata}
           projectRefId={projectRefId}

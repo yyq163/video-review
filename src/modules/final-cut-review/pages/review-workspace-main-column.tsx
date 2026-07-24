@@ -29,7 +29,7 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
             ← {data.item.episode}
           </button>
           <div className="fj-review-workspace-title">
-            <strong>{data.item.title}</strong>
+            <strong>第{data.item.episode}集</strong>
             <span>
               {data.project.name} · {data.currentVersion.label} · {data.currentVersion.sha256.slice(0, 12)}
             </span>

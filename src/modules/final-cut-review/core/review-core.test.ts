@@ -222,6 +222,21 @@ describe('video coordinate helpers', () => {
     expect(rect.y).toBe(90);
   });
 
+  it('centers ultra-wide media and ignores the retired bottom-alignment escape hatch', () => {
+    const rect = computeContainedVideoRect({
+      containerWidth: 1600,
+      containerHeight: 1000,
+      videoWidth: 2400,
+      videoHeight: 900,
+      verticalAlign: 'bottom',
+    } as Parameters<typeof computeContainedVideoRect>[0]);
+
+    expect(rect.width).toBe(1600);
+    expect(rect.height).toBe(600);
+    expect(rect.y).toBe(200);
+    expect(rect.y + rect.height).toBe(800);
+  });
+
   it('returns null for pointers in black bars and stable normalized points inside video', () => {
     const containerRect = { left: 0, top: 0, width: 1366, height: 768 };
     expect(pointerToNormalizedVideoPoint({ clientX: 100, clientY: 384, containerRect, videoWidth: 720, videoHeight: 1280 })).toBeNull();

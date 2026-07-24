@@ -25,9 +25,10 @@ export function computeContainedVideoRect(input: VideoRectInput): ContainedVideo
   const scale = Math.min(containerWidth / videoWidth, containerHeight / videoHeight, scaleLimit);
   const width = videoWidth * scale;
   const height = videoHeight * scale;
+  const remainingHeight = containerHeight - height;
   return {
     x: (containerWidth - width) / 2,
-    y: (containerHeight - height) / 2,
+    y: remainingHeight / 2,
     width,
     height,
     scale,

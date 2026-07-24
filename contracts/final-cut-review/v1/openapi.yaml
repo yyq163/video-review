@@ -533,6 +533,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectRefId"
         - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true

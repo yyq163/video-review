@@ -632,7 +632,7 @@ def test_delete_review_item_physically_removes_unreviewed_duplicate(client: Test
     response = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
         json=body,
-        headers={"If-Match": str(item["lock_version"])},
+        headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
     )
     assert response.status_code == 200, response.text
     deleted = api_data(response)
@@ -666,6 +666,214 @@ def test_delete_review_item_physically_removes_unreviewed_duplicate(client: Test
         assert all(event.version_id is None for event in events)
     finally:
         session.close()
+
+
+def test_delete_review_item_requires_and_replays_one_principal_bound_idempotency_key(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+
+    project = create_project(client, code="P_DELETE_IDEMPOTENT")
+    first_item = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, filename="delete-idempotent-first.mp4", seed=b"first"),
+        item_code="DELETE_IDEMPOTENT_FIRST",
+    )
+    second_item = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, filename="delete-idempotent-second.mp4", seed=b"second"),
+        item_code="DELETE_IDEMPOTENT_SECOND",
+    )
+    body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": first_item["id"],
+            "confirmed": True,
+        },
+        command_id="delete-idempotency-bound",
+    )
+    route = (
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}"
+        f"/items/{first_item['id']}/delete"
+    )
+
+    missing_key = client.post(
+        route,
+        json=body,
+        headers={"If-Match": str(first_item["lock_version"])},
+    )
+    assert missing_key.status_code == 422
+    assert api_error(missing_key)["code"] == "VALIDATION_ERROR"
+
+    mismatched_key = client.post(
+        route,
+        json=body,
+        headers={
+            "Idempotency-Key": "different-delete-key",
+            "If-Match": str(first_item["lock_version"]),
+        },
+    )
+    assert mismatched_key.status_code == 422
+    assert api_error(mismatched_key)["code"] == "VALIDATION_ERROR"
+
+    tombstone_writes = 0
+    original_write = SqlAlchemyReviewRepository._write_pending_file_delete
+
+    def count_tombstone_write(
+        repository: SqlAlchemyReviewRepository,
+        storage_path: Path,
+        file_id: str,
+    ) -> tuple[Path, int | None, int | None, int | None, int | None]:
+        nonlocal tombstone_writes
+        tombstone_writes += 1
+        return original_write(repository, storage_path, file_id)
+
+    monkeypatch.setattr(
+        SqlAlchemyReviewRepository,
+        "_write_pending_file_delete",
+        count_tombstone_write,
+    )
+    headers = {
+        "Idempotency-Key": body["command_id"],
+        "If-Match": str(first_item["lock_version"]),
+    }
+    first = client.post(route, json=body, headers=headers)
+    replay = client.post(route, json=body, headers=headers)
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    assert api_data(replay) == api_data(first)
+    assert tombstone_writes == 1
+
+    different_payload = {
+        **body,
+        "payload": {
+            **body["payload"],
+            "review_item_id": second_item["id"],
+        },
+    }
+    payload_conflict = client.post(
+        (
+            f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}"
+            f"/items/{second_item['id']}/delete"
+        ),
+        json=different_payload,
+        headers={
+            "Idempotency-Key": body["command_id"],
+            "If-Match": str(second_item["lock_version"]),
+        },
+    )
+    assert payload_conflict.status_code == 409
+    assert api_error(payload_conflict)["code"] == "IDEMPOTENCY_CONFLICT"
+
+    other_principal = client.post(
+        route,
+        json=body,
+        headers={
+            **principal_headers(
+                (project["project_ref_id"],),
+                principal_id="different-delete-principal",
+                principal_kind="user",
+            ),
+            "Idempotency-Key": body["command_id"],
+            "If-Match": str(first_item["lock_version"]),
+        },
+    )
+    assert other_principal.status_code == 403
+    assert api_error(other_principal)["code"] == "PRINCIPAL_PERMISSION_DENIED"
+    assert tombstone_writes == 1
+
+
+def test_delete_review_item_isolates_files_with_the_same_original_filename(client: TestClient) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel
+
+    project = create_project(client, code="P_DELETE_SAME_NAME")
+    first_file_id = upload_video(client, filename="相同文件名.mp4", seed=b"first")
+    second_file_id = upload_video(client, filename="相同文件名.mp4", seed=b"second")
+    first_item = create_item(client, project["project_ref_id"], first_file_id, item_code="FC_SAME_NAME_1")
+    second_item = create_item(client, project["project_ref_id"], second_file_id, item_code="FC_SAME_NAME_2")
+
+    with SessionLocal() as observer:
+        first_file = observer.get(FileObjectModel, first_file_id)
+        second_file = observer.get(FileObjectModel, second_file_id)
+        assert first_file is not None
+        assert second_file is not None
+        first_path = Path(first_file.storage_path)
+        second_path = Path(second_file.storage_path)
+        assert first_path != second_path
+        assert first_path.is_file()
+        assert second_path.is_file()
+
+    body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": first_item["id"],
+            "confirmed": True,
+        },
+    )
+    response = client.post(
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{first_item['id']}/delete",
+        json=body,
+        headers={
+            "Idempotency-Key": body["command_id"],
+            "If-Match": str(first_item["lock_version"]),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert not first_path.exists()
+    assert second_path.is_file()
+    with SessionLocal() as observer:
+        assert observer.get(FileObjectModel, first_file_id) is None
+        assert observer.get(FileObjectModel, second_file_id) is not None
+    remaining_items = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items"))
+    assert first_item["id"] not in {item["id"] for item in remaining_items}
+    assert second_item["id"] in {item["id"] for item in remaining_items}
+
+
+def test_delete_review_item_rejects_principal_without_project_scope(client: TestClient) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, ReviewItemModel, ReviewVersionModel
+
+    project, item = create_project_item(client, code="P_DELETE_SCOPE")
+    with SessionLocal() as observer:
+        version = observer.get(ReviewVersionModel, item["current_version_id"])
+        assert version is not None
+        file_id = version.original_file_id
+        file = observer.get(FileObjectModel, file_id)
+        assert file is not None
+        storage_path = Path(file.storage_path)
+
+    body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "confirmed": True,
+        },
+    )
+    response = client.post(
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
+        json=body,
+        headers={
+            **principal_headers(("different-project",), principal_id="out-of-scope-editor"),
+            "Idempotency-Key": body["command_id"],
+            "If-Match": str(item["lock_version"]),
+        },
+    )
+
+    assert response.status_code == 403
+    assert api_error(response)["code"] == "PRINCIPAL_PERMISSION_DENIED"
+    with SessionLocal() as observer:
+        assert observer.get(ReviewItemModel, item["id"]) is not None
+        assert observer.get(ReviewVersionModel, item["current_version_id"]) is not None
+        assert observer.get(FileObjectModel, file_id) is not None
+    assert storage_path.is_file()
 
 
 def test_delete_review_item_preserves_pending_upload_cleanup_until_maintenance(
@@ -708,7 +916,7 @@ def test_delete_review_item_preserves_pending_upload_cleanup_until_maintenance(
     deleted = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
         json=body,
-        headers={"If-Match": str(item["lock_version"])},
+        headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
     )
     assert deleted.status_code == 200, deleted.text
     assert not storage_path.exists()
@@ -803,7 +1011,7 @@ def test_delete_review_item_never_follows_symlinked_blob(client: TestClient) -> 
     response = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
         json=body,
-        headers={"If-Match": str(item["lock_version"])},
+        headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
     )
 
     assert response.status_code == 200, response.text
@@ -841,7 +1049,7 @@ def test_delete_review_item_route_rollback_discards_pending_file_delete(client: 
         client.post(
             f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
             json=body,
-            headers={"If-Match": str(item["lock_version"])},
+            headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
         )
 
     session = SessionLocal()
@@ -896,7 +1104,11 @@ def test_delete_review_item_ambiguous_commit_retains_tombstone_for_maintenance(
         response = no_raise.post(
             f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
             json=body,
-            headers={"If-Match": str(item["lock_version"]), "X-Request-ID": request_id},
+            headers={
+                "Idempotency-Key": body["command_id"],
+                "If-Match": str(item["lock_version"]),
+                "X-Request-ID": request_id,
+            },
         )
 
     assert response.status_code == 500
@@ -950,7 +1162,11 @@ def test_command_commit_failure_records_one_uncertain_audit(
         response = no_raise.post(
             f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
             json=body,
-            headers={"If-Match": str(item["lock_version"]), "X-Request-ID": request_id},
+            headers={
+                "Idempotency-Key": body["command_id"],
+                "If-Match": str(item["lock_version"]),
+                "X-Request-ID": request_id,
+            },
         )
 
     assert response.status_code == 500
@@ -1070,7 +1286,7 @@ def test_delete_review_item_retries_post_commit_file_delete(client: TestClient, 
     response = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
         json=body,
-        headers={"If-Match": str(item["lock_version"])},
+        headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
     )
     assert response.status_code == 200, response.text
     assert original_storage_path.exists()
@@ -1122,7 +1338,7 @@ def test_delete_review_item_tombstone_failure_prevents_database_delete(client: T
         client.post(
             f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
             json=body,
-            headers={"If-Match": str(item["lock_version"])},
+            headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
         )
 
     session = SessionLocal()
@@ -1143,14 +1359,22 @@ def test_delete_review_item_requires_current_lock(client: TestClient) -> None:
     missing_lock = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
         json=body,
+        headers={"Idempotency-Key": body["command_id"]},
     )
     assert missing_lock.status_code == 422
     assert api_error(missing_lock)["code"] == "VALIDATION_ERROR"
 
+    stale_body = command(
+        "DeleteReviewItem",
+        {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "confirmed": True},
+    )
     stale_lock = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
-        json=command("DeleteReviewItem", {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "confirmed": True}),
-        headers={"If-Match": str(item["lock_version"] + 1)},
+        json=stale_body,
+        headers={
+            "Idempotency-Key": stale_body["command_id"],
+            "If-Match": str(item["lock_version"] + 1),
+        },
     )
     assert stale_lock.status_code == 409
     assert api_error(stale_lock)["code"] == "OPTIMISTIC_LOCK_CONFLICT"
@@ -1160,18 +1384,36 @@ def test_delete_review_item_requires_current_lock(client: TestClient) -> None:
 
 def test_delete_review_item_requires_confirmed_payload(client: TestClient) -> None:
     project, item = create_project_item(client)
+    missing_body = command(
+        "DeleteReviewItem",
+        {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"]},
+    )
     missing_confirmation = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
-        json=command("DeleteReviewItem", {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"]}),
-        headers={"If-Match": str(item["lock_version"])},
+        json=missing_body,
+        headers={
+            "Idempotency-Key": missing_body["command_id"],
+            "If-Match": str(item["lock_version"]),
+        },
     )
     assert missing_confirmation.status_code == 422
     assert api_error(missing_confirmation)["code"] == "VALIDATION_ERROR"
 
+    rejected_body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "confirmed": False,
+        },
+    )
     rejected_confirmation = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
-        json=command("DeleteReviewItem", {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "confirmed": False}),
-        headers={"If-Match": str(item["lock_version"])},
+        json=rejected_body,
+        headers={
+            "Idempotency-Key": rejected_body["command_id"],
+            "If-Match": str(item["lock_version"]),
+        },
     )
     assert rejected_confirmation.status_code == 422
     assert api_error(rejected_confirmation)["code"] == "VALIDATION_ERROR"
@@ -1190,7 +1432,7 @@ def test_delete_review_item_rejects_after_first_issue_starts_review(client: Test
     response = client.post(
         f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
         json=body,
-        headers={"If-Match": str(started_item["lock_version"])},
+        headers={"Idempotency-Key": body["command_id"], "If-Match": str(started_item["lock_version"])},
     )
     assert response.status_code == 409
     assert api_error(response)["code"] == "RESOURCE_STATE_CONFLICT"
@@ -1221,10 +1463,21 @@ def test_delete_review_item_rejects_multi_version_issue_and_finalized_items(clie
     )
     assert upload_response.status_code == 200, upload_response.text
     multi_current = api_data(client.get(f"/api/v1/final-cut-review/projects/{multi_project['project_ref_id']}/items/{multi_item['id']}"))
+    multi_delete_body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": multi_project["project_ref_id"],
+            "review_item_id": multi_item["id"],
+            "confirmed": True,
+        },
+    )
     multi_delete = client.post(
         f"/api/v1/final-cut-review/edit/projects/{multi_project['project_ref_id']}/items/{multi_item['id']}/delete",
-        json=command("DeleteReviewItem", {"project_ref_id": multi_project["project_ref_id"], "review_item_id": multi_item["id"], "confirmed": True}),
-        headers={"If-Match": str(multi_current["lock_version"])},
+        json=multi_delete_body,
+        headers={
+            "Idempotency-Key": multi_delete_body["command_id"],
+            "If-Match": str(multi_current["lock_version"]),
+        },
     )
     assert multi_delete.status_code == 409
     assert api_error(multi_delete)["code"] == "RESOURCE_STATE_CONFLICT"
@@ -1233,10 +1486,21 @@ def test_delete_review_item_rejects_multi_version_issue_and_finalized_items(clie
     issue_item = create_item(client, issue_project["project_ref_id"], upload_video(client, filename="issue-v1.mp4", seed=b"i"), item_code="ISSUE001")
     create_issue(client, issue_project["project_ref_id"], issue_item)
     issue_current = api_data(client.get(f"/api/v1/final-cut-review/projects/{issue_project['project_ref_id']}/items/{issue_item['id']}"))
+    issue_delete_body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": issue_project["project_ref_id"],
+            "review_item_id": issue_item["id"],
+            "confirmed": True,
+        },
+    )
     issue_delete = client.post(
         f"/api/v1/final-cut-review/edit/projects/{issue_project['project_ref_id']}/items/{issue_item['id']}/delete",
-        json=command("DeleteReviewItem", {"project_ref_id": issue_project["project_ref_id"], "review_item_id": issue_item["id"], "confirmed": True}),
-        headers={"If-Match": str(issue_current["lock_version"])},
+        json=issue_delete_body,
+        headers={
+            "Idempotency-Key": issue_delete_body["command_id"],
+            "If-Match": str(issue_current["lock_version"]),
+        },
     )
     assert issue_delete.status_code == 409
     assert api_error(issue_delete)["code"] == "RESOURCE_STATE_CONFLICT"
@@ -1245,10 +1509,21 @@ def test_delete_review_item_rejects_multi_version_issue_and_finalized_items(clie
     finalized_item = create_item(client, finalized_project["project_ref_id"], upload_video(client, filename="final-v1.mp4", seed=b"f"), item_code="FINAL001")
     finalize(client, finalized_project["project_ref_id"], finalized_item, if_match=finalized_item["lock_version"])
     finalized_current = api_data(client.get(f"/api/v1/final-cut-review/projects/{finalized_project['project_ref_id']}/items/{finalized_item['id']}"))
+    finalized_delete_body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": finalized_project["project_ref_id"],
+            "review_item_id": finalized_item["id"],
+            "confirmed": True,
+        },
+    )
     finalized_delete = client.post(
         f"/api/v1/final-cut-review/edit/projects/{finalized_project['project_ref_id']}/items/{finalized_item['id']}/delete",
-        json=command("DeleteReviewItem", {"project_ref_id": finalized_project["project_ref_id"], "review_item_id": finalized_item["id"], "confirmed": True}),
-        headers={"If-Match": str(finalized_current["lock_version"])},
+        json=finalized_delete_body,
+        headers={
+            "Idempotency-Key": finalized_delete_body["command_id"],
+            "If-Match": str(finalized_current["lock_version"]),
+        },
     )
     assert finalized_delete.status_code == 409
     assert api_error(finalized_delete)["code"] == "RESOURCE_STATE_CONFLICT"

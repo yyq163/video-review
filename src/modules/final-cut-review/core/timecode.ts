@@ -24,6 +24,11 @@ export function timestampMsFromFrame(frameNumber: number, fpsNum: number, fpsDen
   return Math.max(0, Math.floor((Math.max(0, frameNumber) * 1000 * fpsDen) / fpsNum));
 }
 
+export function timestampMsForFrameSeek(frameNumber: number, fpsNum: number, fpsDen: number): number {
+  assertValidFrameRate(fpsNum, fpsDen);
+  return Math.max(0, Math.ceil((Math.max(0, frameNumber) * 1000 * fpsDen) / fpsNum));
+}
+
 export function formatReviewTimecode(frameNumber: number, fpsNum: number, fpsDen: number): string {
   assertValidFrameRate(fpsNum, fpsDen);
   const fpsForDisplay = Math.round(fpsNum / fpsDen);
@@ -70,6 +75,22 @@ export function clampTimeMs(timeMs: number, durationMs: number): number {
 }
 
 export function clampFrame(frameNumber: number, durationMs: number, fpsNum: number, fpsDen: number): number {
-  const maxFrame = frameFromTimestampMs(durationMs, fpsNum, fpsDen);
+  assertValidFrameRate(fpsNum, fpsDen);
+  const frameCount = Math.ceil((Math.max(0, durationMs) * fpsNum) / (1000 * fpsDen));
+  const maxFrame = Math.max(0, frameCount - 1);
   return Math.min(Math.max(0, Math.floor(frameNumber)), maxFrame);
+}
+
+export function frameFromPlaybackPosition(
+  timestampMs: number,
+  durationMs: number,
+  fpsNum: number,
+  fpsDen: number,
+): number {
+  return clampFrame(
+    frameFromTimestampMs(clampTimeMs(timestampMs, durationMs), fpsNum, fpsDen),
+    durationMs,
+    fpsNum,
+    fpsDen,
+  );
 }

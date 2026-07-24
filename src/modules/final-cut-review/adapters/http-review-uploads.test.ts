@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  FinalCutReviewHttpError,
   FinalCutReviewClient,
   type ReviewItemDTO,
   type ReviewVersionDTO,
@@ -11,6 +12,8 @@ import { HttpReviewTransport } from './http-review-transport';
 import { HttpReviewUploadOperation } from './http-review-upload-operation';
 import {
   clearAppendVersionConfirmationRequired,
+  DeleteReviewItemProtectionUnavailableError,
+  DeleteReviewItemResultUncertainError,
   HttpReviewUploads,
   isAppendVersionConfirmationRequired,
 } from './http-review-uploads';
@@ -57,6 +60,7 @@ describe('HTTP review upload idempotency', () => {
       },
       expect.objectContaining({ requestId: 'delete-confirmed' }),
       item.lock_version,
+      expect.objectContaining({ idempotent: true }),
     );
   });
 
@@ -85,6 +89,159 @@ describe('HTTP review upload idempotency', () => {
     ).rejects.toMatchObject({ code: 'RESOURCE_STATE_CONFLICT' });
 
     expect(projectForWrite).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it('reconciles a lost delete response as success when the exact item is already absent', async () => {
+    const item = reviewItem(1);
+    const notFound = new FinalCutReviewHttpError({
+      code: 'RESOURCE_NOT_FOUND',
+      message: '分集不存在',
+      details: {},
+      request_id: 'reconcile-delete-404',
+      timestamp: '2026-07-23T00:00:00Z',
+      contract_version: '1.0',
+      http_status: 404,
+    }, 404);
+    const itemForLock = vi.fn()
+      .mockResolvedValueOnce(item)
+      .mockRejectedValueOnce(notFound);
+    const transport = {
+      assertWriteContext: vi.fn(),
+      projectForWrite: vi.fn().mockResolvedValue(undefined),
+      itemForLock,
+      command: vi.fn().mockRejectedValue(new TypeError('response lost')),
+      baseUrl: BASE_URL,
+    } as unknown as HttpReviewTransport;
+
+    await expect(new HttpReviewUploads(transport).deleteReviewItem(
+      {
+        projectRefId: item.project_ref_id,
+        reviewItemId: item.id,
+        confirmed: true,
+      },
+      context('delete-response-lost'),
+    )).resolves.toMatchObject({ reviewItemId: item.id });
+
+    expect(itemForLock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a lost delete response uncertain when the parent project is no longer writable', async () => {
+    const item = reviewItem(1);
+    const notFound = new FinalCutReviewHttpError({
+      code: 'RESOURCE_NOT_FOUND',
+      message: '资源不存在',
+      details: {},
+      request_id: 'reconcile-parent-404',
+      timestamp: '2026-07-23T00:00:00Z',
+      contract_version: '1.0',
+      http_status: 404,
+    }, 404);
+    const projectForWrite = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(notFound);
+    const transport = {
+      assertWriteContext: vi.fn(),
+      projectForWrite,
+      itemForLock: vi.fn()
+        .mockResolvedValueOnce(item)
+        .mockRejectedValueOnce(notFound),
+      command: vi.fn().mockRejectedValue(new TypeError('response lost')),
+      baseUrl: BASE_URL,
+    } as unknown as HttpReviewTransport;
+
+    await expect(new HttpReviewUploads(transport).deleteReviewItem(
+      {
+        projectRefId: item.project_ref_id,
+        reviewItemId: item.id,
+        confirmed: true,
+      },
+      context('delete-parent-unavailable'),
+    )).rejects.toBeInstanceOf(DeleteReviewItemResultUncertainError);
+
+    expect(projectForWrite).toHaveBeenCalledTimes(2);
+  });
+
+  it('locks an unreconciled delete result instead of exposing it as a retryable failure', async () => {
+    const item = reviewItem(1);
+    const itemForLock = vi.fn()
+      .mockResolvedValueOnce(item)
+      .mockRejectedValueOnce(new TypeError('reconciliation unavailable'));
+    const transport = {
+      assertWriteContext: vi.fn(),
+      projectForWrite: vi.fn().mockResolvedValue(undefined),
+      itemForLock,
+      command: vi.fn().mockRejectedValue(new TypeError('response lost')),
+      baseUrl: BASE_URL,
+    } as unknown as HttpReviewTransport;
+
+    await expect(new HttpReviewUploads(transport).deleteReviewItem(
+      {
+        projectRefId: item.project_ref_id,
+        reviewItemId: item.id,
+        confirmed: true,
+      },
+      context('delete-reconcile-failed'),
+    )).rejects.toBeInstanceOf(DeleteReviewItemResultUncertainError);
+  });
+
+  it('keeps a lost delete response uncertain when an immediate read still sees the item', async () => {
+    const item = reviewItem(1);
+    const itemForLock = vi.fn().mockResolvedValue(item);
+    const command = vi.fn().mockRejectedValue(new TypeError('response lost before commit visibility'));
+    const transport = {
+      assertWriteContext: vi.fn(),
+      projectForWrite: vi.fn().mockResolvedValue(undefined),
+      itemForLock,
+      command,
+      baseUrl: BASE_URL,
+    } as unknown as HttpReviewTransport;
+    const uploads = new HttpReviewUploads(transport);
+    const input = {
+      projectRefId: item.project_ref_id,
+      reviewItemId: item.id,
+      confirmed: true as const,
+    };
+
+    await expect(uploads.deleteReviewItem(
+      input,
+      context('delete-still-visible'),
+    )).rejects.toBeInstanceOf(DeleteReviewItemResultUncertainError);
+    await expect(new HttpReviewUploads(transport).deleteReviewItem(
+      input,
+      context('delete-still-visible-retry'),
+    )).rejects.toBeInstanceOf(DeleteReviewItemResultUncertainError);
+
+    expect(itemForLock).toHaveBeenCalledTimes(4);
+    const firstCommandId = command.mock.calls[0]?.[5]?.commandId;
+    const retryCommandId = command.mock.calls[1]?.[5]?.commandId;
+    expect(firstCommandId).toEqual(expect.stringContaining('DeleteReviewItem_'));
+    expect(retryCommandId).toBe(firstCommandId);
+  });
+
+  it('fails closed before delete when its reload-stable idempotency identity cannot be stored', async () => {
+    const item = reviewItem(1);
+    const command = vi.fn();
+    const transport = {
+      assertWriteContext: vi.fn(),
+      projectForWrite: vi.fn().mockResolvedValue(undefined),
+      itemForLock: vi.fn().mockResolvedValue(item),
+      command,
+      baseUrl: BASE_URL,
+    } as unknown as HttpReviewTransport;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('storage blocked', 'SecurityError');
+    });
+
+    await expect(new HttpReviewUploads(transport).deleteReviewItem(
+      {
+        projectRefId: item.project_ref_id,
+        reviewItemId: item.id,
+        confirmed: true,
+      },
+      context('delete-storage-blocked'),
+    )).rejects.toBeInstanceOf(DeleteReviewItemProtectionUnavailableError);
+
     expect(command).not.toHaveBeenCalled();
   });
 

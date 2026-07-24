@@ -2,6 +2,24 @@ import { useCallback, useEffect } from 'react';
 import type { ReviewVersion } from '../contracts/types';
 import type { AnnotationEditorTool } from './review-player-types';
 
+function isNativeShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (
+    target instanceof HTMLElement &&
+    (
+      target.isContentEditable ||
+      target.closest('[contenteditable]:not([contenteditable="false"])') ||
+      target.closest('[data-testid="episode-strip-scroll"]')
+    )
+  ) {
+    return true;
+  }
+  const control = target.closest(
+    'button, input, textarea, select, a[href], summary, [role="button"], [role="slider"]',
+  );
+  return control instanceof HTMLElement && control.tabIndex >= 0;
+}
+
 export function useReviewPlayerKeyboard(options: {
   version: ReviewVersion;
   annotationReadonly: boolean;
@@ -22,13 +40,7 @@ export function useReviewPlayerKeyboard(options: {
   } = options;
   const handleKeyboardShortcut = useCallback(
     (event: KeyboardEvent) => {
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable || ['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
-      ) {
-        return;
-      }
+      if (event.defaultPrevented || isNativeShortcutTarget(event.target)) return;
       if (event.key === ' ' || event.key === 'Spacebar') {
         event.preventDefault();
         void togglePlay();

@@ -69,7 +69,8 @@ def _fresh_client(
     monkeypatch.setenv("WRITE_GUARD_MODE", "none")
     monkeypatch.setenv("WRITE_GUARD_SESSION_SECRET", TEST_SIGNING_SECRET)
     monkeypatch.setenv("BROWSER_ALLOWED_ORIGINS", TEST_BROWSER_ORIGIN)
-    monkeypatch.delenv("REVERSE_PROXY_TRUSTED_HOSTS", raising=False)
+    # Keep repository-local .env values from leaking into isolated tests.
+    monkeypatch.setenv("REVERSE_PROXY_TRUSTED_HOSTS", "")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -85,6 +86,10 @@ def _fresh_client(
     alembic_cfg.set_main_option("script_location", str(root / "backend/alembic"))
     alembic_command.upgrade(alembic_cfg, "head")
     main_mod = importlib.import_module("backend.app.main")
+    # main.py intentionally keeps its runtime settings at module scope. Tests
+    # reuse that module, so refresh the binding after applying this fixture's
+    # isolated environment instead of inheriting a prior import or local .env.
+    monkeypatch.setattr(main_mod, "settings", settings_mod.get_settings())
     app = main_mod.create_app()
     app.dependency_overrides = {}
     return TestClient(app, headers=principal_headers(), client=_client)

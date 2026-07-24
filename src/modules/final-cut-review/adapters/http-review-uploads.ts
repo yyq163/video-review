@@ -16,6 +16,7 @@ import { randomId, type HttpReviewTransport } from './http-review-transport';
 
 const V1_LIST_CONFIRMATION_KEY_PREFIX = 'fj-final-cut-review:v1-list-confirmation:';
 const APPEND_VERSION_CONFIRMATION_KEY_PREFIX = 'fj-final-cut-review:append-version-confirmation:';
+const DELETE_REVIEW_ITEM_OPERATION_KEY_PREFIX = 'fj-final-cut-review:delete-operation:';
 const STORAGE_PROBE_KEY = 'fj-final-cut-review:confirmation-storage-probe';
 
 export type V1ListProtectionState = 'clear' | 'required' | 'storage-unavailable';
@@ -28,6 +29,23 @@ export class V1UploadResultUncertainError extends Error {
     super(cause instanceof Error ? cause.message : 'V1 上传结果不确定');
     this.name = 'V1UploadResultUncertainError';
     this.cause = cause;
+  }
+}
+
+export class DeleteReviewItemResultUncertainError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super('删除结果不确定，必须先刷新列表核对，不能直接重试。');
+    this.name = 'DeleteReviewItemResultUncertainError';
+    this.cause = cause;
+  }
+}
+
+export class DeleteReviewItemProtectionUnavailableError extends Error {
+  constructor() {
+    super('当前浏览器无法持久保存删除幂等身份，已阻止删除；请恢复会话存储后重试。');
+    this.name = 'DeleteReviewItemProtectionUnavailableError';
   }
 }
 
@@ -128,6 +146,74 @@ interface PendingAppendVersionOperation {
   version?: ReviewVersionDTO;
 }
 
+interface PendingDeleteReviewItemOperation {
+  commandId: string;
+  lockVersion: number;
+}
+
+function deleteReviewItemOperationKey(projectRefId: string, reviewItemId: string): string {
+  return `${DELETE_REVIEW_ITEM_OPERATION_KEY_PREFIX}${encodeURIComponent(projectRefId)}:${encodeURIComponent(reviewItemId)}`;
+}
+
+function readDeleteReviewItemOperation(
+  projectRefId: string,
+  reviewItemId: string,
+): { state: 'available'; operation?: PendingDeleteReviewItemOperation } | { state: 'unavailable' } {
+  const storage = sessionStorageOrNull();
+  if (!storage) return { state: 'unavailable' };
+  try {
+    const value = storage.getItem(
+      deleteReviewItemOperationKey(projectRefId, reviewItemId),
+    );
+    if (!value) return { state: 'available' };
+    const parsed = JSON.parse(value) as Partial<PendingDeleteReviewItemOperation>;
+    const lockVersion = parsed.lockVersion;
+    if (
+      typeof parsed.commandId !== 'string' ||
+      !parsed.commandId.startsWith('DeleteReviewItem_') ||
+      typeof lockVersion !== 'number' ||
+      !Number.isInteger(lockVersion) ||
+      lockVersion < 0
+    ) {
+      return { state: 'unavailable' };
+    }
+    return {
+      state: 'available',
+      operation: {
+        commandId: parsed.commandId,
+        lockVersion,
+      },
+    };
+  } catch {
+    return { state: 'unavailable' };
+  }
+}
+
+function writeDeleteReviewItemOperation(
+  projectRefId: string,
+  reviewItemId: string,
+  operation: PendingDeleteReviewItemOperation,
+): boolean {
+  const storage = sessionStorageOrNull();
+  if (!storage) return false;
+  try {
+    const key = deleteReviewItemOperationKey(projectRefId, reviewItemId);
+    const serialized = JSON.stringify(operation);
+    storage.setItem(key, serialized);
+    return storage.getItem(key) === serialized;
+  } catch {
+    return false;
+  }
+}
+
+function clearDeleteReviewItemOperation(projectRefId: string, reviewItemId: string): void {
+  try {
+    sessionStorageOrNull()?.removeItem(deleteReviewItemOperationKey(projectRefId, reviewItemId));
+  } catch {
+    // A completed operation must not be replaced with a storage cleanup error.
+  }
+}
+
 type UploadApi = Pick<
   ReviewApiPort,
   'createReviewItemWithVersion' | 'deleteReviewItem' | 'appendVersion'
@@ -136,6 +222,7 @@ type UploadApi = Pick<
 export class HttpReviewUploads implements UploadApi {
   private readonly pendingCreateReviewItems = new WeakMap<File, PendingCreateReviewItemOperation>();
   private readonly pendingAppendVersions = new WeakMap<File, PendingAppendVersionOperation>();
+  private readonly pendingDeleteReviewItems = new Map<string, PendingDeleteReviewItemOperation>();
   private readonly uploadOperation: HttpReviewUploadOperation;
   private readonly upload: (
     file: File,
@@ -249,17 +336,67 @@ export class HttpReviewUploads implements UploadApi {
     }
     await this.transport.projectForWrite(input.projectRefId);
     const item = await this.transport.itemForLock(input.projectRefId, input.reviewItemId);
-    const deleted = await this.transport.command<
-      ReviewItemDTO,
-      { project_ref_id: string; review_item_id: string; confirmed: true }
-    >(
-      `/api/v1/final-cut-review/edit/projects/${input.projectRefId}/items/${input.reviewItemId}/delete`,
-      'DeleteReviewItem',
-      { project_ref_id: input.projectRefId, review_item_id: input.reviewItemId, confirmed: input.confirmed },
-      context,
-      item.lock_version,
-    );
-    return itemFromDto(deleted);
+    const operationKey = `${input.projectRefId}:${input.reviewItemId}`;
+    const storedOperation = readDeleteReviewItemOperation(input.projectRefId, input.reviewItemId);
+    if (storedOperation.state === 'unavailable') {
+      throw new DeleteReviewItemProtectionUnavailableError();
+    }
+    const operation = this.pendingDeleteReviewItems.get(operationKey) ??
+      storedOperation.operation ?? {
+        commandId: randomId('DeleteReviewItem'),
+        lockVersion: item.lock_version,
+      };
+    this.pendingDeleteReviewItems.set(operationKey, operation);
+    if (!writeDeleteReviewItemOperation(input.projectRefId, input.reviewItemId, operation)) {
+      this.pendingDeleteReviewItems.delete(operationKey);
+      throw new DeleteReviewItemProtectionUnavailableError();
+    }
+    const clearOperation = () => {
+      this.pendingDeleteReviewItems.delete(operationKey);
+      clearDeleteReviewItemOperation(input.projectRefId, input.reviewItemId);
+    };
+    try {
+      const deleted = await this.transport.command<
+        ReviewItemDTO,
+        { project_ref_id: string; review_item_id: string; confirmed: true }
+      >(
+        `/api/v1/final-cut-review/edit/projects/${input.projectRefId}/items/${input.reviewItemId}/delete`,
+        'DeleteReviewItem',
+        { project_ref_id: input.projectRefId, review_item_id: input.reviewItemId, confirmed: input.confirmed },
+        context,
+        operation.lockVersion,
+        { idempotent: true, commandId: operation.commandId },
+      );
+      clearOperation();
+      return itemFromDto(deleted);
+    } catch (error) {
+      if (
+        error instanceof FinalCutReviewHttpError &&
+        error.httpStatus < 500 &&
+        error.code !== 'IDEMPOTENCY_CONFLICT'
+      ) {
+        clearOperation();
+        throw error;
+      }
+      try {
+        await this.transport.itemForLock(input.projectRefId, input.reviewItemId);
+      } catch (reconciliationError) {
+        if (
+          reconciliationError instanceof FinalCutReviewHttpError &&
+          reconciliationError.httpStatus === 404
+        ) {
+          try {
+            await this.transport.projectForWrite(input.projectRefId);
+          } catch {
+            throw new DeleteReviewItemResultUncertainError(error);
+          }
+          clearOperation();
+          return itemFromDto(item);
+        }
+        throw new DeleteReviewItemResultUncertainError(error);
+      }
+      throw new DeleteReviewItemResultUncertainError(error);
+    }
   };
 
   readonly appendVersion: ReviewApiPort['appendVersion'] = async (input, context) => {

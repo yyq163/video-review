@@ -15,10 +15,11 @@ import {
 import {
   clampFrame,
   clampTimeMs,
+  formatReviewTimecode,
   formatTimestampTimecode,
-  frameFromTimestampMs,
+  frameFromPlaybackPosition,
   parseReviewTimecode,
-  timestampMsFromFrame,
+  timestampMsForFrameSeek,
 } from '../core/timecode';
 import { waitForCanPlay, waitForEvent, waitForMetadata, waitForVideoFrame } from './review-player-media';
 import type { PlayerMediaState } from './review-player-types';
@@ -54,6 +55,10 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
   const activeVersionIdRef = useRef(version.versionId);
   const autoPauseTriggeredRef = useRef<Set<string>>(new Set());
   const lastNaturalTimeMsRef = useRef(0);
+  const currentMsRef = useRef(options.initialTimeMs ?? 0);
+  const explicitSeekTargetMsRef = useRef<number | null>(
+    (options.initialTimeMs ?? 0) > 0 ? options.initialTimeMs ?? null : null,
+  );
   const [currentMs, setCurrentMs] = useState(options.initialTimeMs ?? 0);
   const [durationMs, setDurationMs] = useState(version.durationMs);
   const [playing, setPlaying] = useState(false);
@@ -76,8 +81,15 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
   const publishTime = useCallback(
     (ms: number) => {
       const clamped = clampTimeMs(ms, durationMs);
+      currentMsRef.current = clamped;
       setCurrentMs(clamped);
-      setTimecodeInput(formatTimestampTimecode(clamped, version.fpsNum, version.fpsDen));
+      setTimecodeInput(
+        formatReviewTimecode(
+          frameFromPlaybackPosition(clamped, durationMs, version.fpsNum, version.fpsDen),
+          version.fpsNum,
+          version.fpsDen,
+        ),
+      );
       onTimeChange(clamped);
     },
     [durationMs, onTimeChange, version.fpsDen, version.fpsNum],
@@ -92,6 +104,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
     videoRef.current?.pause();
     const nextMs = clampTimeMs(options.initialTimeMs ?? 0, version.durationMs);
     setCurrentMs(nextMs);
+    currentMsRef.current = nextMs;
     setDurationMs(version.durationMs);
     setPlaying(false);
     setMediaState('loading');
@@ -99,6 +112,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
     setTimecodeError(null);
     setLoadedMediaDimensions(null);
     lastNaturalTimeMsRef.current = nextMs;
+    explicitSeekTargetMsRef.current = nextMs > 0 ? nextMs : null;
     autoPauseTriggeredRef.current.clear();
     options.resetDraftRef.current?.();
     onTimeChange(nextMs);
@@ -130,6 +144,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
         }
       }
       if (video) video.currentTime = clamped / 1000;
+      explicitSeekTargetMsRef.current = clamped;
       lastNaturalTimeMsRef.current = clamped;
       publishTime(clamped);
     },
@@ -140,12 +155,17 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
     (delta: number) => {
       playRequestSequencerRef.current.cancel();
       videoRef.current?.pause();
-      const currentFrame = frameFromTimestampMs(currentMs, version.fpsNum, version.fpsDen);
+      const currentFrame = frameFromPlaybackPosition(
+        currentMsRef.current,
+        durationMs,
+        version.fpsNum,
+        version.fpsDen,
+      );
       const targetFrame = clampFrame(currentFrame + delta, durationMs, version.fpsNum, version.fpsDen);
-      seekToMs(timestampMsFromFrame(targetFrame, version.fpsNum, version.fpsDen));
+      seekToMs(timestampMsForFrameSeek(targetFrame, version.fpsNum, version.fpsDen));
       setPlaying(false);
     },
-    [currentMs, durationMs, seekToMs, version, videoRef],
+    [durationMs, seekToMs, version, videoRef],
   );
 
   const submitTimecode = (rawInput: string) => {
@@ -154,7 +174,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
       const frameNumber = parseReviewTimecode(normalizedInput, version.fpsNum, version.fpsDen);
       setTimecodeInput(normalizedInput);
       setTimecodeError(null);
-      seekToMs(timestampMsFromFrame(frameNumber, version.fpsNum, version.fpsDen));
+      seekToMs(timestampMsForFrameSeek(frameNumber, version.fpsNum, version.fpsDen));
     } catch (error) {
       setTimecodeError(error instanceof Error ? error.message : '时间码无效');
     }
@@ -186,7 +206,13 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
   }, []);
 
   const handleMediaTimeUpdate = (video: HTMLVideoElement) => {
-    const nextMs = Math.round(video.currentTime * 1000);
+    const observedMs = Math.round(video.currentTime * 1000);
+    const requestedMs = explicitSeekTargetMsRef.current;
+    const frameDurationMs = (1000 * version.fpsDen) / version.fpsNum;
+    const shouldKeepExplicitFrame =
+      requestedMs !== null && Math.abs(observedMs - requestedMs) < frameDurationMs;
+    const nextMs = shouldKeepExplicitFrame ? requestedMs : observedMs;
+    if (!shouldKeepExplicitFrame) explicitSeekTargetMsRef.current = null;
     const previousMs = lastNaturalTimeMsRef.current;
     publishTime(nextMs);
     if (!autoPause || video.paused || video.seeking || nextMs <= previousMs) {
@@ -228,6 +254,7 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
       }
       playRequestSequencerRef.current.cancel();
       video.pause();
+      explicitSeekTargetMsRef.current = targetMs;
       if (Math.abs(video.currentTime * 1000 - targetMs) >= 1) {
         const seekPromise = waitForEvent(video, 'seeked', controller.signal);
         video.currentTime = targetMs / 1000;

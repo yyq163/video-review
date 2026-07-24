@@ -10,6 +10,7 @@ export default tseslint.config(
       'dist',
       'coverage',
       'node_modules',
+      '.venv/**',
       '.codex-agent-team/**',
       'backend/.venv',
       'backend/.data',

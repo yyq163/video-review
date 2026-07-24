@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
-import { UploadCloud } from 'lucide-react';
+import { UploadCloud, X } from 'lucide-react';
 import type { UploadProgress } from '../contracts/types';
+import { formatEpisodeDisplayValue, normalizeEpisodeValue } from '../core/episode-dedupe';
 
 const FILE_REQUIRED_MESSAGE = '请选择原片文件。';
 const APPEND_VERSION_FILE_ERROR_ID = 'append-version-file-error';
@@ -68,9 +69,17 @@ function UploadProgressView(props: { progress?: UploadProgress; testId?: string 
   );
 }
 
-export function CreateItemUploadPanel(props: {
+export function CreateItemUploadPanel({
+  pending,
+  blockedForListConfirmation,
+  setBulkActionsHost,
+  existingEpisodes,
+  onSubmit,
+}: {
   pending?: boolean;
   blockedForListConfirmation?: boolean;
+  setBulkActionsHost?: (node: HTMLSpanElement | null) => void;
+  existingEpisodes?: string[];
   onSubmit(
     input: CreateItemUploadInput,
     onProgress?: (progress: UploadProgress) => void,
@@ -78,25 +87,53 @@ export function CreateItemUploadPanel(props: {
 }) {
   const nextRowId = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const removedRowIdsRef = useRef(new Set<string>());
+  const activeBatchEpisodeKeysRef = useRef(new Set<string>());
   const [rows, setRows] = useState<CreateItemUploadRow[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [completedEpisodeKeys, setCompletedEpisodeKeys] = useState<Set<string>>(() => new Set());
   const [batchCompleted, setBatchCompleted] = useState(false);
   const [batchError, setBatchError] = useState<string | null>(null);
-  const disabled = Boolean(props.pending || uploading || props.blockedForListConfirmation);
+  const disabled = Boolean(pending || uploading || blockedForListConfirmation);
+  const blockedEpisodeKeys = new Set([
+    ...(existingEpisodes ?? []).map(normalizeEpisodeValue).filter(Boolean),
+    ...completedEpisodeKeys,
+  ]);
+  const conflictsWithExisting = (row: CreateItemUploadRow) => {
+    const episodeKey = normalizeEpisodeValue(row.episode);
+    if (!episodeKey) return false;
+    if (blockedEpisodeKeys.has(episodeKey)) return true;
+    const rowIndex = rows.findIndex((candidate) => candidate.id === row.id);
+    return rowIndex > 0 && rows
+      .slice(0, rowIndex)
+      .some((candidate) => normalizeEpisodeValue(candidate.episode) === episodeKey);
+  };
   const missingRequired = rows.some((row) => !row.title.trim() || !row.episode.trim());
-  const readyRows = rows.filter((row) => row.status === 'ready');
+  const readyRows = rows.filter(
+    (row) => row.status === 'ready' && !conflictsWithExisting(row),
+  );
   const recoverableRows = rows.filter((row) => row.status === 'failed' || row.status === 'uncertain');
   const updateRow = (id: string, patch: Partial<Pick<CreateItemUploadRow, 'title' | 'episode'>>) => {
     setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
     setBatchError(null);
   };
+  const removeRow = (row: CreateItemUploadRow) => {
+    if (row.status === 'uploading') return;
+    removedRowIdsRef.current.add(row.id);
+    setRows((current) => current.filter((candidate) => candidate.id !== row.id));
+    setBatchError(null);
+  };
   const runBatch = async (batch: CreateItemUploadRow[]) => {
-    if (!batch.length || uploading) return;
+    const eligibleBatch = batch.filter(
+      (row) => !removedRowIdsRef.current.has(row.id) && !conflictsWithExisting(row),
+    );
+    if (!eligibleBatch.length || uploading) return;
+    activeBatchEpisodeKeysRef.current = new Set(blockedEpisodeKeys);
     setUploading(true);
     setBatchCompleted(false);
     setBatchError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
-    const batchIds = new Set(batch.map((row) => row.id));
+    const batchIds = new Set(eligibleBatch.map((row) => row.id));
     setRows((current) => current.map((row) =>
       batchIds.has(row.id)
         ? { ...row, status: 'queued', error: undefined, progress: undefined }
@@ -108,9 +145,17 @@ export function CreateItemUploadPanel(props: {
     let stoppedForSafety = false;
     const runWorker = async () => {
       while (!stopQueuedWork) {
-        const row = batch[nextIndex];
+        const row = eligibleBatch[nextIndex];
         nextIndex += 1;
         if (!row) return;
+        if (removedRowIdsRef.current.has(row.id)) continue;
+        const episodeKey = normalizeEpisodeValue(row.episode);
+        if (episodeKey && activeBatchEpisodeKeysRef.current.has(episodeKey)) {
+          setRows((current) => current.map((candidate) =>
+            candidate.id === row.id ? { ...candidate, status: 'ready' } : candidate,
+          ));
+          continue;
+        }
         setRows((current) => current.map((candidate) =>
           candidate.id === row.id
             ? { ...candidate, status: 'uploading', error: undefined, progress: undefined }
@@ -119,7 +164,7 @@ export function CreateItemUploadPanel(props: {
         let result: CreateItemUploadOutcome;
         let failureStage: UploadProgress['stage'] = 'validating';
         try {
-          result = await props.onSubmit(
+          result = await onSubmit(
             { title: row.title, episode: row.episode, file: row.file },
             (progress) => {
               failureStage = progress.stage;
@@ -135,6 +180,13 @@ export function CreateItemUploadPanel(props: {
           };
         }
         if (result.outcome === 'success') {
+          if (episodeKey) {
+            activeBatchEpisodeKeysRef.current = new Set([
+              ...activeBatchEpisodeKeysRef.current,
+              episodeKey,
+            ]);
+            setCompletedEpisodeKeys((current) => new Set([...current, episodeKey]));
+          }
           setRows((current) => current.filter((candidate) => candidate.id !== row.id));
         } else {
           const message = result.outcome === 'uncertain' && !result.message.includes('结果不确定')
@@ -155,7 +207,10 @@ export function CreateItemUploadPanel(props: {
 
     try {
       await Promise.all(
-        Array.from({ length: Math.min(MAX_CONCURRENT_V1_UPLOADS, batch.length) }, () => runWorker()),
+        Array.from(
+          { length: Math.min(MAX_CONCURRENT_V1_UPLOADS, eligibleBatch.length) },
+          () => runWorker(),
+        ),
       );
     } finally {
       if (stoppedForSafety) {
@@ -192,6 +247,10 @@ export function CreateItemUploadPanel(props: {
         <span>原片校验通过后会安全上传并创建 V1。</span>
       </div>
       <div className="fj-review-upload-actions">
+        <span
+          className="fj-review-upload-bulk-actions-host"
+          ref={setBulkActionsHost}
+        />
         <input
           ref={fileInputRef}
           aria-label="原片文件（可多选）"
@@ -228,16 +287,22 @@ export function CreateItemUploadPanel(props: {
           type="submit"
           disabled={disabled || !readyRows.length || missingRequired}
         >
-          {props.blockedForListConfirmation ? '请先确认列表' : uploading || props.pending ? '上传中...' : '上传 V1'}
+          {blockedForListConfirmation ? '请先确认列表' : uploading || pending ? '上传中...' : '上传 V1'}
         </button>
       </div>
       {rows.length ? (
-        <div className="fj-review-upload-rows" data-testid="create-item-upload-rows">
+        <div className="fj-review-upload-rows" data-testid="create-item-upload-rows" id="create-item-upload-queue">
           {rows.map((row, index) => {
             const titleId = `${row.id}-title`;
             const episodeId = `${row.id}-episode`;
+            const episodeConflict = conflictsWithExisting(row);
+            const conflictErrorId = `${row.id}-episode-conflict`;
             return (
-              <section className="fj-review-upload-row" data-testid={row.id} key={row.id}>
+              <section
+                className={`fj-review-upload-row${episodeConflict ? ' is-conflict' : ''}`}
+                data-testid={row.id}
+                key={row.id}
+              >
                 <div className="fj-review-upload-row-file">
                   <strong>{row.file.name}</strong>
                   <span>{uploadRowStatus(row.status, index)}</span>
@@ -256,16 +321,44 @@ export function CreateItemUploadPanel(props: {
                   <input
                     id={episodeId}
                     value={row.episode}
+                    aria-describedby={episodeConflict ? conflictErrorId : undefined}
+                    aria-invalid={episodeConflict}
                     disabled={disabled}
                     onChange={(event) => updateRow(row.id, { episode: event.target.value })}
                   />
                 </label>
+                {row.status !== 'uploading' ? (
+                  <button
+                    aria-label={`移除待上传条目 ${row.file.name}`}
+                    className="fj-review-upload-row-remove"
+                    onClick={() => removeRow(row)}
+                    title="从上传队列移除"
+                    type="button"
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                ) : (
+                  <span
+                    aria-hidden="true"
+                    className="fj-review-upload-row-remove-placeholder"
+                  />
+                )}
                 <UploadProgressView progress={row.progress} testId={`${row.id}-progress`} />
+                {episodeConflict ? (
+                  <span
+                    className="fj-review-form-error"
+                    data-testid={`${row.id}-episode-conflict`}
+                    id={conflictErrorId}
+                    role="alert"
+                  >
+                    第{formatEpisodeDisplayValue(row.episode)}集已上传，请修改上传信息
+                  </span>
+                ) : null}
                 {row.error ? <span className="fj-review-form-error" data-testid={`${row.id}-error`} role="alert">{row.error}</span> : null}
                 {row.status === 'failed' || row.status === 'uncertain' ? (
                   <button
                     className="fj-review-secondary fj-review-upload-row-retry"
-                    disabled={disabled || !row.title.trim() || !row.episode.trim()}
+                    disabled={disabled || episodeConflict || !row.title.trim() || !row.episode.trim()}
                     onClick={() => void runBatch([row])}
                     type="button"
                   >

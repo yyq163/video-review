@@ -5,7 +5,7 @@ import {
   useRef,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { frameFromTimestampMs } from '../core/timecode';
+import { frameFromPlaybackPosition } from '../core/timecode';
 import { AnnotationToolbar } from './review-player-annotation-toolbar';
 import { PlaybackControls } from './review-player-playback-controls';
 import { ReviewPlayerStage } from './review-player-stage';
@@ -70,14 +70,16 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
       playbackToTarget: playback.playbackToTarget,
       clearDraft: annotations.clearDraft,
       snapshot() {
-        const frameNumber = frameFromTimestampMs(
-          playback.currentMs,
+        const timestampMs = Math.round(playback.currentMs);
+        const frameNumber = frameFromPlaybackPosition(
+          timestampMs,
+          playback.durationMs,
           props.version.fpsNum,
           props.version.fpsDen,
         );
         const stageRect = stageRef.current?.getBoundingClientRect();
         return {
-          timestampMs: playback.currentMs,
+          timestampMs,
           frameNumber,
           canvasWidth: Math.round(stage.videoRect.width || stageRect?.width || 1280),
           canvasHeight: Math.round(stage.videoRect.height || stageRect?.height || 720),
@@ -89,6 +91,7 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
     [
       annotations.clearDraft,
       playback.currentMs,
+      playback.durationMs,
       playback.playbackToTarget,
       props.version.fpsDen,
       props.version.fpsNum,
@@ -129,8 +132,9 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
   );
   const isToolbarDocked = Boolean(props.annotationToolbarHost);
   const showInlineToolbar = !isToolbarDocked && !props.disableInlineAnnotationToolbar;
-  const currentFrameForAnnotations = frameFromTimestampMs(
+  const currentFrameForAnnotations = frameFromPlaybackPosition(
     playback.currentMs,
+    playback.durationMs,
     props.version.fpsNum,
     props.version.fpsDen,
   );
@@ -179,19 +183,31 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
             selectedIssueId={props.selectedIssueId}
             draftShapes={annotations.draftShapes}
             activeShape={annotations.activeShape}
+            selectedShapeId={annotations.selectedShapeId}
             activeTextShape={activeTextPoint ? activeTextShape : null}
             videoRect={stage.videoRect}
             onBeginDraw={annotations.beginDraw}
             onMoveDraw={annotations.moveDraw}
             onEndDraw={annotations.endDraw}
-            onLoadedMetadata={(video) => {
+            onMediaDimensions={(video) => {
               if (video.videoWidth > 0 && video.videoHeight > 0) {
-                playback.setLoadedMediaDimensions({
-                  versionId: props.version.versionId,
-                  width: video.videoWidth,
-                  height: video.videoHeight,
+                playback.setLoadedMediaDimensions((current) => {
+                  if (
+                    current?.versionId === props.version.versionId &&
+                    current.width === video.videoWidth &&
+                    current.height === video.videoHeight
+                  ) {
+                    return current;
+                  }
+                  return {
+                    versionId: props.version.versionId,
+                    width: video.videoWidth,
+                    height: video.videoHeight,
+                  };
                 });
               }
+            }}
+            onLoadedMetadata={(video) => {
               playback.setDurationMs(
                 Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : props.version.durationMs,
               );

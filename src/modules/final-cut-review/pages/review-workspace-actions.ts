@@ -1,5 +1,5 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react';
-import type { ReviewAnnotationShape, ReviewIssue, ReviewVersion, ReviewWorkspace, UploadProgress } from '../contracts/types';
+import type { IssueStatus, ReviewAnnotationShape, ReviewIssue, ReviewVersion, ReviewWorkspace, UploadProgress } from '../contracts/types';
 import type { ReviewPlayerHandle } from '../components/ReviewPlayer';
 import type { useReviewMutations } from '../entry/use-review-queries';
 import {
@@ -29,6 +29,7 @@ export function useReviewWorkspaceActions(input: {
   draftShapes: ReviewAnnotationShape[];
   setDraftShapes: Dispatch<SetStateAction<ReviewAnnotationShape[]>>;
   setOptimisticIssue: Dispatch<SetStateAction<ReviewIssue | null>>;
+  setOptimisticIssueStatuses: Dispatch<SetStateAction<Record<string, IssueStatus>>>;
   setUploadProgress: Dispatch<SetStateAction<UploadProgress | undefined>>;
   appendVersionProtectionState: AppendVersionProtectionState;
   setAppendVersionProtectionState: Dispatch<SetStateAction<AppendVersionProtectionState>>;
@@ -223,10 +224,36 @@ export function useReviewWorkspaceActions(input: {
       throw error;
     }
   };
-  const resolveIssue = (issue: ReviewIssue) =>
-    input.mutations.resolveIssue.mutate({ ...input.currentInput, issueId: issue.issueId }, { onError: input.showActionError });
-  const reopenIssue = (issue: ReviewIssue) =>
-    input.mutations.reopenIssue.mutate({ ...input.currentInput, issueId: issue.issueId }, { onError: input.showActionError });
+  const resolveIssue = async (issue: ReviewIssue) => {
+    try {
+      const updated = await input.mutations.resolveIssue.mutateAsync({
+        ...input.currentInput,
+        issueId: issue.issueId,
+      });
+      input.setOptimisticIssueStatuses((current) => ({
+        ...current,
+        [updated.issueId]: updated.status,
+      }));
+    } catch (error) {
+      input.showActionError(error);
+      throw error;
+    }
+  };
+  const reopenIssue = async (issue: ReviewIssue) => {
+    try {
+      const updated = await input.mutations.reopenIssue.mutateAsync({
+        ...input.currentInput,
+        issueId: issue.issueId,
+      });
+      input.setOptimisticIssueStatuses((current) => ({
+        ...current,
+        [updated.issueId]: updated.status,
+      }));
+    } catch (error) {
+      input.showActionError(error);
+      throw error;
+    }
+  };
   const deleteIssue = (issue: ReviewIssue) =>
     input.mutations.deleteIssue.mutate(
       { ...input.currentInput, issueId: issue.issueId },

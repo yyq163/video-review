@@ -4,6 +4,10 @@ import {
   normalizedPathToCanvasPath,
   normalizedVideoPointToCanvasPoint,
 } from '../core/coordinates';
+import {
+  annotationArrowRenderMetricsPx,
+  annotationTextRenderWidthPx,
+} from '../core/annotation-drag';
 import { shapeFontSize } from './review-player-annotation-utils';
 
 function renderShape(shape: ReviewAnnotationShape, canvasWidth = 100, canvasHeight = 100): ReactNode {
@@ -30,9 +34,11 @@ function renderShape(shape: ReviewAnnotationShape, canvasWidth = 100, canvasHeig
       canvasHeight,
     });
     const angle = Math.atan2(end.y - start.y, end.x - start.x);
-    const arrowStrokeWidth = Math.max(3, Math.max(1, shape.lineWidth) * 1.2);
-    const haloStrokeWidth = arrowStrokeWidth + 5;
-    const size = Math.max(18, arrowStrokeWidth * 4.8);
+    const {
+      arrowStrokeWidth,
+      haloStrokeWidth,
+      headSize: size,
+    } = annotationArrowRenderMetricsPx(shape.lineWidth);
     const left = {
       x: end.x - size * Math.cos(angle - Math.PI / 6),
       y: end.y - size * Math.sin(angle - Math.PI / 6),
@@ -144,6 +150,8 @@ function renderShape(shape: ReviewAnnotationShape, canvasWidth = 100, canvasHeig
         paintOrder="stroke"
         stroke="rgba(0,0,0,0.58)"
         strokeWidth={Math.max(2, shapeFontSize(shape) * 0.08)}
+        lengthAdjust="spacingAndGlyphs"
+        textLength={annotationTextRenderWidthPx(shape, canvasWidth)}
       >
         {shape.text}
       </text>
@@ -179,6 +187,7 @@ export function SavedAnnotationLayer(props: {
 export function DraftAnnotationLayer(props: {
   draftShapes: ReviewAnnotationShape[];
   activeShape: ReviewAnnotationShape | null;
+  selectedShapeId: string | null;
   canvasWidth: number;
   canvasHeight: number;
   layerStyle: CSSProperties;
@@ -196,7 +205,13 @@ export function DraftAnnotationLayer(props: {
       style={props.layerStyle}
     >
       {props.draftShapes.map((shape) => (
-        <g key={shape.shapeId}>{renderShape(shape, props.canvasWidth, props.canvasHeight)}</g>
+        <g
+          className={shape.shapeId === props.selectedShapeId ? 'fj-review-draft-shape is-selected' : 'fj-review-draft-shape'}
+          data-selected={shape.shapeId === props.selectedShapeId ? 'true' : 'false'}
+          key={shape.shapeId}
+        >
+          {renderShape(shape, props.canvasWidth, props.canvasHeight)}
+        </g>
       ))}
       {activeShape ? (
         <g key={activeShape.shapeId}>{renderShape(activeShape, props.canvasWidth, props.canvasHeight)}</g>

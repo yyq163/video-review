@@ -1,7 +1,24 @@
 import type { ReviewItem, ReviewVersion } from '../contracts/types';
 
+export function normalizeEpisodeValue(episode: string): string {
+  const unwrapped = episode
+    .trim()
+    .replace(/^第\s*/, '')
+    .replace(/\s*集$/, '')
+    .replace(/\s+/g, ' ');
+  if (/^\d+$/.test(unwrapped)) {
+    return String(Number.parseInt(unwrapped, 10));
+  }
+  return unwrapped || episode;
+}
+
+export function formatEpisodeDisplayValue(episode: string): string {
+  const normalized = normalizeEpisodeValue(episode);
+  return /^\d+$/.test(normalized) ? normalized.padStart(2, '0') : normalized;
+}
+
 function episodeKey(item: ReviewItem): string {
-  return item.episode.trim().replace(/^第\s*/, '').replace(/\s*集$/, '').replace(/\s+/g, ' ') || item.episode;
+  return normalizeEpisodeValue(item.episode);
 }
 
 function versionCount(item: ReviewItem, versionsByItem?: Record<string, ReviewVersion[]>): number {

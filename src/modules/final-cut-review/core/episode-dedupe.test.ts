@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ReviewItem, ReviewVersion } from '../contracts/types';
-import { dedupeReviewItemsByEpisode, groupReviewItemsByEpisode } from './episode-dedupe';
+import {
+  dedupeReviewItemsByEpisode,
+  formatEpisodeDisplayValue,
+  groupReviewItemsByEpisode,
+  normalizeEpisodeValue,
+} from './episode-dedupe';
 
 function item(input: Partial<ReviewItem> & Pick<ReviewItem, 'reviewItemId' | 'episode'>): ReviewItem {
   return {
@@ -20,6 +25,21 @@ function versions(count: number): ReviewVersion[] {
 }
 
 describe('dedupeReviewItemsByEpisode', () => {
+  it('uses one numeric identity for 3, 03, and wrapped episode labels while displaying two digits', () => {
+    expect(normalizeEpisodeValue('3')).toBe('3');
+    expect(normalizeEpisodeValue('03')).toBe('3');
+    expect(normalizeEpisodeValue('第 03 集')).toBe('3');
+    expect(formatEpisodeDisplayValue('3')).toBe('03');
+    expect(formatEpisodeDisplayValue('第 03 集')).toBe('03');
+
+    const grouped = groupReviewItemsByEpisode([
+      item({ reviewItemId: 'item_ep3_plain', episode: '3' }),
+      item({ reviewItemId: 'item_ep3_padded', episode: '03' }),
+    ]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]?.items).toHaveLength(2);
+  });
+
   it('keeps one representative per episode and prefers the item with more versions', () => {
     const result = dedupeReviewItemsByEpisode(
       [

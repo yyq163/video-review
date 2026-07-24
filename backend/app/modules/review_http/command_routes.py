@@ -422,8 +422,8 @@ def edit_update_item(project_ref_id: str, review_item_id: str, envelope: Command
 
 
 @router.post("/edit/projects/{project_ref_id}/items/{review_item_id}/delete")
-def edit_delete_item(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("edit", "DeleteReviewItem", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, None, if_match)
+def edit_delete_item(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+    return _execute("edit", "DeleteReviewItem", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match)
 
 
 @router.post("/edit/projects/{project_ref_id}/items/{review_item_id}/versions")

@@ -1253,7 +1253,7 @@ describe('ProjectDetailPage archive workflow', () => {
     setItem.mockRestore();
   });
 
-  it('keeps one episode row while exposing a pending duplicate item for deletion', async () => {
+  it('keeps the existing episode row while exposing a newly uploaded pending item for deletion', async () => {
     const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
@@ -1262,16 +1262,16 @@ describe('ProjectDetailPage archive workflow', () => {
     await userEvent.upload(screen.getByTestId('create-item-file'), new File(['v1'], '王爷28-duplicate.mp4', { type: 'video/mp4' }));
     const row = screen.getByTestId('upload-row-0');
     await userEvent.clear(within(row).getByLabelText('成片标题'));
-    await userEvent.type(within(row).getByLabelText('成片标题'), '第 28 集误传');
+    await userEvent.type(within(row).getByLabelText('成片标题'), '第 29 集误传');
     await userEvent.clear(within(row).getByLabelText('集数'));
-    await userEvent.type(within(row).getByLabelText('集数'), '28');
+    await userEvent.type(within(row).getByLabelText('集数'), '29');
     await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
 
     expect(screen.getAllByText(/原文件：.* · 2个版本 · 当前 V2/)).toHaveLength(1);
-    await userEvent.click(await screen.findByRole('button', { name: '删除分集 第 28 集误传' }));
+    await userEvent.click(await screen.findByRole('button', { name: '删除分集 第 29 集误传' }));
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('审核开始前去重'));
-    await waitFor(() => expect(screen.queryByRole('button', { name: '删除分集 第 28 集误传' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('button', { name: '删除分集 第 29 集误传' })).not.toBeInTheDocument());
     expect(screen.getAllByText(/原文件：.* · 2个版本 · 当前 V2/)).toHaveLength(1);
     expect(await screen.findByText('分集已删除，列表已刷新。')).toBeInTheDocument();
 
@@ -1601,6 +1601,30 @@ describe('AppendVersionPanel component', () => {
 });
 
 describe('ReviewWorkspacePage issue playback', () => {
+  it('marks only the selected edit-entry issues as modified through the real workspace adapter', async () => {
+    const rendered = renderEditReviewWorkspace();
+    const resolveIssue = vi.spyOn(rendered.runtime.getApi('edit'), 'resolveIssue');
+    await screen.findByTestId('review-player');
+
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择意见 #002' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择意见 #004' }));
+    await userEvent.click(screen.getByRole('button', { name: '批量标记已修改（2）' }));
+
+    await waitFor(() => expect(resolveIssue).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.getByTestId('issue-issue_v2_001')).toHaveTextContent('已修改');
+      expect(screen.getByTestId('issue-issue_v2_003')).toHaveTextContent('已修改');
+    });
+    expect(screen.getByTestId('issue-issue_v2_002')).toHaveTextContent('未修改');
+    expect(resolveIssue.mock.calls.map(([input]) => input.issueId)).toEqual([
+      'issue_v2_001',
+      'issue_v2_003',
+    ]);
+
+    rendered.unmount();
+    cleanupRuntime(rendered.runtime, rendered.queryClient);
+  });
+
   it('keeps an appended version successful when the version-list refresh fails', async () => {
     const rendered = renderEditReviewWorkspace();
     const editApi = rendered.runtime.getApi('edit');
@@ -1904,6 +1928,7 @@ describe('ReviewWorkspacePage issue playback', () => {
     const compare = await screen.findByTestId('version-compare-panel');
     const workspaceFrame = await screen.findByTestId('review-workspace-frame');
 
+    expect(screen.getByText('第28集', { selector: '.fj-review-workspace-title > strong' })).toBeInTheDocument();
     expect(toolbarDock.closest('.fj-review-workspace-head')).not.toBeNull();
     expect(toolbarDock.closest('.fj-review-main-column')).not.toBeNull();
     expect(toolbarDock.closest('.fj-review-player-card')).toBeNull();
@@ -1955,6 +1980,93 @@ describe('ReviewWorkspacePage issue playback', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '撤销' })).toBeDisabled());
     expect(screen.getByRole('button', { name: '重做' })).toBeDisabled();
     expect(player.querySelectorAll('.fj-review-annotation-layer rect')).toHaveLength(0);
+
+    cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
+  });
+
+  it('persists the moved complete annotation geometry instead of reverting to its creation position', async () => {
+    const runtimeResult = renderReviewWorkspace();
+    const reviewApi = runtimeResult.runtime.getApi('review');
+    const createIssue = vi.spyOn(reviewApi, 'createIssue');
+    const player = await screen.findByTestId('review-player');
+    const stage = player.querySelector('.fj-review-video-frame') as HTMLDivElement;
+    vi.spyOn(stage, 'getBoundingClientRect').mockReturnValue({
+      x: 20,
+      y: 120,
+      left: 20,
+      top: 120,
+      right: 820,
+      bottom: 570,
+      width: 800,
+      height: 450,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    await userEvent.click(screen.getByRole('button', { name: '矩形' }));
+    fireEvent.pointerDown(stage, {
+      clientX: 300,
+      clientY: 220,
+      pointerId: 21,
+      pointerType: 'mouse',
+      button: 0,
+    });
+    fireEvent.pointerMove(stage, {
+      clientX: 420,
+      clientY: 340,
+      pointerId: 21,
+      pointerType: 'mouse',
+      button: 0,
+    });
+    fireEvent.pointerUp(stage, {
+      clientX: 420,
+      clientY: 340,
+      pointerId: 21,
+      pointerType: 'mouse',
+      button: 0,
+    });
+    await waitFor(() => expect(player.querySelector('.fj-review-draft-shape.is-selected')).not.toBeNull());
+
+    fireEvent.pointerDown(stage, {
+      clientX: 360,
+      clientY: 280,
+      pointerId: 22,
+      pointerType: 'mouse',
+      button: 0,
+    });
+    fireEvent.pointerMove(stage, {
+      clientX: 440,
+      clientY: 325,
+      pointerId: 22,
+      pointerType: 'mouse',
+      button: 0,
+    });
+    fireEvent.pointerUp(stage, {
+      clientX: 440,
+      clientY: 325,
+      pointerId: 22,
+      pointerType: 'mouse',
+      button: 0,
+    });
+
+    const body = '保存移动后矩形位置';
+    await userEvent.type(screen.getByPlaceholderText('针对当前版本输入意见'), body);
+    await userEvent.click(screen.getByRole('button', { name: '提交意见' }));
+    await waitFor(() => expect(createIssue).toHaveBeenCalledOnce());
+    const submittedShape = createIssue.mock.calls[0][0].shapes[0];
+    expect(submittedShape.bounds?.x).toBeGreaterThan(0.4);
+    expect(submittedShape.bounds?.y).toBeGreaterThan(0.3);
+    const createdIssue = await createIssue.mock.results[0].value;
+    expect(createdIssue.currentAnnotationSet?.shapes[0]).toEqual(submittedShape);
+
+    const savedWorkspace = await reviewApi.getWorkspace({
+      projectRefId: 'prj_seed_final_cut',
+      reviewItemId: 'item_ep28',
+    });
+    const savedIssue = savedWorkspace.currentIssues.find(
+      (issue) => issue.issueId === createdIssue.issueId,
+    );
+    expect(savedIssue).toBeDefined();
+    expect(savedIssue?.currentAnnotationSet?.shapes[0]).toEqual(submittedShape);
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
@@ -2214,8 +2326,8 @@ describe('ReviewPlayer component', () => {
     if (!draftShape?.points?.[0]) throw new Error('文字批注测试草稿缺少坐标');
     draftShape.points[0] = { x: Number.POSITIVE_INFINITY, y: Number.NaN };
     fireEvent.change(screen.getByLabelText('文字批注内容'), { target: { value: '异常坐标仍需约束' } });
-    expect(Number.parseFloat(editor.style.left)).toBe(0);
-    expect(Number.parseFloat(editor.style.top)).toBe(0);
+    expect(Number.parseFloat(editor.style.left)).toBeGreaterThanOrEqual(0);
+    expect(Number.parseFloat(editor.style.top)).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(Number.parseFloat(editor.style.width))).toBe(true);
     expect(Number.isFinite(Number.parseFloat(editor.style.height))).toBe(true);
 
@@ -2282,11 +2394,13 @@ describe('ReviewPlayer component', () => {
     ]);
 
     fireEvent.pointerDown(stage, { clientX: 40, clientY: 20, pointerId: 2 });
+    fireEvent.pointerUp(stage, { clientX: 40, clientY: 20, pointerId: 2 });
     input = await screen.findByLabelText('文字批注内容');
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.queryByTestId('text-annotation-editor')).not.toBeInTheDocument();
 
     fireEvent.pointerDown(stage, { clientX: 40, clientY: 20, pointerId: 3 });
+    fireEvent.pointerUp(stage, { clientX: 40, clientY: 20, pointerId: 3 });
     expect(await screen.findByTestId('text-annotation-editor')).toBeInTheDocument();
     rerender(<ReviewPlayer version={seed.versions[0]} {...commonProps} />);
     expect(screen.queryByTestId('text-annotation-editor')).not.toBeInTheDocument();
@@ -2498,6 +2612,93 @@ describe('ReviewPlayer component', () => {
     await waitFor(() => expect(screen.getByTestId('current-frame')).toHaveTextContent('1'));
   });
 
+  it('keeps global frame shortcuts active when the non-control workspace scroll region has focus', async () => {
+    const seed = createSeedData();
+    render(
+      <section aria-label="审片主工作区" tabIndex={0}>
+        <ReviewPlayer
+          version={seed.versions[1]}
+          issues={[]}
+          selectedAnnotationSet={null}
+          onTimeChange={vi.fn()}
+          onDraftChange={vi.fn()}
+          onSelectIssue={vi.fn()}
+          onPlaybackError={vi.fn()}
+        />
+      </section>,
+    );
+
+    screen.getByRole('region', { name: '审片主工作区' }).focus();
+    fireEvent.keyDown(document.activeElement ?? document, { key: 'ArrowRight' });
+
+    await waitFor(() => expect(screen.getByTestId('current-frame')).toHaveTextContent('1'));
+  });
+
+  it('centers fitted video and annotation layers on the same contained media rect', async () => {
+    const seed = createSeedData();
+    let resizeCallback: ResizeObserverCallback | null = null;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallback = callback;
+        }
+        observe() {
+          return undefined;
+        }
+        disconnect() {
+          return undefined;
+        }
+      },
+    );
+
+    const { container } = render(
+      <ReviewPlayer
+        version={{
+          ...seed.versions[1],
+          width: 1920,
+          height: 1080,
+          originalMedia: { ...seed.versions[1].originalMedia, width: 1920, height: 1080 },
+        }}
+        issues={[]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+
+    const stage = container.querySelector('.fj-review-video-frame') as HTMLDivElement;
+    vi.spyOn(stage, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 160,
+      bottom: 100,
+      width: 160,
+      height: 100,
+      toJSON: () => ({}),
+    } as DOMRect);
+    act(() => {
+      resizeCallback?.([], {} as ResizeObserver);
+    });
+
+    const video = container.querySelector('video') as HTMLVideoElement;
+    const layer = await screen.findByTestId('saved-annotation-layer');
+    await waitFor(() => expect(video).toHaveStyle({
+      height: '90px',
+      top: '5px',
+      width: '160px',
+    }));
+    expect(layer).toHaveStyle({
+      height: '90px',
+      top: '5px',
+      width: '160px',
+    });
+  });
+
   it('resizes the player frame and annotation viewBox from real loaded video metadata', async () => {
     const seed = createSeedData();
     const { container } = render(
@@ -2526,6 +2727,40 @@ describe('ReviewPlayer component', () => {
     fireEvent.loadedMetadata(video);
 
     await waitFor(() => expect(screen.getByTestId('saved-annotation-layer')).toHaveAttribute('viewBox', '0 0 3840 2160'));
+  });
+
+  it('recovers late ultra-wide media dimensions instead of keeping a stale 16:9 stage', async () => {
+    const seed = createSeedData();
+    const { container } = render(
+      <ReviewPlayer
+        version={{
+          ...seed.versions[1],
+          width: 1920,
+          height: 1080,
+          originalMedia: { ...seed.versions[1].originalMedia, width: 1920, height: 1080 },
+        }}
+        issues={[]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+
+    const playerStage = container.querySelector('.fj-review-player-stage') as HTMLDivElement;
+    const video = container.querySelector('video') as HTMLVideoElement;
+    expect(playerStage).toHaveStyle({ aspectRatio: '1920 / 1080' });
+
+    Object.defineProperty(video, 'videoWidth', { configurable: true, value: 0 });
+    Object.defineProperty(video, 'videoHeight', { configurable: true, value: 0 });
+    fireEvent.loadedMetadata(video);
+
+    Object.defineProperty(video, 'videoWidth', { configurable: true, value: 1942 });
+    Object.defineProperty(video, 'videoHeight', { configurable: true, value: 480 });
+    fireEvent.resize(video);
+
+    await waitFor(() => expect(playerStage).toHaveStyle({ aspectRatio: '1942 / 480' }));
   });
 
   it('uses loaded playback metadata for the visible media rectangle even when it differs from stored version dimensions', async () => {
@@ -2595,6 +2830,47 @@ describe('ReviewPlayer component', () => {
     await waitFor(() => expect(layer).toHaveStyle({ left: '796.875px', top: '0px', width: '506.25px', height: '900px' }));
     expect(video).toHaveStyle({ left: '796.875px', top: '0px', width: '506.25px', height: '900px' });
     expect(screen.getByRole('button', { name: '适应窗口' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('rounds fractional media time before exposing an issue snapshot to the integer API contract', async () => {
+    const seed = createSeedData();
+    const playerRef = createRef<ReviewPlayerHandle>();
+    render(
+      <ReviewPlayer
+        ref={playerRef}
+        version={{ ...seed.versions[1], durationMs: 100_000, fpsNum: 30, fpsDen: 1 }}
+        issues={[]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+
+    const timeline = screen.getByTestId('video-edge-timeline');
+    timeline.getBoundingClientRect = () => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 20,
+      width: 1000,
+      height: 20,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(timeline, {
+      clientX: 427.1047105978261,
+      pointerId: 9,
+      pointerType: 'mouse',
+      button: 0,
+    });
+
+    await waitFor(() => expect(playerRef.current?.snapshot()).toEqual(expect.objectContaining({
+      timestampMs: 42710,
+      frameNumber: 1281,
+    })));
   });
 
   it('submits the visible timecode input value even when state change was not dispatched', async () => {
@@ -2746,6 +3022,12 @@ describe('ReviewPlayer component', () => {
     expect(track).toContainElement(openMarker);
     expect(track).toContainElement(resolvedMarker);
     expect(openMarker.querySelector('svg')).toBeInTheDocument();
+    expect(openMarker.querySelectorAll('svg circle')).toHaveLength(1);
+    expect(openMarker.querySelector('svg path')).toBeInTheDocument();
+    expect(openMarker).toHaveTextContent('未修改');
+    expect(resolvedMarker).toHaveTextContent('已修改');
+    expect(openMarker.querySelector('.fj-review-opinion-status')).toHaveClass('fj-review-sr-only');
+    expect(resolvedMarker.querySelector('.fj-review-opinion-status')).toHaveClass('fj-review-sr-only');
     expect(openMarker).toHaveClass('is-open');
     expect(resolvedMarker).toHaveClass('is-resolved');
     expect(openMarker.tagName).toBe('BUTTON');
@@ -2769,9 +3051,74 @@ describe('ReviewPlayer component', () => {
     expect(onSelectIssue).toHaveBeenCalledTimes(3);
 
     const css = readFileSync(resolve(process.cwd(), 'src/modules/final-cut-review/styles/fj-review.css'), 'utf8');
-    expect(css).toMatch(/\.fj-review-opinion-track\s*\{[^}]*min-height:\s*44px;/s);
-    expect(css).toMatch(/\.fj-review-timeline-marker\s*\{[^}]*height:\s*44px;[^}]*width:\s*44px;/s);
-    expect(css).toMatch(/\.fj-review-player-card\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto;/s);
+    expect(css).toMatch(/\.fj-review-opinion-track\s*\{[^}]*min-height:\s*34px;/s);
+    expect(css).toMatch(
+      /\.fj-review-opinion-track\s*\{[^}]*background:\s*transparent;[^}]*z-index:\s*1;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-edge-timeline\s*\{[^}]*height:\s*4px;[^}]*z-index:\s*2;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-range\s+input\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;[^}]*padding:\s*0;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-edge-timeline:has\(input:focus-visible\)\s*\{[^}]*outline:\s*2px\s+solid\s+var\(--fj-review-aqua\);[^}]*outline-offset:\s*2px;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-edge-timeline\s*>\s*span\s*\{[^}]*top:\s*0;[^}]*transform:\s*none;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-edge-timeline::before\s*\{[^}]*top:\s*0;[^}]*transform:\s*none;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-root\s+\.fj-review-timeline-marker\s*\{[^}]*align-items:\s*flex-start;[^}]*box-sizing:\s*border-box;[^}]*height:\s*44px;[^}]*padding:\s*4px\s+0\s+0;[^}]*width:\s*44px;/s,
+    );
+    expect(css).not.toMatch(
+      /\.fj-review-timeline-marker\.is-selected\s+\.fj-review-opinion-avatar\s*\{[^}]*box-shadow:/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-timeline-marker:focus-visible\s+\.fj-review-opinion-avatar\s*\{[^}]*box-shadow:\s*0\s+0\s+0\s+3px\s+var\(--fj-review-aqua\),\s*0\s+0\s+0\s+5px\s+#030404;/s,
+    );
+    expect(css).not.toMatch(
+      /\.fj-review-timeline-marker:focus-visible\s*\{[^}]*outline:\s*2px\s+solid\s+var\(--fj-review-aqua\)/s,
+    );
+    expect(css).toMatch(/\.fj-review-player-card\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+auto;/s);
+  });
+
+  it('lets ultra-wide media shrink the stage to its natural ratio without a fixed player height', () => {
+    const seed = createSeedData();
+    const version = {
+      ...seed.versions[1],
+      width: 1942,
+      height: 480,
+      originalMedia: {
+        ...seed.versions[1].originalMedia,
+        width: 1942,
+        height: 480,
+      },
+    };
+    const { container } = render(
+      <ReviewPlayer
+        version={version}
+        issues={[]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector('.fj-review-player-stage')).toHaveStyle({
+      aspectRatio: '1942 / 480',
+    });
+    const css = readFileSync(resolve(process.cwd(), 'src/modules/final-cut-review/styles/fj-review.css'), 'utf8');
+    expect(css).not.toMatch(
+      /\.fj-review-root-viewport-locked\s+\.fj-review-player-shell\s*\{[^}]*height:\s*var\(--fj-review-main-player-height\)/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-player-stage\s*\{[^}]*max-height:\s*calc\(var\(--fj-review-main-player-height\)\s*-\s*104px\)/s,
+    );
   });
 
   it('keeps a user pause benign when it interrupts a pending play request before repeated seeks', async () => {
@@ -3110,8 +3457,8 @@ describe('ReviewPlayer component', () => {
     secondInput.value = '00:00:05:00';
     await userEvent.click(screen.getByRole('button', { name: '跳转' }));
 
-    await waitFor(() => expect(screen.getByTestId('current-timecode')).toHaveTextContent('00:00:00:12'));
-    expect(screen.getByTestId('current-frame')).toHaveTextContent('12');
+    await waitFor(() => expect(screen.getByTestId('current-timecode')).toHaveTextContent('00:00:00:11'));
+    expect(screen.getByTestId('current-frame')).toHaveTextContent('11');
     expect(onTimeChange).toHaveBeenLastCalledWith(480);
     expect(onDraftChange).toHaveBeenLastCalledWith([]);
   });

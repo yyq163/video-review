@@ -25,6 +25,18 @@ export function IssueCard(props: IssueCardProps) {
       data-issue-id={props.issue.issueId}
       data-version-id={props.issue.versionId}
     >
+      {props.batchSelectable ? (
+        <label className="fj-review-issue-batch-select">
+          <input
+            aria-label={`选择意见 #${props.issue.issueNo.toString().padStart(3, '0')}`}
+            checked={props.batchSelected}
+            disabled={props.pending || localSubmitting}
+            onChange={(event) => props.onBatchSelect?.(props.issue, event.currentTarget.checked)}
+            type="checkbox"
+          />
+          <span>加入批量标记</span>
+        </label>
+      ) : null}
       <button className="fj-review-issue-select" type="button" onClick={() => props.onSelect(props.issue)}>
         <strong>#{props.issue.issueNo.toString().padStart(3, '0')}</strong>
         <span>{props.issue.body}</span>
@@ -213,17 +225,34 @@ export function IssueCard(props: IssueCardProps) {
       {canChangeStatus ? (
         <CapabilityGate entryMode={props.entryMode} capability={props.issue.status === 'unresolved' ? 'review.issue.resolve' : 'review.issue.reopen'}>
           {props.issue.status === 'unresolved' ? (
-            <button className="fj-review-secondary" onClick={() => props.onResolve(props.issue)} disabled={props.pending || localSubmitting}>
+            <button
+              className="fj-review-secondary"
+              onClick={() => {
+                void Promise.resolve(props.onResolve(props.issue)).catch(() => undefined);
+              }}
+              disabled={props.pending || localSubmitting}
+            >
               <ShieldCheck />
               标记已修改
             </button>
           ) : (
-            <button className="fj-review-secondary" onClick={() => props.onReopen(props.issue)} disabled={props.pending || localSubmitting}>
+            <button
+              className="fj-review-secondary"
+              onClick={() => {
+                void Promise.resolve(props.onReopen(props.issue)).catch(() => undefined);
+              }}
+              disabled={props.pending || localSubmitting}
+            >
               <RotateCcw />
               重新打开为未修改
             </button>
           )}
         </CapabilityGate>
+      ) : null}
+      {props.batchError ? (
+        <span className="fj-review-form-error" role="alert">
+          {props.batchError}
+        </span>
       ) : null}
     </article>
   );

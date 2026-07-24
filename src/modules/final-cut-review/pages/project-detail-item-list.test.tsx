@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type {
@@ -9,6 +11,7 @@ import type {
   ReviewIssue,
   ReviewVersion,
 } from '../contracts/types';
+import { DeleteReviewItemResultUncertainError } from '../adapters/http-review-uploads';
 import { createSeedData } from '../core/seed';
 import {
   ReviewRuntimeProvider,
@@ -145,6 +148,35 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('ProjectDetailItemList finalized row state', () => {
+  it('marks the entire finalized episode row without changing non-finalized rows', () => {
+    const finalizedFixture = createDeleteGateFixture();
+    finalizedFixture.item = {
+      ...finalizedFixture.item,
+      reviewItemId: 'item_finalized_row',
+      currentVersionId: 'version_finalized_row_v1',
+      status: 'finalized',
+    };
+    finalizedFixture.versions = [{
+      ...finalizedFixture.versions[0],
+      reviewItemId: finalizedFixture.item.reviewItemId,
+      versionId: finalizedFixture.item.currentVersionId,
+      status: 'finalized',
+    }];
+    renderDeleteGate(finalizedFixture);
+
+    const finalizedBadge = screen.getByText('已定稿');
+    expect(finalizedBadge.closest('article')).toHaveClass('is-finalized');
+
+    cleanup();
+
+    const pendingFixture = createDeleteGateFixture();
+    renderDeleteGate(pendingFixture);
+    const pendingBadge = screen.getByText('待审');
+    expect(pendingBadge.closest('article')).not.toHaveClass('is-finalized');
+  });
+});
+
 describe('ProjectDetailItemList single-item delete gate', () => {
   const hiddenCases: Array<{
     apply: (fixture: DeleteGateFixture) => void;
@@ -273,5 +305,404 @@ describe('ProjectDetailItemList single-item delete gate', () => {
       expect.objectContaining({ entryMode: 'edit' }),
     );
     expect(await screen.findByText('分集已删除，列表已刷新。')).toBeInTheDocument();
+  });
+});
+
+describe('ProjectDetailItemList batch delete', () => {
+  it('keeps an immediately visible uncertain delete locked instead of calling it safe to retry', async () => {
+    const runtime = createReviewRuntime();
+    activeRuntimes.push(runtime);
+    const editApi = runtime.getApi('edit');
+    const created = await editApi.createReviewItemWithVersion(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        title: '即时仍可见的不确定删除',
+        episode: '03',
+        file: new File(['uncertain-delete'], 'uncertain-delete.mp4', { type: 'video/mp4' }),
+      },
+      editApi.entryPolicy.createContext('edit'),
+    );
+    vi.spyOn(editApi, 'deleteReviewItem').mockRejectedValue(
+      new DeleteReviewItemResultUncertainError(new TypeError('lost response')),
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    activeQueryClients.push(queryClient);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ReviewRuntimeProvider runtime={runtime}>
+          <MemoryRouter initialEntries={['/edit/projects/prj_seed_final_cut']}>
+            <Routes>
+              <Route
+                path="/edit/projects/:projectRefId"
+                element={<ProjectDetailPage entryMode="edit" />}
+              />
+            </Routes>
+          </MemoryRouter>
+        </ReviewRuntimeProvider>
+      </QueryClientProvider>,
+    );
+
+    const selector = await screen.findByRole('checkbox', { name: '选择第03集' });
+    await userEvent.click(selector);
+    await userEvent.click(screen.getByRole('button', { name: '批量删除（1）' }));
+
+    await waitFor(() => expect(selector).toBeDisabled());
+    expect(screen.getByText(/删除结果不确定，已锁定/)).toBeInTheDocument();
+    expect(screen.queryByText(/可安全重试/)).not.toBeInTheDocument();
+    expect(screen.getByText(/不确定 1 条/)).toBeInTheDocument();
+    expect(created.item.reviewItemId).toBeTruthy();
+  });
+
+  it('preserves the selected representative for a duplicate episode until that item is deleted', () => {
+    const seed = createSeedData();
+    const first = {
+      ...createDeleteGateFixture().item,
+      reviewItemId: 'duplicate-first',
+      currentVersionId: 'duplicate-first-v1',
+      episode: '90',
+      title: '先返回但不是代表项',
+    };
+    const representative = {
+      ...first,
+      reviewItemId: 'duplicate-representative',
+      currentVersionId: 'duplicate-representative-v1',
+      title: '按版本和更新时间选出的代表项',
+    };
+    const versionsByItem = {
+      [first.reviewItemId]: [{
+        ...seed.versions[0],
+        reviewItemId: first.reviewItemId,
+        versionId: first.currentVersionId,
+      }],
+      [representative.reviewItemId]: [{
+        ...seed.versions[0],
+        reviewItemId: representative.reviewItemId,
+        versionId: representative.currentVersionId,
+      }],
+    };
+    const runtime = createReviewRuntime();
+    activeRuntimes.push(runtime);
+
+    render(
+      <ReviewRuntimeProvider runtime={runtime}>
+        <MemoryRouter>
+          <ProjectDetailItemList
+            entryMode="edit"
+            episodeGroups={[{
+              episodeKey: first.episode,
+              representative,
+              items: [first, representative],
+            }]}
+            finalizations={[]}
+            isArchived={false}
+            issuesByVersion={{
+              [first.currentVersionId]: [],
+              [representative.currentVersionId]: [],
+            }}
+            itemActionPending={false}
+            onBulkDeleteReviewItems={vi.fn()}
+            onDeleteReviewItem={vi.fn()}
+            onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
+            projectRefId={first.projectRefId}
+            versionsByItem={versionsByItem}
+          />
+        </MemoryRouter>
+      </ReviewRuntimeProvider>,
+    );
+
+    expect(screen.getByRole('link', { name: '查看与追加' })).toHaveAttribute(
+      'href',
+      expect.stringContaining(representative.reviewItemId),
+    );
+    const duplicateSelectors = screen.getAllByRole('checkbox', { name: '选择第90集' });
+    expect(duplicateSelectors).toHaveLength(2);
+    expect(duplicateSelectors[0]).toHaveAttribute(
+      'aria-describedby',
+      `delete-target-${first.reviewItemId}`,
+    );
+    expect(duplicateSelectors[1]).toHaveAttribute(
+      'aria-describedby',
+      `delete-target-${representative.reviewItemId}`,
+    );
+    expect(document.getElementById(`delete-target-${first.reviewItemId}`)).toHaveTextContent(
+      first.title,
+    );
+    expect(document.getElementById(`delete-target-${representative.reviewItemId}`)).toHaveTextContent(
+      representative.title,
+    );
+  });
+
+  it('confirms the exact count, continues after a failure, and retains only failed selections', async () => {
+    const seed = createSeedData();
+    const items = Array.from({ length: 3 }, (_, index) => ({
+      ...createDeleteGateFixture().item,
+      reviewItemId: `batch-delete-${index + 1}`,
+      currentVersionId: `batch-delete-version-${index + 1}`,
+      episode: String(90 + index),
+      title: `批量删除 ${index + 1}`,
+    }));
+    const versions = Object.fromEntries(items.map((item, index) => [
+      item.reviewItemId,
+      [{
+        ...seed.versions[0],
+        reviewItemId: item.reviewItemId,
+        versionId: item.currentVersionId,
+        originalFileId: `original-file-${index + 1}`,
+        originalMedia: {
+          ...seed.versions[0].originalMedia,
+          originalFileId: `original-file-${index + 1}`,
+          originalFilename: '相同文件名.mp4',
+        },
+      }],
+    ]));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onBulkDeleteReviewItems = vi.fn(async () => ({
+      succeededIds: [items[0].reviewItemId],
+      failures: { [items[1].reviewItemId]: '精确资源删除失败' },
+      uncertainIds: [items[2].reviewItemId],
+    }));
+    const runtime = createReviewRuntime();
+    activeRuntimes.push(runtime);
+
+    render(
+      <ReviewRuntimeProvider runtime={runtime}>
+        <MemoryRouter>
+          <ProjectDetailItemList
+            entryMode="edit"
+            episodeGroups={items.map((item) => ({
+              episodeKey: item.episode,
+              representative: item,
+              items: [item],
+            }))}
+            finalizations={[]}
+            isArchived={false}
+            issuesByVersion={Object.fromEntries(
+              Object.values(versions).flat().map((version) => [version.versionId, []]),
+            )}
+            itemActionPending={false}
+            onBulkDeleteReviewItems={onBulkDeleteReviewItems}
+            onDeleteReviewItem={vi.fn()}
+            onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
+            projectRefId={items[0].projectRefId}
+            versionsByItem={versions}
+          />
+        </MemoryRouter>
+      </ReviewRuntimeProvider>,
+    );
+
+    await userEvent.click(screen.getByRole('checkbox', { name: '全选可删除分集' }));
+    await userEvent.click(screen.getByRole('button', { name: '批量删除（3）' }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('3'));
+    expect(onBulkDeleteReviewItems).toHaveBeenCalledWith(items);
+    expect(await screen.findByText('精确资源删除失败')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '批量删除（1）' })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: `选择第${items[1].episode}集` })).toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: `选择第${items[0].episode}集` })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: `选择第${items[2].episode}集` })).toBeDisabled();
+    expect(screen.getByRole('button', { name: `删除分集 ${items[2].title}` })).toBeDisabled();
+    expect(screen.getByTestId(`batch-delete-uncertain-${items[2].reviewItemId}`)).toHaveTextContent(
+      '删除结果不确定',
+    );
+    expect(versions[items[0].reviewItemId][0].originalMedia.originalFilename).toBe(
+      versions[items[1].reviewItemId][0].originalMedia.originalFilename,
+    );
+  });
+
+  it('keeps direct selection and select-all deselection stable without losing sibling state', async () => {
+    const seed = createSeedData();
+    const items = Array.from({ length: 3 }, (_, index) => ({
+      ...createDeleteGateFixture().item,
+      reviewItemId: `selection-stability-${index + 1}`,
+      currentVersionId: `selection-stability-version-${index + 1}`,
+      episode: String(70 + index),
+      title: `选择稳定性 ${index + 1}`,
+    }));
+    const versionsByItem = Object.fromEntries(items.map((item) => [
+      item.reviewItemId,
+      [{
+        ...seed.versions[0],
+        reviewItemId: item.reviewItemId,
+        versionId: item.currentVersionId,
+      }],
+    ]));
+    const runtime = createReviewRuntime();
+    activeRuntimes.push(runtime);
+
+    render(
+      <ReviewRuntimeProvider runtime={runtime}>
+        <MemoryRouter>
+          <ProjectDetailItemList
+            entryMode="edit"
+            episodeGroups={items.map((item) => ({
+              episodeKey: item.episode,
+              representative: item,
+              items: [item],
+            }))}
+            finalizations={[]}
+            isArchived={false}
+            issuesByVersion={Object.fromEntries(
+              Object.values(versionsByItem).flat().map((version) => [version.versionId, []]),
+            )}
+            itemActionPending={false}
+            onBulkDeleteReviewItems={vi.fn()}
+            onDeleteReviewItem={vi.fn()}
+            onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
+            projectRefId={items[0].projectRefId}
+            versionsByItem={versionsByItem}
+          />
+        </MemoryRouter>
+      </ReviewRuntimeProvider>,
+    );
+
+    const first = screen.getByRole('checkbox', { name: `选择第${items[0].episode}集` });
+    const second = screen.getByRole('checkbox', { name: `选择第${items[1].episode}集` });
+    const selectAll = screen.getByRole('checkbox', { name: '全选可删除分集' });
+    await userEvent.click(first);
+    expect(first).toBeChecked();
+    expect(second).not.toBeChecked();
+    expect(selectAll).not.toBeChecked();
+    expect(selectAll).toHaveProperty('indeterminate', true);
+
+    await userEvent.click(selectAll);
+    expect(first).toBeChecked();
+    expect(second).toBeChecked();
+    expect(selectAll).toBeChecked();
+    expect(selectAll).toHaveProperty('indeterminate', false);
+
+    await userEvent.click(first);
+    expect(first).not.toBeChecked();
+    expect(second).toBeChecked();
+    expect(selectAll).not.toBeChecked();
+    expect(selectAll).toHaveProperty('indeterminate', true);
+
+    await userEvent.click(first);
+    expect(first).toBeChecked();
+    expect(second).toBeChecked();
+    expect(selectAll).toBeChecked();
+    expect(selectAll).toHaveProperty('indeterminate', false);
+  });
+
+  it('preserves an older uncertain lock when a later unrelated batch settles', async () => {
+    const seed = createSeedData();
+    const items = Array.from({ length: 2 }, (_, index) => ({
+      ...createDeleteGateFixture().item,
+      reviewItemId: `uncertain-lock-${index + 1}`,
+      currentVersionId: `uncertain-lock-version-${index + 1}`,
+      episode: String(80 + index),
+      title: `不确定锁 ${index + 1}`,
+    }));
+    const versionsByItem = Object.fromEntries(items.map((item) => [
+      item.reviewItemId,
+      [{
+        ...seed.versions[0],
+        reviewItemId: item.reviewItemId,
+        versionId: item.currentVersionId,
+      }],
+    ]));
+    const onBulkDeleteReviewItems = vi.fn()
+      .mockResolvedValueOnce({
+        succeededIds: [],
+        failures: {},
+        uncertainIds: [items[0].reviewItemId],
+      })
+      .mockResolvedValueOnce({
+        succeededIds: [],
+        failures: { [items[1].reviewItemId]: '第二批失败' },
+        uncertainIds: [],
+      });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const runtime = createReviewRuntime();
+    activeRuntimes.push(runtime);
+
+    render(
+      <ReviewRuntimeProvider runtime={runtime}>
+        <MemoryRouter>
+          <ProjectDetailItemList
+            entryMode="edit"
+            episodeGroups={items.map((item) => ({
+              episodeKey: item.episode,
+              representative: item,
+              items: [item],
+            }))}
+            finalizations={[]}
+            isArchived={false}
+            issuesByVersion={Object.fromEntries(
+              Object.values(versionsByItem).flat().map((version) => [version.versionId, []]),
+            )}
+            itemActionPending={false}
+            onBulkDeleteReviewItems={onBulkDeleteReviewItems}
+            onDeleteReviewItem={vi.fn()}
+            onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
+            projectRefId={items[0].projectRefId}
+            versionsByItem={versionsByItem}
+          />
+        </MemoryRouter>
+      </ReviewRuntimeProvider>,
+    );
+
+    const first = screen.getByRole('checkbox', { name: `选择第${items[0].episode}集` });
+    const second = screen.getByRole('checkbox', { name: `选择第${items[1].episode}集` });
+    await userEvent.click(first);
+    await userEvent.click(screen.getByRole('button', { name: '批量删除（1）' }));
+    await waitFor(() => expect(first).toBeDisabled());
+
+    await userEvent.click(second);
+    await userEvent.click(screen.getByRole('button', { name: '批量删除（1）' }));
+    expect(await screen.findByText('第二批失败')).toBeInTheDocument();
+    expect(first).toBeDisabled();
+    expect(screen.getByTestId(`batch-delete-uncertain-${items[0].reviewItemId}`)).toBeInTheDocument();
+  });
+
+  it('places the compact bulk delete control before file selection and each row checkbox before its title', async () => {
+    const { created } = await renderDetailWithDeletableItem();
+    const checkbox = await screen.findByRole('checkbox', {
+      name: `选择第${created.item.episode}集`,
+    });
+    await userEvent.click(checkbox);
+
+    const bulkDelete = screen.getByRole('button', { name: '批量删除（1）' });
+    const chooseFiles = screen.getByRole('button', { name: '选择文件' });
+    expect(bulkDelete.closest('.fj-review-upload-actions')).not.toBeNull();
+    expect(
+      bulkDelete.compareDocumentPosition(chooseFiles) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(bulkDelete).toHaveClass('fj-review-bulk-delete-button');
+    expect(bulkDelete).toHaveTextContent('批量删除（1）');
+    expect(bulkDelete).toBeVisible();
+    const css = readFileSync(
+      resolve(process.cwd(), 'src/modules/final-cut-review/styles/fj-review.css'),
+      'utf8',
+    );
+    expect(css).toMatch(
+      /\.fj-review-root\s+button\.fj-review-bulk-delete-button\s*\{[^}]*background:\s*var\(--fj-review-red\);[^}]*color:\s*var\(--fj-review-bg\);[^}]*min-height:\s*30px;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-root\s+button\.fj-review-bulk-delete-button:hover:not\(:disabled\),\s*\.fj-review-root\s+button\.fj-review-bulk-delete-button:focus-visible:not\(:disabled\)\s*\{[^}]*background:\s*var\(--fj-review-red\);[^}]*color:\s*var\(--fj-review-bg\);/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-root\s+button\.fj-review-bulk-delete-button:disabled\s*\{[^}]*background:\s*var\(--fj-review-surface-2\);[^}]*color:\s*var\(--fj-review-muted\);/s,
+    );
+    expect(document.querySelector('.fj-review-bulk-delete-toolbar')).not.toBeInTheDocument();
+
+    const row = checkbox.closest('article');
+    expect(row).not.toBeNull();
+    const title = within(row as HTMLElement).getByText(`第 ${created.item.episode} 集`);
+    expect(
+      checkbox.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(row as HTMLElement).queryByText('选择')).not.toBeInTheDocument();
+  });
+
+  it('does not expose batch deletion outside the edit permission boundary', () => {
+    const fixture = createDeleteGateFixture();
+    fixture.entryMode = 'review';
+    renderDeleteGate(fixture);
+    expect(screen.queryByRole('checkbox', { name: '全选可删除分集' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /批量删除/ })).not.toBeInTheDocument();
   });
 });

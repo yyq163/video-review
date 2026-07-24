@@ -1,5 +1,5 @@
 import type { ReviewIssue, ReviewPlaybackTarget, ReviewVersion } from '../contracts/types';
-import { timestampMsFromFrame, validatePlaybackTargetDrift } from './timecode';
+import { timestampMsForFrameSeek, validatePlaybackTargetDrift } from './timecode';
 
 export function playbackTargetFromIssue(issue: ReviewIssue): ReviewPlaybackTarget {
   return {
@@ -44,7 +44,7 @@ export function targetTimeMsForVersion(target: ReviewPlaybackTarget, version: Re
     fpsNum: version.fpsNum,
     fpsDen: version.fpsDen,
   });
-  return timestampMsFromFrame(target.frameNumber, version.fpsNum, version.fpsDen);
+  return timestampMsForFrameSeek(target.frameNumber, version.fpsNum, version.fpsDen);
 }
 
 export class PlaybackRequestSequencer {

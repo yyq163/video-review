@@ -1,5 +1,4 @@
 import { useRef, type PointerEvent } from 'react';
-import { UserRound } from 'lucide-react';
 import type { ReviewIssue } from '../contracts/types';
 import { formatTimestampTimecode } from '../core/timecode';
 
@@ -87,6 +86,7 @@ export function ReviewTimeline(props: ReviewTimelineProps) {
               style={{ left: `clamp(22px, ${left}%, calc(100% - 22px))` }}
               title={`#${issue.issueNo} ${formatTimestampTimecode(issue.timestampMs, props.fpsNum, props.fpsDen)} ${issue.status === 'unresolved' ? '未修改' : '已修改'} ${issue.body}`}
               aria-label={`意见 #${issue.issueNo} ${issue.status === 'unresolved' ? '未修改' : '已修改'}`}
+              aria-pressed={selected}
               onClick={activateIssue}
               onKeyDown={(event) => {
                 if (event.key === ' ' || event.key === 'Spacebar') {
@@ -96,7 +96,13 @@ export function ReviewTimeline(props: ReviewTimelineProps) {
               }}
             >
               <span className="fj-review-opinion-avatar" aria-hidden="true">
-                <UserRound />
+                <svg viewBox="0 0 20 20" focusable="false">
+                  <circle cx="10" cy="7" r="3.1" />
+                  <path d="M4.2 17.2c.4-4 2.5-6 5.8-6s5.4 2 5.8 6H4.2Z" />
+                </svg>
+              </span>
+              <span className="fj-review-opinion-status fj-review-sr-only">
+                {issue.status === 'unresolved' ? '未修改' : '已修改'}
               </span>
             </button>
           );

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import type { EntryMode, ReviewAnnotationShape, ReviewIssue, ReviewWorkspace, UploadProgress } from '../contracts/types';
+import type { EntryMode, IssueStatus, ReviewAnnotationShape, ReviewIssue, ReviewWorkspace, UploadProgress } from '../contracts/types';
 import { useProjectDetail, useReviewMutations } from '../entry/use-review-queries';
 import { actionError } from '../components/shared';
 import type { ReviewPlayerHandle } from '../components/ReviewPlayer';
@@ -34,6 +34,7 @@ export function useReviewWorkspaceController(
   const [timeMs, setTimeMs] = useState(0);
   const [draftShapes, setDraftShapes] = useState<ReviewAnnotationShape[]>([]);
   const [optimisticIssue, setOptimisticIssue] = useState<ReviewIssue | null>(null);
+  const [optimisticIssueStatuses, setOptimisticIssueStatuses] = useState<Record<string, IssueStatus>>({});
   const [toast, setToast] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | undefined>(undefined);
   const [appendVersionRetry, setAppendVersionRetry] = useState<AppendVersionInput | null>(null);
@@ -93,11 +94,28 @@ export function useReviewWorkspaceController(
       optimisticIssue.reviewItemId !== props.reviewItemId ||
       optimisticIssue.versionId !== data.currentVersion.versionId
     ) {
-      return sortedIssuesForPlayback(data.currentIssues);
+      return sortedIssuesForPlayback(
+        data.currentIssues.map((issue) => ({
+          ...issue,
+          status: optimisticIssueStatuses[issue.issueId] ?? issue.status,
+        })),
+      );
     }
     const currentCopy = data.currentIssues.filter((issue) => issue.issueId !== optimisticIssue.issueId);
-    return sortedIssuesForPlayback([...currentCopy, optimisticIssue]);
-  }, [data.currentIssues, data.currentVersion.versionId, optimisticIssue, props.projectRefId, props.reviewItemId]);
+    return sortedIssuesForPlayback(
+      [...currentCopy, optimisticIssue].map((issue) => ({
+        ...issue,
+        status: optimisticIssueStatuses[issue.issueId] ?? issue.status,
+      })),
+    );
+  }, [
+    data.currentIssues,
+    data.currentVersion.versionId,
+    optimisticIssue,
+    optimisticIssueStatuses,
+    props.projectRefId,
+    props.reviewItemId,
+  ]);
   const currentInput = useMemo(
     () => ({ projectRefId: props.projectRefId, reviewItemId: props.reviewItemId, versionId: data.currentVersion.versionId }),
     [data.currentVersion.versionId, props.projectRefId, props.reviewItemId],
@@ -174,6 +192,7 @@ export function useReviewWorkspaceController(
     draftShapes,
     setDraftShapes,
     setOptimisticIssue,
+    setOptimisticIssueStatuses,
     setUploadProgress,
     appendVersionProtectionState,
     setAppendVersionProtectionState,
@@ -205,6 +224,20 @@ export function useReviewWorkspaceController(
       return () => window.cancelAnimationFrame(frame);
     }
   }, [data.currentIssues, data.currentVersion.versionId, optimisticIssue]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setOptimisticIssueStatuses((current) => {
+        const next = Object.fromEntries(
+          Object.entries(current).filter(([issueId, status]) => {
+            const issue = data.currentIssues.find((candidate) => candidate.issueId === issueId);
+            return issue !== undefined && issue.status !== status;
+          }),
+        );
+        return Object.keys(next).length === Object.keys(current).length ? current : next;
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [data.currentIssues]);
 
   return {
     props,

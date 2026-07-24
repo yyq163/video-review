@@ -7,7 +7,17 @@ import {
   type RefObject,
 } from 'react';
 import type { NormalizedPoint, ReviewAnnotationShape } from '../contracts/types';
-import { boundsFromPoints, pointerToNormalizedVideoPoint } from '../core/coordinates';
+import {
+  clampNormalizedPoint,
+  computeContainedVideoRect,
+  boundsFromPoints,
+  pointerToNormalizedVideoPoint,
+} from '../core/coordinates';
+import {
+  annotationShapeAtPoint,
+  constrainAnnotationShapeWithinCanvas,
+  translateAnnotationShapeWithinCanvas,
+} from '../core/annotation-drag';
 import { createUuid } from '../core/uuid';
 import {
   clampTextFontSize,
@@ -38,8 +48,16 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
   const [draftShapes, setDraftShapes] = useState<ReviewAnnotationShape[]>([]);
   const [redoShapes, setRedoShapes] = useState<ReviewAnnotationShape[]>([]);
   const drawingRef = useRef<{ start: NormalizedPoint; points: NormalizedPoint[]; shapeId: string } | null>(null);
+  const draggingRef = useRef<{
+    moved: boolean;
+    origin: NormalizedPoint;
+    pointerId: number;
+    shape: ReviewAnnotationShape;
+    toolAtStart: AnnotationEditorTool;
+  } | null>(null);
   const [activeShape, setActiveShape] = useState<ReviewAnnotationShape | null>(null);
   const activeShapeRef = useRef<ReviewAnnotationShape | null>(null);
+  const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [activeTextEditor, setActiveTextEditor] = useState<{ scopeKey: string; shapeId: string } | null>(null);
   const activeScopeRef = useRef(options.scopeKey);
   const textInputRef = useRef<HTMLInputElement | null>(null);
@@ -68,9 +86,11 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
     setDraftShapes([]);
     setRedoShapes([]);
     setActiveShape(null);
+    setSelectedShapeId(null);
     closeTextEditor();
     activeShapeRef.current = null;
     drawingRef.current = null;
+    draggingRef.current = null;
     onDraftChange([]);
   }, [closeTextEditor, onDraftChange]);
 
@@ -115,16 +135,32 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
     [color, fontSize, lineWidth, tool],
   );
 
-  const pointFromEvent = (event: PointerEvent<HTMLDivElement>): NormalizedPoint | null => {
+  const pointFromEvent = (
+    event: PointerEvent<HTMLDivElement>,
+    clampOutside = false,
+  ): NormalizedPoint | null => {
     const rect = options.stageRef.current?.getBoundingClientRect();
     if (!rect) return null;
-    return pointerToNormalizedVideoPoint({
+    const point = pointerToNormalizedVideoPoint({
       clientX: event.clientX,
       clientY: event.clientY,
       containerRect: rect as RectLike,
       videoWidth: options.displayVideoWidth,
       videoHeight: options.displayVideoHeight,
       maxScale: options.displayMaxScale,
+    });
+    if (point || !clampOutside) return point;
+    const videoRect = computeContainedVideoRect({
+      containerWidth: rect.width,
+      containerHeight: rect.height,
+      videoWidth: options.displayVideoWidth,
+      videoHeight: options.displayVideoHeight,
+      maxScale: options.displayMaxScale,
+    });
+    if (videoRect.width <= 0 || videoRect.height <= 0) return null;
+    return clampNormalizedPoint({
+      x: (event.clientX - rect.left - videoRect.x) / videoRect.width,
+      y: (event.clientY - rect.top - videoRect.y) / videoRect.height,
     });
   };
 
@@ -135,49 +171,81 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
     setFontSize(shapeFontSize(shape));
   };
 
-  const findDraftTextShapeAtPoint = (point: NormalizedPoint): ReviewAnnotationShape | null => {
-    let nearest: { shape: ReviewAnnotationShape; distance: number } | null = null;
-    for (const shape of draftShapes) {
-      if (shape.tool !== 'text' || !shape.points?.[0]) continue;
-      const textPoint = shape.points[0];
-      const dx = Math.abs((point.x - textPoint.x) * options.displayVideoWidth);
-      const dy = Math.abs((point.y - textPoint.y) * options.displayVideoHeight);
-      const font = shapeFontSize(shape);
-      const textLength = Math.max(2, (shape.text ?? '文字批注').length);
-      const hitWidth = Math.max(56, font * textLength * 0.72);
-      const hitHeight = Math.max(32, font * 1.8);
-      if (dx <= hitWidth && dy <= hitHeight) {
-        const distance = Math.hypot(dx, dy);
-        if (!nearest || distance < nearest.distance) nearest = { shape, distance };
-      }
-    }
-    return nearest?.shape ?? null;
+  const updateDraftTextShape = (shapeId: string, patch: Partial<ReviewAnnotationShape>) => {
+    setDraftShapes((current) => current.map((shape) =>
+      shape.shapeId === shapeId
+        ? constrainAnnotationShapeWithinCanvas(
+            { ...shape, ...patch },
+            options.displayVideoWidth,
+            options.displayVideoHeight,
+          )
+        : shape,
+    ));
   };
 
-  const updateDraftTextShape = (shapeId: string, patch: Partial<ReviewAnnotationShape>) => {
-    setDraftShapes((current) => current.map((shape) => (shape.shapeId === shapeId ? { ...shape, ...patch } : shape)));
+  const renderedVideoDimensions = () => {
+    const rect = options.stageRef.current?.getBoundingClientRect();
+    if (!rect) return { width: options.displayVideoWidth, height: options.displayVideoHeight };
+    const videoRect = computeContainedVideoRect({
+      containerWidth: rect.width,
+      containerHeight: rect.height,
+      videoWidth: options.displayVideoWidth,
+      videoHeight: options.displayVideoHeight,
+      maxScale: options.displayMaxScale,
+    });
+    return {
+      width: Math.max(1, videoRect.width),
+      height: Math.max(1, videoRect.height),
+    };
   };
 
   const beginDraw = (event: PointerEvent<HTMLDivElement>) => {
     if (options.readonly) return;
     const point = pointFromEvent(event);
     if (!point) return;
-    if (tool === 'select' || tool === 'text') {
-      const existingTextShape = findDraftTextShapeAtPoint(point);
-      if (existingTextShape) {
-        activateTextShape(existingTextShape);
-        return;
-      }
+    const renderedVideo = renderedVideoDimensions();
+    const existingShape = annotationShapeAtPoint(
+      draftShapes,
+      point,
+      options.displayVideoWidth,
+      options.displayVideoHeight,
+      renderedVideo.width,
+      renderedVideo.height,
+    );
+    if (existingShape) {
+      setSelectedShapeId(existingShape.shapeId);
+      closeTextEditor();
+      draggingRef.current = {
+        moved: false,
+        origin: point,
+        pointerId: event.pointerId,
+        shape: existingShape,
+        toolAtStart: tool,
+      };
+      options.videoRef.current?.pause();
+      options.onPause();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      return;
     }
     if (tool === 'select') return;
+    setSelectedShapeId(null);
     options.videoRef.current?.pause();
     options.onPause();
     const shapeId = `draft_${createUuid()}`;
     if (tool === 'text') {
-      const shape = makeShape(point, point, [point], shapeId);
+      const createdShape = makeShape(point, point, [point], shapeId);
+      const shape = createdShape
+        ? translateAnnotationShapeWithinCanvas(
+            createdShape,
+            { x: 0, y: 0 },
+            options.displayVideoWidth,
+            options.displayVideoHeight,
+          )
+        : null;
       if (shape) {
         setDraftShapes((current) => [...current, shape]);
         setRedoShapes([]);
+        setSelectedShapeId(shape.shapeId);
         setActiveTextEditor({ scopeKey: options.scopeKey, shapeId: shape.shapeId });
       }
       return;
@@ -191,6 +259,33 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
   };
 
   const moveDraw = (event: PointerEvent<HTMLDivElement>) => {
+    const dragging = draggingRef.current;
+    if (dragging) {
+      const point = pointFromEvent(event, true);
+      if (!point) return;
+      const renderedVideo = renderedVideoDimensions();
+      const distancePx = Math.hypot(
+        (point.x - dragging.origin.x) * renderedVideo.width,
+        (point.y - dragging.origin.y) * renderedVideo.height,
+      );
+      if (!dragging.moved && distancePx < 4) return;
+      dragging.moved = true;
+      closeTextEditor();
+      const movedShape = translateAnnotationShapeWithinCanvas(
+        dragging.shape,
+        {
+          x: point.x - dragging.origin.x,
+          y: point.y - dragging.origin.y,
+        },
+        options.displayVideoWidth,
+        options.displayVideoHeight,
+      );
+      setDraftShapes((current) =>
+        current.map((shape) => (shape.shapeId === movedShape.shapeId ? movedShape : shape)),
+      );
+      setRedoShapes([]);
+      return;
+    }
     const drawing = drawingRef.current;
     if (!drawing) return;
     const point = pointFromEvent(event);
@@ -201,14 +296,34 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
     setActiveShape(shape);
   };
 
-  const endDraw = () => {
+  const endDraw = (event?: PointerEvent<HTMLDivElement>) => {
+    const dragging = draggingRef.current;
+    if (dragging) {
+      draggingRef.current = null;
+      if (!dragging.moved && dragging.shape.tool === 'text' && dragging.toolAtStart === 'text') {
+        activateTextShape(dragging.shape);
+      }
+      if (
+        event &&
+        event.currentTarget.hasPointerCapture?.(dragging.pointerId)
+      ) {
+        event.currentTarget.releasePointerCapture(dragging.pointerId);
+      }
+      return;
+    }
     const shape = activeShapeRef.current;
     if (!drawingRef.current || !shape) return;
-    setDraftShapes((current) => [...current, shape]);
+    const constrainedShape = constrainAnnotationShapeWithinCanvas(
+      shape,
+      options.displayVideoWidth,
+      options.displayVideoHeight,
+    );
+    setDraftShapes((current) => [...current, constrainedShape]);
     setRedoShapes([]);
     setActiveShape(null);
     activeShapeRef.current = null;
     drawingRef.current = null;
+    setSelectedShapeId(constrainedShape.shapeId);
   };
 
   const undo = () => {
@@ -218,6 +333,7 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
     setDraftShapes(draftShapes.slice(0, -1));
     setRedoShapes([removed, ...redoShapes]);
     if (removed.shapeId === activeTextShapeId) closeTextEditor();
+    if (removed.shapeId === selectedShapeId) setSelectedShapeId(null);
   };
 
   const redo = () => {
@@ -226,6 +342,7 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
     if (!first) return;
     setDraftShapes([...draftShapes, first]);
     setRedoShapes(rest);
+    setSelectedShapeId(first.shapeId);
   };
 
   const handleColorChange = (nextColor: string) => {
@@ -255,6 +372,7 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
     moveDraw,
     redo,
     redoShapes,
+    selectedShapeId,
     setLineWidth,
     setTool,
     textInputRef,
