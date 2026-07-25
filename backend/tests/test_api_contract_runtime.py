@@ -668,6 +668,59 @@ def test_delete_review_item_physically_removes_unreviewed_duplicate(client: Test
         session.close()
 
 
+def test_delete_review_item_is_available_from_review_entry(client: TestClient) -> None:
+    project, item = create_project_item(client)
+    body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "confirmed": True,
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/delete",
+        json=body,
+        headers={
+            "Idempotency-Key": body["command_id"],
+            "If-Match": str(item["lock_version"]),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert api_data(response)["id"] == item["id"]
+
+
+def test_review_delete_item_rejects_principal_without_project_scope(client: TestClient) -> None:
+    project, item = create_project_item(client, code="P_REVIEW_DELETE_SCOPE")
+    body = command(
+        "DeleteReviewItem",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "confirmed": True,
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/delete",
+        json=body,
+        headers={
+            **principal_headers(("different-project",), principal_id="out-of-scope-reviewer"),
+            "Idempotency-Key": body["command_id"],
+            "If-Match": str(item["lock_version"]),
+        },
+    )
+
+    assert response.status_code == 403
+    assert api_error(response)["code"] == "PRINCIPAL_PERMISSION_DENIED"
+    remaining_items = api_data(
+        client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items"),
+    )
+    assert item["id"] in {candidate["id"] for candidate in remaining_items}
+
+
 def test_delete_review_item_requires_and_replays_one_principal_bound_idempotency_key(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

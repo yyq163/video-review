@@ -973,14 +973,7 @@ describe('generated HTTP envelope client', () => {
     vi.stubGlobal('fetch', fetchMock);
     const runtime = createReviewRuntime({ apiBaseUrl: 'https://review.example/' });
     const editApi = runtime.getApi('edit');
-    const reviewApi = runtime.getApi('review');
 
-    await expect(
-      reviewApi.deleteReviewItem(
-        { projectRefId: 'prj_mode', reviewItemId: 'item_mode', confirmed: true },
-        reviewApi.entryPolicy.createContext('review'),
-      ),
-    ).rejects.toMatchObject({ code: 'EXECUTION_CONTEXT_MISMATCH' });
     await expect(
       editApi.deleteProject({ projectRefId: 'prj_mode', confirmed: true }, editApi.entryPolicy.createContext('edit')),
     ).rejects.toMatchObject({ code: 'EXECUTION_CONTEXT_MISMATCH' });

@@ -330,7 +330,7 @@ export class HttpReviewUploads implements UploadApi {
   };
 
   readonly deleteReviewItem: ReviewApiPort['deleteReviewItem'] = async (input, context) => {
-    this.transport.assertWriteContext(context, ['edit']);
+    this.transport.assertWriteContext(context, ['edit', 'review']);
     if (input.confirmed !== true) {
       throw new ReviewDomainError('删除分集必须二次确认', 'RESOURCE_STATE_CONFLICT');
     }
@@ -360,7 +360,7 @@ export class HttpReviewUploads implements UploadApi {
         ReviewItemDTO,
         { project_ref_id: string; review_item_id: string; confirmed: true }
       >(
-        `/api/v1/final-cut-review/edit/projects/${input.projectRefId}/items/${input.reviewItemId}/delete`,
+        `/api/v1/final-cut-review/${context.entryMode}/projects/${input.projectRefId}/items/${input.reviewItemId}/delete`,
         'DeleteReviewItem',
         { project_ref_id: input.projectRefId, review_item_id: input.reviewItemId, confirmed: input.confirmed },
         context,

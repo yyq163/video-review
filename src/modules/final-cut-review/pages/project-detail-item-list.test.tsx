@@ -250,12 +250,6 @@ describe('ProjectDetailItemList single-item delete gate', () => {
         fixture.isArchived = true;
       },
     },
-    {
-      name: '从 review 入口访问',
-      apply: (fixture) => {
-        fixture.entryMode = 'review';
-      },
-    },
   ];
 
   it.each(hiddenCases)('$name时隐藏删除入口', ({ apply }) => {
@@ -309,6 +303,65 @@ describe('ProjectDetailItemList single-item delete gate', () => {
 });
 
 describe('ProjectDetailItemList batch delete', () => {
+  it('exposes the same selectable bulk-delete controls from the review entry without deleting on cancel', async () => {
+    const fixture = createDeleteGateFixture();
+    fixture.entryMode = 'review';
+    const runtime = createReviewRuntime();
+    activeRuntimes.push(runtime);
+    const onBulkDeleteReviewItems = vi.fn(async () => ({
+      succeededIds: [],
+      failures: {},
+      uncertainIds: [],
+    }));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    render(
+      <ReviewRuntimeProvider runtime={runtime}>
+        <MemoryRouter>
+          <ProjectDetailItemList
+            entryMode={fixture.entryMode}
+            episodeGroups={[
+              {
+                episodeKey: fixture.item.episode,
+                representative: fixture.item,
+                items: [fixture.item],
+              },
+            ]}
+            finalizations={fixture.finalizations}
+            isArchived={fixture.isArchived}
+            issuesByVersion={{ [fixture.versions[0].versionId]: [] }}
+            itemActionPending={false}
+            onBulkDeleteReviewItems={onBulkDeleteReviewItems}
+            onDeleteReviewItem={vi.fn()}
+            onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
+            projectRefId={fixture.item.projectRefId}
+            versionsByItem={{ [fixture.item.reviewItemId]: fixture.versions }}
+          />
+        </MemoryRouter>
+      </ReviewRuntimeProvider>,
+    );
+
+    const selectAll = screen.getByRole('checkbox', { name: '全选可删除分集' });
+    const rowSelector = screen.getByRole('checkbox', {
+      name: `选择第${fixture.item.episode}集`,
+    });
+    const deleteButton = screen.getByRole('button', { name: '批量删除（0）' });
+
+    expect(selectAll).not.toBeChecked();
+    expect(deleteButton).toBeDisabled();
+
+    await userEvent.click(rowSelector);
+    expect(selectAll).toBeChecked();
+    expect(screen.getByRole('button', { name: '批量删除（1）' })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole('button', { name: '批量删除（1）' }));
+    expect(confirm).toHaveBeenCalledWith(
+      '确认批量删除已选择的 1 条待审分集？该操作逐条执行且无法撤销。',
+    );
+    expect(onBulkDeleteReviewItems).not.toHaveBeenCalled();
+    expect(rowSelector).toBeChecked();
+  });
+
   it('keeps an immediately visible uncertain delete locked instead of calling it safe to retry', async () => {
     const runtime = createReviewRuntime();
     activeRuntimes.push(runtime);
@@ -698,7 +751,7 @@ describe('ProjectDetailItemList batch delete', () => {
     expect(within(row as HTMLElement).queryByText('选择')).not.toBeInTheDocument();
   });
 
-  it('does not expose batch deletion outside the edit permission boundary', () => {
+  it('does not expose batch controls when no bulk-delete handler is provided', () => {
     const fixture = createDeleteGateFixture();
     fixture.entryMode = 'review';
     renderDeleteGate(fixture);

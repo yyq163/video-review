@@ -21,6 +21,7 @@ capabilities:
     - review.project.restore
     - review.project.delete
     - review.item.read
+    - review.item.delete
     - review.version.read
     - review.version.compare
     - review.issue.read

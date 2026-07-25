@@ -550,6 +550,31 @@ paths:
                 $ref: "#/components/schemas/EnvelopeReviewItem"
         <<: *standardNon200Responses
 
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/delete:
+    post:
+      operationId: review_delete_review_item
+      tags: [commands]
+      x-command-type: DeleteReviewItem
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteReviewItemCommandEnvelope"
+      responses:
+        "200":
+          description: Deleted duplicate review item envelope before review starts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeReviewItem"
+        <<: *standardNon200Responses
+
   /final-cut-review/edit/projects/{project_ref_id}/items/{review_item_id}/versions:
     post:
       operationId: edit_upload_review_version

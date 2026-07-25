@@ -91,7 +91,6 @@ export function ProjectDetailItemList({
           );
           return (
             !isArchived &&
-            entryMode === 'edit' &&
             candidate.status === 'pending_review' &&
             !candidate.activeFinalizationId &&
             candidateVersions.length === 1 &&
@@ -100,7 +99,7 @@ export function ProjectDetailItemList({
           );
         }),
       ),
-    [entryMode, finalizations, isArchived, issuesByVersion, versionsByItem, visibleEpisodeGroups],
+    [finalizations, isArchived, issuesByVersion, versionsByItem, visibleEpisodeGroups],
   );
   const retryableDeletableItems = deletableItems.filter(
     (item) => !batchDeleteUncertainIds.has(item.reviewItemId),

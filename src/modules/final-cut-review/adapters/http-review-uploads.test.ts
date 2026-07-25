@@ -64,6 +64,42 @@ describe('HTTP review upload idempotency', () => {
     );
   });
 
+  it('uses the review delete route and permits the review write context', async () => {
+    const item = reviewItem(1);
+    const command = vi.fn().mockResolvedValue(item);
+    const assertWriteContext = vi.fn();
+    const transport = {
+      assertWriteContext,
+      projectForWrite: vi.fn().mockResolvedValue(undefined),
+      itemForLock: vi.fn().mockResolvedValue(item),
+      command,
+      baseUrl: BASE_URL,
+    } as unknown as HttpReviewTransport;
+    const uploads = new HttpReviewUploads(transport);
+
+    await uploads.deleteReviewItem(
+      {
+        projectRefId: item.project_ref_id,
+        reviewItemId: item.id,
+        confirmed: true,
+      },
+      context('review-delete-confirmed', 'review'),
+    );
+
+    expect(assertWriteContext).toHaveBeenCalledWith(
+      expect.objectContaining({ entryMode: 'review' }),
+      ['edit', 'review'],
+    );
+    expect(command).toHaveBeenCalledWith(
+      `/api/v1/final-cut-review/review/projects/${item.project_ref_id}/items/${item.id}/delete`,
+      'DeleteReviewItem',
+      expect.objectContaining({ confirmed: true }),
+      expect.objectContaining({ entryMode: 'review' }),
+      item.lock_version,
+      expect.objectContaining({ idempotent: true }),
+    );
+  });
+
   it('rejects false delete confirmation before loading or sending the command', async () => {
     const item = reviewItem(1);
     const projectForWrite = vi.fn();
@@ -1257,8 +1293,8 @@ describe('HTTP upload MIME normalization', () => {
   });
 });
 
-function context(requestId: string): ExecutionContext {
-  return { entryMode: 'edit', requestId, createdAt: '2026-07-14T00:00:00.000Z' };
+function context(requestId: string, entryMode: ExecutionContext['entryMode'] = 'edit'): ExecutionContext {
+  return { entryMode, requestId, createdAt: '2026-07-14T00:00:00.000Z' };
 }
 
 function uploadSession(file: File, status: UploadSessionDTO['status']): UploadSessionDTO {
