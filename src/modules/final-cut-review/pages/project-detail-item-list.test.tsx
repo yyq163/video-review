@@ -177,6 +177,68 @@ describe('ProjectDetailItemList finalized row state', () => {
   });
 });
 
+describe('ProjectDetailItemList row watermarks', () => {
+  function createWatermarkFixture() {
+    const fixture = createDeleteGateFixture();
+    const currentVersion: ReviewVersion = {
+      ...fixture.versions[0],
+      versionId: 'version_watermark_v2',
+      versionNo: 2,
+      label: 'V2',
+    };
+    fixture.item = {
+      ...fixture.item,
+      reviewItemId: 'item_watermark_row',
+      currentVersionId: currentVersion.versionId,
+    };
+    fixture.versions = [
+      { ...fixture.versions[0], reviewItemId: fixture.item.reviewItemId },
+      { ...currentVersion, reviewItemId: fixture.item.reviewItemId },
+    ];
+    fixture.issues = [
+      {
+        ...createSeedData().issues[0],
+        issueId: 'issue_current_open',
+        reviewItemId: fixture.item.reviewItemId,
+        versionId: currentVersion.versionId,
+        status: 'unresolved',
+      },
+      {
+        ...createSeedData().issues[0],
+        issueId: 'issue_current_resolved',
+        reviewItemId: fixture.item.reviewItemId,
+        versionId: currentVersion.versionId,
+        status: 'resolved',
+      },
+      {
+        ...createSeedData().issues[0],
+        issueId: 'issue_history_open',
+        reviewItemId: fixture.item.reviewItemId,
+        versionId: 'version_delete_gate_v1',
+        status: 'unresolved',
+      },
+    ];
+    return fixture;
+  }
+
+  it('shows the current version label as the row watermark instead of a historical or fixed label', () => {
+    renderDeleteGate(createWatermarkFixture());
+
+    const watermark = screen.getByTestId('item-row-version-watermark-item_watermark_row');
+    expect(watermark).toHaveTextContent('V2');
+    expect(watermark).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('shows only the current version unresolved count in both the watermark and the foreground text', () => {
+    renderDeleteGate(createWatermarkFixture());
+
+    const watermark = screen.getByTestId('item-row-count-watermark-item_watermark_row');
+    expect(watermark).toHaveTextContent('1');
+    expect(watermark).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByText('当前未修改 1')).toBeInTheDocument();
+  });
+});
+
 describe('ProjectDetailItemList single-item delete gate', () => {
   const hiddenCases: Array<{
     apply: (fixture: DeleteGateFixture) => void;

@@ -304,11 +304,31 @@ export function ProjectDetailItemList({
               ))}
             </div>
             <div className="fj-review-item-summary">
-              <strong>第 {item.episode} 集</strong>
-              <span>原文件：{currentOriginalFilename} · {versions.length}个版本 · 当前 {currentVersion?.label ?? '-'}</span>
+              <div className="fj-review-item-summary-text">
+                <strong>第 {item.episode} 集</strong>
+                <span>原文件：{currentOriginalFilename} · {versions.length}个版本 · 当前 {currentVersion?.label ?? '-'}</span>
+              </div>
+              {currentVersion ? (
+                <span
+                  aria-hidden="true"
+                  className="fj-review-item-version-watermark"
+                  data-testid={`item-row-version-watermark-${item.reviewItemId}`}
+                >
+                  {currentVersion.label}
+                </span>
+              ) : null}
             </div>
             <StatusBadge status={item.status} />
-            <span>当前未修改 {openCount}</span>
+            <span className="fj-review-item-open-count">
+              <span
+                aria-hidden="true"
+                className="fj-review-item-count-watermark"
+                data-testid={`item-row-count-watermark-${item.reviewItemId}`}
+              >
+                {openCount}
+              </span>
+              <span className="fj-review-item-open-count-text">当前未修改 {openCount}</span>
+            </span>
             <div className="fj-review-item-actions">
               <Link
                 className="fj-review-primary"
