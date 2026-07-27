@@ -22,6 +22,41 @@ FORBIDDEN_SIGNING_SECRETS = {
 UPLOAD_SESSION_TTL_SAFETY_MARGIN_SECONDS = 60
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
 SECRET_FILE_MAX_BYTES = 64 * 1024
+GIBIBYTE = 1024 * 1024 * 1024
+MAX_PACKAGE_FILES_LIMIT = 200
+MAX_PACKAGE_BYTES_LIMIT = 50 * GIBIBYTE
+ZIP_STORED_BASE_OVERHEAD_BYTES = 1024
+ZIP_STORED_ENTRY_OVERHEAD_BYTES = 512
+ZIP_MAX_ARCHIVE_NAME_BYTES = (1 << 16) - 1
+
+
+def estimate_zip_stored_storage_bytes(
+    total_bytes: int,
+    file_count: int,
+    encoded_name_bytes: int,
+) -> int:
+    """Return the conservative ZIP_STORED reservation used by package admission."""
+    return (
+        total_bytes
+        + ZIP_STORED_BASE_OVERHEAD_BYTES
+        + (file_count * ZIP_STORED_ENTRY_OVERHEAD_BYTES)
+        + (encoded_name_bytes * 2)
+    )
+
+
+def minimum_package_storage_bytes(max_package_bytes: int, max_package_files: int) -> int:
+    """Cover one legal maximum package, including maximum ZIP entry-name overhead."""
+    return estimate_zip_stored_storage_bytes(
+        max_package_bytes,
+        max_package_files,
+        max_package_files * ZIP_MAX_ARCHIVE_NAME_BYTES,
+    )
+
+
+DEFAULT_MAX_PACKAGE_STORAGE_BYTES = minimum_package_storage_bytes(
+    MAX_PACKAGE_BYTES_LIMIT,
+    MAX_PACKAGE_FILES_LIMIT,
+)
 
 
 def _read_secret_file(setting_name: str, file_path: str) -> str:
@@ -156,10 +191,14 @@ class Settings(BaseSettings):
     media_probe_command: str = Field(default="ffprobe", min_length=1, max_length=4096)
     media_probe_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     package_ttl_seconds: int = Field(default=24 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
-    max_package_files: int = Field(default=100, ge=1, le=100)
-    max_package_bytes: int = Field(default=5 * 1024 * 1024 * 1024, ge=1, le=5 * 1024 * 1024 * 1024)
+    max_package_files: int = Field(default=MAX_PACKAGE_FILES_LIMIT, ge=1, le=MAX_PACKAGE_FILES_LIMIT)
+    max_package_bytes: int = Field(default=MAX_PACKAGE_BYTES_LIMIT, ge=1, le=MAX_PACKAGE_BYTES_LIMIT)
     max_pending_package_builds: int = Field(default=8, ge=1, le=16)
-    max_package_storage_bytes: int = Field(default=20 * 1024 * 1024 * 1024, ge=1, le=100 * 1024 * 1024 * 1024)
+    max_package_storage_bytes: int = Field(
+        default=DEFAULT_MAX_PACKAGE_STORAGE_BYTES,
+        ge=1,
+        le=100 * GIBIBYTE,
+    )
     package_worker_max_attempts: int = Field(default=3, ge=1, le=10)
     package_worker_retry_delay_seconds: int = Field(default=30, ge=1, le=3600)
     package_download_token_ttl_seconds: int = Field(default=600, ge=60, le=600)
@@ -186,6 +225,18 @@ class Settings(BaseSettings):
         if self.upload_session_ttl_seconds <= minimum_ttl:
             raise ValueError(
                 "UPLOAD_SESSION_TTL_SECONDS must exceed UPLOAD_PART_READ_TIMEOUT_SECONDS plus the safety margin"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_package_storage_capacity(self) -> Self:
+        minimum_storage_bytes = minimum_package_storage_bytes(
+            self.max_package_bytes,
+            self.max_package_files,
+        )
+        if self.max_package_storage_bytes < minimum_storage_bytes:
+            raise ValueError(
+                "MAX_PACKAGE_STORAGE_BYTES must cover MAX_PACKAGE_BYTES plus conservative ZIP_STORED overhead"
             )
         return self
 

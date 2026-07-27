@@ -254,8 +254,9 @@ describe('frozen player controls and focus boundaries', () => {
         <EpisodeStrip
           items={seed.items}
           currentItemId={seed.items[0].reviewItemId}
-          versionCounts={{}}
-          currentLabels={{}}
+          unresolvedCounts={{}}
+          currentVersionLabels={{}}
+          currentFileNames={{}}
           onSelect={vi.fn()}
         />
       </>,
@@ -452,8 +453,13 @@ describe('frozen episode strip behavior', () => {
       <EpisodeStrip
         items={items}
         currentItemId="episode-12"
-        versionCounts={Object.fromEntries(items.map((item) => [item.reviewItemId, 1]))}
-        currentLabels={Object.fromEntries(items.map((item) => [item.reviewItemId, 'V1']))}
+        unresolvedCounts={Object.fromEntries(items.map((item) => [item.reviewItemId, 1]))}
+        currentVersionLabels={Object.fromEntries(
+          items.map((item) => [item.reviewItemId, `V${item.episode}`]),
+        )}
+        currentFileNames={Object.fromEntries(
+          items.map((item) => [item.reviewItemId, `测试剧集 ${item.episode}.mp4`]),
+        )}
         onSelect={onSelect}
       />,
     );
@@ -466,6 +472,63 @@ describe('frozen episode strip behavior', () => {
     await userEvent.click(screen.getByRole('button', { name: /第 1 集/ }));
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ reviewItemId: 'episode-1' }));
     expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ inline: 'nearest' }));
+  });
+
+  it('renders each current version label with its unresolved metric, source filename, and review status', () => {
+    const seed = createSeedData();
+    const items = [
+      {
+        ...seed.items[0],
+        reviewItemId: 'episode-17',
+        episode: '17',
+        currentVersionId: 'episode-17-current',
+        status: 'in_review' as const,
+      },
+      {
+        ...seed.items[0],
+        reviewItemId: 'episode-18',
+        episode: '18',
+        currentVersionId: 'episode-18-current',
+        status: 'changes_requested' as const,
+      },
+    ];
+    const longFileName = '很长很长的当前版本原文件名_用于验证安全截断且不挤压状态胶囊.mp4';
+    render(
+      <EpisodeStrip
+        items={items}
+        currentItemId="episode-17"
+        unresolvedCounts={{ 'episode-17': 8, 'episode-18': 0 }}
+        currentVersionLabels={{ 'episode-17': 'V7', 'episode-18': 'V3' }}
+        currentFileNames={{
+          'episode-17': longFileName,
+          'episode-18': '第18集定稿原片.mov',
+        }}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    const episode17 = screen.getByTestId('episode-item-episode-17');
+    expect(episode17).toHaveAttribute(
+      'aria-label',
+      `第 17 集，当前版本 V7，未修改 8，${longFileName}，审阅中`,
+    );
+    expect(episode17).toHaveAttribute('aria-pressed', 'true');
+    expect(within(episode17).getByText('第 17 集')).toBeInTheDocument();
+    expect(within(episode17).getByText('当前版本·V7·未修改8')).toBeInTheDocument();
+    expect(within(episode17).getByTitle(longFileName)).toHaveTextContent(longFileName);
+    expect(within(episode17).getByText('审阅中')).toHaveClass(
+      'fj-review-status-in_review',
+    );
+    const watermark = screen.getByTestId('episode-unresolved-watermark-episode-17');
+    expect(watermark).toHaveTextContent('8');
+    expect(watermark).toHaveAttribute('aria-hidden', 'true');
+    expect(within(episode17).queryByText(/最新 V|个版本/)).not.toBeInTheDocument();
+
+    const episode18 = screen.getByTestId('episode-item-episode-18');
+    expect(within(episode18).getByText('当前版本·V3·未修改0')).toBeInTheDocument();
+    expect(within(episode18).getByText('待修改')).toHaveClass(
+      'fj-review-status-changes_requested',
+    );
   });
 });
 

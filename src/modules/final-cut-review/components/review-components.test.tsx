@@ -12,7 +12,7 @@ import type { UploadProgress } from '../contracts/types';
 import { createSeedData } from '../core/seed';
 import { playbackTargetFromIssue } from '../core/playback';
 import { IssuePanel } from './IssuePanel';
-import { ReviewPlayer, type ReviewPlayerHandle } from './ReviewPlayer';
+import { ReviewPlayer, VersionRail, type ReviewPlayerHandle } from './ReviewPlayer';
 import {
   AppendVersionPanel,
   CreateItemUploadPanel,
@@ -121,8 +121,10 @@ async function renderArchivedReviewWorkspace() {
   return { ...result, runtime, queryClient };
 }
 
-function renderReviewWorkspace(route = '/review/projects/prj_seed_final_cut/items/item_ep28') {
-  const runtime = createReviewRuntime();
+function renderReviewWorkspace(
+  route = '/review/projects/prj_seed_final_cut/items/item_ep28',
+  runtime = createReviewRuntime(),
+) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -186,6 +188,56 @@ describe('DecisionBar component', () => {
     await userEvent.click(screen.getByRole('button', { name: '重新准备项目包' }));
     expect(onPackage).toHaveBeenCalledOnce();
     cleanupRuntime(runtimeResult.runtime);
+  });
+});
+
+describe('VersionRail component', () => {
+  it('uses each historical card own version label as an inert artistic watermark', async () => {
+    const seed = createSeedData();
+    const onSelect = vi.fn();
+    render(
+      <VersionRail
+        versions={seed.versions}
+        currentVersionId="ver_ep28_v2"
+        onSelect={onSelect}
+      />,
+    );
+
+    const v1Card = screen.getByTestId('version-V1');
+    const v2Card = screen.getByTestId('version-V2');
+    expect(v1Card).toHaveAttribute(
+      'aria-label',
+      `V1，待修改，${seed.versions[0].fileName}`,
+    );
+    expect(v1Card).toHaveAttribute('aria-pressed', 'false');
+    expect(v2Card).toHaveAttribute('aria-pressed', 'true');
+    expect(within(v1Card).queryByText('V1', { selector: 'strong' })).not.toBeInTheDocument();
+    expect(within(v2Card).queryByText('V2', { selector: 'strong' })).not.toBeInTheDocument();
+
+    const v1Watermark = screen.getByTestId('version-watermark-ver_ep28_v1');
+    const v2Watermark = screen.getByTestId('version-watermark-ver_ep28_v2');
+    expect(v1Watermark).toHaveTextContent('V1');
+    expect(v2Watermark).toHaveTextContent('V2');
+    expect(v1Watermark).toHaveAttribute('aria-hidden', 'true');
+    expect(v2Watermark).toHaveAttribute('aria-hidden', 'true');
+    expect(within(v1Card).getByText('待修改')).toBeInTheDocument();
+    expect(within(v1Card).getByTitle(seed.versions[0].fileName)).toHaveTextContent(
+      seed.versions[0].fileName,
+    );
+
+    await userEvent.click(v1Card);
+    expect(onSelect).toHaveBeenCalledWith('ver_ep28_v1');
+
+    const css = readFileSync(
+      resolve(process.cwd(), 'src/modules/final-cut-review/styles/fj-review.css'),
+      'utf8',
+    );
+    expect(css).toMatch(
+      /\.fj-review-version-watermark\s*\{[^}]*font-style:\s*italic;[^}]*pointer-events:\s*none;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-episode-watermark\s*\{[^}]*font-style:\s*italic;[^}]*pointer-events:\s*none;/s,
+    );
   });
 });
 
@@ -1605,6 +1657,8 @@ describe('ReviewWorkspacePage issue playback', () => {
     const rendered = renderEditReviewWorkspace();
     const resolveIssue = vi.spyOn(rendered.runtime.getApi('edit'), 'resolveIssue');
     await screen.findByTestId('review-player');
+    const episodeCard = screen.getByTestId('episode-item-item_ep28');
+    expect(within(episodeCard).getByText('当前版本·V2·未修改3')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('checkbox', { name: '选择意见 #002' }));
     await userEvent.click(screen.getByRole('checkbox', { name: '选择意见 #004' }));
@@ -1615,11 +1669,287 @@ describe('ReviewWorkspacePage issue playback', () => {
       expect(screen.getByTestId('issue-issue_v2_001')).toHaveTextContent('已修改');
       expect(screen.getByTestId('issue-issue_v2_003')).toHaveTextContent('已修改');
     });
+    await waitFor(() =>
+      expect(within(episodeCard).getByText('当前版本·V2·未修改1')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('episode-unresolved-watermark-item_ep28')).toHaveTextContent('1');
     expect(screen.getByTestId('issue-issue_v2_002')).toHaveTextContent('未修改');
     expect(resolveIssue.mock.calls.map(([input]) => input.issueId)).toEqual([
       'issue_v2_001',
       'issue_v2_003',
     ]);
+
+    rendered.unmount();
+    cleanupRuntime(rendered.runtime, rendered.queryClient);
+  });
+
+  it('keeps episode metrics bound to currentVersionId and refreshes through issue mutations', async () => {
+    const rendered = renderReviewWorkspace();
+    const seed = createSeedData();
+    const currentFileName =
+      seed.versions[1].originalMedia.originalFilename || seed.versions[1].fileName;
+    const episodeCard = () => screen.getByTestId('episode-item-item_ep28');
+    const expectEpisodeCount = async (count: number) => {
+      await waitFor(() => {
+        expect(within(episodeCard()).getByText(`当前版本·V2·未修改${count}`)).toBeInTheDocument();
+        expect(screen.getByTestId('episode-unresolved-watermark-item_ep28')).toHaveTextContent(
+          String(count),
+        );
+      });
+    };
+
+    await screen.findByTestId('review-player');
+    await expectEpisodeCount(3);
+    expect(within(episodeCard()).getByTitle(currentFileName)).toHaveTextContent(
+      currentFileName,
+    );
+
+    await userEvent.click(screen.getByTestId('version-V1'));
+    await waitFor(() => expect(screen.getByTestId('version-V1')).toHaveAttribute('aria-pressed', 'true'));
+    await expectEpisodeCount(3);
+    expect(within(episodeCard()).getByTitle(currentFileName)).toHaveTextContent(
+      currentFileName,
+    );
+
+    await userEvent.click(screen.getByTestId('version-V2'));
+    await waitFor(() => expect(screen.getByTestId('version-V2')).toHaveAttribute('aria-pressed', 'true'));
+    const issueBody = '用于验证剧集卡片当前版本未修改数刷新';
+    await userEvent.clear(screen.getByLabelText('当前版本意见正文'));
+    await userEvent.type(screen.getByLabelText('当前版本意见正文'), issueBody);
+    await userEvent.click(screen.getByRole('button', { name: '提交意见' }));
+    await expectEpisodeCount(4);
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await userEvent.click(
+      within(screen.getByTestId('issue-issue_v2_001')).getByRole('button', {
+        name: '删除意见',
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId('issue-issue_v2_001')).not.toBeInTheDocument(),
+    );
+    await expectEpisodeCount(3);
+    expect(confirmSpy).toHaveBeenCalled();
+
+    rendered.unmount();
+    cleanupRuntime(rendered.runtime, rendered.queryClient);
+  });
+
+  it('keeps fresh workspace V3 metadata when the project detail query is still on V2', async () => {
+    const runtime = createReviewRuntime();
+    const editApi = runtime.getApi('edit');
+    const reviewApi = runtime.getApi('review');
+    const staleProjectDetail = await reviewApi.getProjectDetail('prj_seed_final_cut');
+    const v3 = await editApi.appendVersion(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        reviewItemId: 'item_ep28',
+        file: new File(['fresh-workspace-v3'], 'fresh-workspace-v3.mp4', {
+          type: 'video/mp4',
+        }),
+        versionNote: 'V3 stale detail regression',
+        changeSummary: '验证 workspace 比项目详情更新时的剧集卡片。',
+      },
+      editApi.entryPolicy.createContext('edit'),
+    );
+    await reviewApi.createIssue(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        reviewItemId: 'item_ep28',
+        versionId: v3.versionId,
+        timestampMs: 40,
+        frameNumber: 1,
+        body: 'V3 当前版本保留的未修改意见',
+        severity: 'normal',
+        shapes: [],
+        canvasWidth: 1280,
+        canvasHeight: 720,
+        videoWidth: 1280,
+        videoHeight: 720,
+      },
+      reviewApi.entryPolicy.createContext('review'),
+    );
+    vi.spyOn(reviewApi, 'getProjectDetail').mockResolvedValue(staleProjectDetail);
+
+    const rendered = renderReviewWorkspace(
+      '/review/projects/prj_seed_final_cut/items/item_ep28',
+      runtime,
+    );
+    const assertFreshCurrentCard = async () => {
+      await waitFor(() => {
+        const card = screen.getByTestId('episode-item-item_ep28');
+        expect(within(card).getByText('当前版本·V3·未修改1')).toBeInTheDocument();
+        expect(within(card).getByTitle('fresh-workspace-v3.mp4')).toHaveTextContent(
+          'fresh-workspace-v3.mp4',
+        );
+        expect(
+          screen.getByTestId('episode-unresolved-watermark-item_ep28'),
+        ).toHaveTextContent('1');
+      });
+    };
+
+    await screen.findByTestId('review-player');
+    await assertFreshCurrentCard();
+    await userEvent.click(screen.getByTestId('version-V1'));
+    await waitFor(() =>
+      expect(screen.getByTestId('version-V1')).toHaveAttribute('aria-pressed', 'true'),
+    );
+    await assertFreshCurrentCard();
+
+    rendered.unmount();
+    cleanupRuntime(rendered.runtime, rendered.queryClient);
+  });
+
+  it('isolates currentVersionId metrics across episodes and historical selection', async () => {
+    const runtime = createReviewRuntime();
+    const editApi = runtime.getApi('edit');
+    const reviewApi = runtime.getApi('review');
+    const created = await editApi.createReviewItemWithVersion(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        title: '第 29 集',
+        episode: '29',
+        file: new File(['episode-29-current'], '第29集当前版本原文件.mp4', {
+          type: 'video/mp4',
+        }),
+      },
+      editApi.entryPolicy.createContext('edit'),
+    );
+    const issueInput = (body: string, frameNumber: number) => ({
+      projectRefId: 'prj_seed_final_cut',
+      reviewItemId: created.item.reviewItemId,
+      versionId: created.version.versionId,
+      timestampMs: frameNumber * 40,
+      frameNumber,
+      body,
+      severity: 'normal' as const,
+      shapes: [],
+      canvasWidth: 1280,
+      canvasHeight: 720,
+      videoWidth: 1080,
+      videoHeight: 1920,
+    });
+    const unresolvedIssue = await reviewApi.createIssue(
+      issueInput('第二集当前版本保留的未修改意见', 1),
+      reviewApi.entryPolicy.createContext('review'),
+    );
+    const resolvedIssue = await reviewApi.createIssue(
+      issueInput('第二集当前版本已解决意见', 2),
+      reviewApi.entryPolicy.createContext('review'),
+    );
+    const deletedCandidate = await reviewApi.createIssue(
+      issueInput('第二集当前版本已删除意见', 3),
+      reviewApi.entryPolicy.createContext('review'),
+    );
+    await editApi.resolveIssue(
+      {
+        projectRefId: resolvedIssue.projectRefId,
+        reviewItemId: resolvedIssue.reviewItemId,
+        versionId: resolvedIssue.versionId,
+        issueId: resolvedIssue.issueId,
+      },
+      editApi.entryPolicy.createContext('edit'),
+    );
+    const deletedIssue = await reviewApi.deleteIssue(
+      {
+        projectRefId: deletedCandidate.projectRefId,
+        reviewItemId: deletedCandidate.reviewItemId,
+        versionId: deletedCandidate.versionId,
+        issueId: deletedCandidate.issueId,
+      },
+      reviewApi.entryPolicy.createContext('review'),
+    );
+    expect(deletedIssue.deletedAt).toEqual(expect.any(String));
+
+    const baseDetail = await reviewApi.getProjectDetail('prj_seed_final_cut');
+    expect(baseDetail.issuesByVersion.ver_ep28_v1).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'unresolved', versionId: 'ver_ep28_v1' }),
+      ]),
+    );
+    expect(baseDetail.issuesByVersion[created.version.versionId]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ issueId: unresolvedIssue.issueId, status: 'unresolved' }),
+        expect.objectContaining({ issueId: resolvedIssue.issueId, status: 'resolved' }),
+      ]),
+    );
+    vi.spyOn(reviewApi, 'getProjectDetail').mockResolvedValue({
+      ...baseDetail,
+      issuesByVersion: {
+        ...baseDetail.issuesByVersion,
+        [created.version.versionId]: [
+          ...baseDetail.issuesByVersion[created.version.versionId],
+          deletedIssue,
+        ],
+      },
+    });
+
+    const rendered = renderReviewWorkspace(
+      '/review/projects/prj_seed_final_cut/items/item_ep28',
+      runtime,
+    );
+    const assertEpisodeMetric = async (
+      reviewItemId: string,
+      currentVersionLabel: string,
+      expectedCount: number,
+    ) => {
+      await waitFor(() => {
+        const card = screen.getByTestId(`episode-item-${reviewItemId}`);
+        expect(
+          within(card).getByText(`当前版本·${currentVersionLabel}·未修改${expectedCount}`),
+        ).toBeInTheDocument();
+        expect(
+          within(card).getByTestId(`episode-unresolved-watermark-${reviewItemId}`),
+        ).toHaveTextContent(String(expectedCount));
+      });
+    };
+
+    await screen.findByTestId(`episode-item-${created.item.reviewItemId}`);
+    await assertEpisodeMetric('item_ep28', 'V2', 3);
+    await assertEpisodeMetric(created.item.reviewItemId, 'V1', 1);
+    expect(created.item.currentVersionId).toBe(created.version.versionId);
+    expect(created.item.currentVersionId).not.toBe('ver_ep28_v2');
+
+    await userEvent.click(screen.getByTestId('version-V1'));
+    await waitFor(() =>
+      expect(screen.getByTestId('version-V1')).toHaveAttribute('aria-pressed', 'true'),
+    );
+    await assertEpisodeMetric('item_ep28', 'V2', 3);
+    await assertEpisodeMetric(created.item.reviewItemId, 'V1', 1);
+
+    rendered.unmount();
+    cleanupRuntime(rendered.runtime, rendered.queryClient);
+  });
+
+  it('refreshes the current-version metric when review reopens a resolved issue', async () => {
+    const runtime = createReviewRuntime();
+    const editApi = runtime.getApi('edit');
+    await editApi.resolveIssue(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        reviewItemId: 'item_ep28',
+        versionId: 'ver_ep28_v2',
+        issueId: 'issue_v2_001',
+      },
+      editApi.entryPolicy.createContext('edit'),
+    );
+    const rendered = renderReviewWorkspace(
+      '/review/projects/prj_seed_final_cut/items/item_ep28',
+      runtime,
+    );
+
+    await screen.findByTestId('review-player');
+    const episodeCard = screen.getByTestId('episode-item-item_ep28');
+    expect(within(episodeCard).getByText('当前版本·V2·未修改2')).toBeInTheDocument();
+    await userEvent.click(
+      within(screen.getByTestId('issue-issue_v2_001')).getByRole('button', {
+        name: '重新打开为未修改',
+      }),
+    );
+    await waitFor(() =>
+      expect(within(episodeCard).getByText('当前版本·V2·未修改3')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('episode-unresolved-watermark-item_ep28')).toHaveTextContent('3');
 
     rendered.unmount();
     cleanupRuntime(rendered.runtime, rendered.queryClient);

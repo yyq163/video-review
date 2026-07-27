@@ -132,8 +132,9 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
           <EpisodeStrip
             items={controller.episodeItems}
             currentItemId={data.item.reviewItemId}
-            versionCounts={controller.episodeVersionCounts}
-            currentLabels={controller.episodeCurrentLabels}
+            unresolvedCounts={controller.episodeUnresolvedCounts}
+            currentVersionLabels={controller.episodeCurrentVersionLabels}
+            currentFileNames={controller.episodeCurrentFileNames}
             onSelect={(item) => {
               if (item.reviewItemId === data.item.reviewItemId) return;
               controller.navigate(`/${props.entryMode}/projects/${props.projectRefId}/items/${item.reviewItemId}`);

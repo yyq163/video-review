@@ -127,32 +127,59 @@ export function useReviewWorkspaceController(
     for (const issue of [...data.historicalIssues, ...currentIssues]) byId.set(issue.issueId, issue);
     return [...byId.values()];
   }, [currentIssues, data.historicalIssues]);
-  const episodeItems = useMemo(
-    () =>
-      dedupeReviewItemsByEpisode(projectDetail.data?.items?.length ? projectDetail.data.items : [data.item], {
+  const episodeItems = useMemo(() => {
+    const projectItems = projectDetail.data?.items ?? [];
+    const itemsWithFreshWorkspaceItem = [
+      ...projectItems.filter((item) => item.reviewItemId !== data.item.reviewItemId),
+      data.item,
+    ];
+    return dedupeReviewItemsByEpisode(
+      itemsWithFreshWorkspaceItem,
+      {
         currentItemId: data.item.reviewItemId,
         versionsByItem: projectDetail.data?.versionsByItem,
-      }),
-    [data.item, projectDetail.data],
-  );
-  const episodeVersionCounts = useMemo(() => {
+      },
+    );
+  }, [data.item, projectDetail.data]);
+  const episodeUnresolvedCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const item of episodeItems) {
-      counts[item.reviewItemId] =
-        projectDetail.data?.versionsByItem[item.reviewItemId]?.length ??
-        (item.reviewItemId === data.item.reviewItemId ? data.versions.length : 0);
+      const currentVersionIssues =
+        item.reviewItemId === data.item.reviewItemId
+          ? data.currentVersion.versionId === item.currentVersionId
+            ? currentIssues
+            : [...data.currentIssues, ...data.historicalIssues].filter(
+                (issue) => issue.versionId === item.currentVersionId,
+              )
+          : projectDetail.data?.issuesByVersion[item.currentVersionId] ?? [];
+      counts[item.reviewItemId] = currentVersionIssues.filter(
+        (issue) => issue.status === 'unresolved' && !issue.deletedAt,
+      ).length;
     }
     return counts;
-  }, [data.item.reviewItemId, data.versions.length, episodeItems, projectDetail.data]);
-  const episodeCurrentLabels = useMemo(() => {
+  }, [
+    currentIssues,
+    data.currentIssues,
+    data.currentVersion.versionId,
+    data.historicalIssues,
+    data.item.reviewItemId,
+    episodeItems,
+    projectDetail.data,
+  ]);
+  const episodeCurrentVersionMetadata = useMemo(() => {
     const labels: Record<string, string> = {};
+    const fileNames: Record<string, string> = {};
     for (const item of episodeItems) {
       const versions =
-        projectDetail.data?.versionsByItem[item.reviewItemId] ??
-        (item.reviewItemId === data.item.reviewItemId ? data.versions : []);
-      labels[item.reviewItemId] = versions.find((version) => version.versionId === item.currentVersionId)?.label ?? '-';
+        item.reviewItemId === data.item.reviewItemId
+          ? data.versions
+          : projectDetail.data?.versionsByItem[item.reviewItemId] ?? [];
+      const currentVersion = versions.find((version) => version.versionId === item.currentVersionId);
+      labels[item.reviewItemId] = currentVersion?.label || '-';
+      fileNames[item.reviewItemId] =
+        currentVersion?.originalMedia.originalFilename || currentVersion?.fileName || '-';
     }
-    return labels;
+    return { labels, fileNames };
   }, [data.item.reviewItemId, data.versions, episodeItems, projectDetail.data]);
   const showToast = useCallback((message: string) => setToast(message), []);
   const showActionError = useCallback((caught: unknown) => showToast(actionError(caught)), [showToast]);
@@ -269,8 +296,9 @@ export function useReviewWorkspaceController(
     selectedAnnotationSet,
     compareIssues,
     episodeItems,
-    episodeVersionCounts,
-    episodeCurrentLabels,
+    episodeUnresolvedCounts,
+    episodeCurrentVersionLabels: episodeCurrentVersionMetadata.labels,
+    episodeCurrentFileNames: episodeCurrentVersionMetadata.fileNames,
     playback,
     actions,
     selectVersion: (versionId: string) => selectVersionParams(versionId, data.item.currentVersionId),

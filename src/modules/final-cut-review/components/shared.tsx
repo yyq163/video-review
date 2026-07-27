@@ -52,18 +52,25 @@ export function CapabilityGate(props: {
   return <>{props.children}</>;
 }
 
-export function StatusBadge(props: { status: ReviewItemStatus | 'unresolved' | 'resolved' | 'active' | 'archived' }) {
-  const label: Record<string, string> = {
-    pending_review: '待审',
-    in_review: '审阅中',
-    changes_requested: '待修改',
-    finalized: '已定稿',
-    unresolved: '未修改',
-    resolved: '已修改',
-    active: '进行中',
-    archived: '已归档',
-  };
-  return <span className={`fj-review-status fj-review-status-${props.status}`}>{label[props.status]}</span>;
+type ReviewStatus = ReviewItemStatus | 'unresolved' | 'resolved' | 'active' | 'archived';
+
+const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
+  pending_review: '待审',
+  in_review: '审阅中',
+  changes_requested: '待修改',
+  finalized: '已定稿',
+  unresolved: '未修改',
+  resolved: '已修改',
+  active: '进行中',
+  archived: '已归档',
+};
+
+export function reviewStatusLabel(status: ReviewStatus): string {
+  return REVIEW_STATUS_LABELS[status];
+}
+
+export function StatusBadge(props: { status: ReviewStatus }) {
+  return <span className={`fj-review-status fj-review-status-${props.status}`}>{reviewStatusLabel(props.status)}</span>;
 }
 
 export function EmptyState(props: { title: string; detail: string; icon?: 'film' | 'upload' | 'package' | 'finalized' }) {

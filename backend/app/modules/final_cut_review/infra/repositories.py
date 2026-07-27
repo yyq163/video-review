@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import stat
 import uuid
 import zipfile
@@ -51,7 +52,7 @@ from backend.app.safe_files import (
     unlink_regular_file_if_identity,
     write_private_file,
 )
-from backend.app.settings import Settings
+from backend.app.settings import Settings, estimate_zip_stored_storage_bytes
 
 from .sqlalchemy_models import (
     FileObjectModel,
@@ -76,6 +77,7 @@ POST_COMMIT_FILE_DELETIONS_KEY = "final_cut_review_post_commit_file_deletions"
 POST_COMMIT_PACKAGE_DELETIONS_KEY = "final_cut_review_post_commit_package_deletions"
 AUDIT_EXECUTION_IDENTITY_KEY = "final_cut_review_audit_execution_identity"
 PACKAGE_QUEUE_ADVISORY_LOCK_KEY = 5064946991358883141
+STORAGE_ADMISSION_ADVISORY_LOCK_KEY = int.from_bytes(b"FCRSTOR1", "big")
 PACKAGE_BUILD_STAGING_RE = re.compile(
     r"^(pkg_[0-9a-f]{32})\.(build_[0-9a-f]{32})\.staging\.zip$"
 )
@@ -87,6 +89,7 @@ class PackageBuildSource:
     file_id: str | None
     storage_path: str | None
     expected_hash: str | None
+    expected_size: int | None
     archive_name: str | None
 
 
@@ -97,6 +100,8 @@ class PackageBuildClaim:
     lease_id: str
     storage_path: str
     staging_path: str
+    expected_source_bytes: int
+    reserved_storage_bytes: int
     sources: tuple[PackageBuildSource, ...]
 
 
@@ -113,6 +118,77 @@ class PackageBuildArtifact:
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def storage_roots_share_filesystem(settings: Settings) -> bool:
+    try:
+        with (
+            pin_managed_root(settings.storage_root) as (_storage_root, storage_fd),
+            pin_managed_root(settings.package_root) as (_package_root, package_fd),
+        ):
+            return os.fstat(storage_fd).st_dev == os.fstat(package_fd).st_dev
+    except (OSError, UnsafeFilePathError) as exc:
+        raise ReviewError("STORAGE_UNAVAILABLE", "无法检查共享存储可用空间") from exc
+
+
+def active_package_storage_reservation_bytes(session: Session) -> int:
+    return int(
+        session.scalar(
+            select(func.coalesce(func.sum(FinalCutPackageSnapshotModel.storage_bytes), 0)).where(
+                FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None)
+            )
+        )
+        or 0
+    )
+
+
+def pending_package_storage_reservation_bytes(
+    session: Session,
+    *,
+    exclude_package_id: str | None = None,
+) -> int:
+    statement = select(func.coalesce(func.sum(FinalCutPackageSnapshotModel.storage_bytes), 0)).where(
+        FinalCutPackageSnapshotModel.status == "preparing",
+        FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
+    )
+    if exclude_package_id is not None:
+        statement = statement.where(FinalCutPackageSnapshotModel.id != exclude_package_id)
+    return int(session.scalar(statement) or 0)
+
+
+def active_upload_storage_reservation_bytes(session: Session) -> int:
+    return int(
+        session.scalar(
+            select(func.coalesce(func.sum(UploadSessionModel.reserved_bytes), 0)).where(
+                UploadSessionModel.parts_cleanup_confirmed_at.is_(None)
+            )
+        )
+        or 0
+    )
+
+
+def ensure_package_filesystem_headroom(
+    session: Session,
+    settings: Settings,
+    *,
+    package_future_reserved_bytes: int,
+    requested_bytes: int,
+) -> None:
+    shared_filesystem = storage_roots_share_filesystem(settings)
+    upload_reserved_bytes = active_upload_storage_reservation_bytes(session) if shared_filesystem else 0
+    try:
+        free_bytes = shutil.disk_usage(settings.package_root).free
+    except OSError as exc:
+        raise ReviewError("STORAGE_UNAVAILABLE", "无法检查临时包存储可用空间") from exc
+    low_watermark = settings.upload_storage_low_watermark_bytes if shared_filesystem else 0
+    conservatively_available = (
+        free_bytes
+        - package_future_reserved_bytes
+        - upload_reserved_bytes
+        - requested_bytes
+    )
+    if conservatively_available < low_watermark:
+        raise ReviewError("STORAGE_UNAVAILABLE", "临时包存储已达到低水位保护线")
 
 
 def package_build_staging_path(package_root: Path, package_id: str, lease_id: str) -> Path:
@@ -143,16 +219,38 @@ def user_agent_fingerprint(value: str | None) -> str | None:
     return f"sha256:{digest}"
 
 
-def add_file_to_archive(zf: zipfile.ZipFile, path: Path, root: Path, arcname: str) -> str:
+def add_file_to_archive(
+    zf: zipfile.ZipFile,
+    path: Path,
+    root: Path,
+    arcname: str,
+    expected_size: int,
+) -> str:
     digest = hashlib.sha256()
     try:
         with pin_regular_file(path, root) as pinned:
             if pinned is None or not pinned.exists:
                 raise ReviewError("PACKAGE_SOURCE_MISSING", "包源文件缺失")
-            with pinned.open_readonly() as handle, zf.open(arcname, "w") as archive_handle:
-                while chunk := handle.read(1024 * 1024):
+            if pinned.size != expected_size:
+                raise ReviewError("FILE_HASH_MISMATCH", "定稿原片大小不匹配")
+            with pinned.open_readonly() as handle, zf.open(arcname, "w", force_zip64=True) as archive_handle:
+                bytes_read = 0
+                while bytes_read < expected_size:
+                    chunk = handle.read(min(1024 * 1024, expected_size - bytes_read))
+                    if not chunk:
+                        raise ReviewError("FILE_HASH_MISMATCH", "定稿原片大小不匹配")
+                    bytes_read += len(chunk)
                     digest.update(chunk)
                     archive_handle.write(chunk)
+                if handle.read(1):
+                    raise ReviewError("FILE_HASH_MISMATCH", "定稿原片大小不匹配")
+                final_metadata = os.fstat(handle.fileno())
+                if (
+                    bytes_read != expected_size
+                    or final_metadata.st_size != expected_size
+                    or final_metadata.st_mtime_ns != pinned.mtime_ns
+                ):
+                    raise ReviewError("FILE_HASH_MISMATCH", "定稿原片大小不匹配")
     except UnsafeFilePathError as exc:
         raise ReviewError("STORAGE_UNAVAILABLE", "包源文件路径非法") from exc
     return digest.hexdigest()
@@ -175,7 +273,24 @@ def regular_file_sha256(path: Path, root: Path) -> str:
 def estimate_package_storage_bytes(total_bytes: int, archive_names: list[str]) -> int:
     """Reserve a conservative ZIP_STORED upper bound before the worker runs."""
     encoded_name_bytes = sum(len(name.encode("utf-8")) for name in archive_names)
-    return total_bytes + 1024 + (len(archive_names) * 512) + (encoded_name_bytes * 2)
+    return estimate_zip_stored_storage_bytes(
+        total_bytes,
+        len(archive_names),
+        encoded_name_bytes,
+    )
+
+
+def validate_package_limits(
+    finalizations: list[FinalizationRecordModel],
+    settings: Settings,
+) -> int:
+    """Validate active finalization metadata before any archive path is created."""
+    if len(finalizations) > settings.max_package_files:
+        raise ReviewError("FILE_TOO_LARGE", "项目定稿原片数量超出打包限制")
+    total_bytes = sum(finalization.file_size for finalization in finalizations)
+    if total_bytes > settings.max_package_bytes:
+        raise ReviewError("FILE_TOO_LARGE", "项目定稿原片总大小超出打包限制")
+    return total_bytes
 
 
 def contained_storage_path(path_value: str, root: Path, file_id: str | None = None) -> Path:
@@ -1861,11 +1976,6 @@ class SqlAlchemyReviewRepository:
         project = self._get_project(payload["project_ref_id"], for_update=True)
         if project.deleted_at is not None:
             raise ReviewError("RESOURCE_STATE_CONFLICT", "项目已删除")
-        if self.session.get_bind().dialect.name == "postgresql":
-            self.session.execute(
-                text("SELECT pg_advisory_xact_lock(:lock_key)"),
-                {"lock_key": PACKAGE_QUEUE_ADVISORY_LOCK_KEY},
-            )
         existing_preparing = self.session.scalar(
             select(FinalCutPackageSnapshotModel)
             .where(
@@ -1874,7 +1984,6 @@ class SqlAlchemyReviewRepository:
             )
             .order_by(FinalCutPackageSnapshotModel.created_at, FinalCutPackageSnapshotModel.id)
             .limit(1)
-            .with_for_update()
         )
         if existing_preparing is not None:
             return self.package_dto(existing_preparing)
@@ -1890,11 +1999,7 @@ class SqlAlchemyReviewRepository:
         )
         if not finalizations:
             raise ReviewError("PACKAGE_NO_FINALIZED_FILES", "项目无定稿原片")
-        if len(finalizations) > self.settings.max_package_files:
-            raise ReviewError("FILE_TOO_LARGE", "项目定稿原片数量超出打包限制")
-        total_bytes = sum(finalization.file_size for finalization in finalizations)
-        if total_bytes > self.settings.max_package_bytes:
-            raise ReviewError("FILE_TOO_LARGE", "项目定稿原片总大小超出打包限制")
+        total_bytes = validate_package_limits(finalizations, self.settings)
         items: list[dict[str, Any]] = []
         package_id = new_id("pkg")
         package_filename = f"{project.project_code}_{project.project_name}_定稿原片_{utcnow().strftime('%Y%m%d-%H%M')}.zip"
@@ -1962,8 +2067,28 @@ class SqlAlchemyReviewRepository:
             )
             .order_by(FinalCutPackageSnapshotModel.created_at.desc())
             .limit(self.settings.max_pending_package_builds)
-            .with_for_update()
         )
+        scanned_reusable_packages: list[
+            tuple[
+                str,
+                tuple[Any, ...],
+                tuple[str | None, Path | None, int | None, tuple[int, int] | None],
+            ]
+        ] = []
+
+        def reusable_fingerprint(snapshot: FinalCutPackageSnapshotModel) -> tuple[Any, ...]:
+            return (
+                snapshot.status,
+                snapshot.expires_at,
+                snapshot.total_bytes,
+                json.dumps(snapshot.items, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+                snapshot.storage_path,
+                snapshot.storage_bytes,
+                snapshot.storage_reclaimed_at,
+                snapshot.sha256,
+                snapshot.updated_at,
+            )
+
         for reusable in reusable_packages:
             if reusable.total_bytes != total_bytes or reusable.items != items:
                 continue
@@ -1984,11 +2109,55 @@ class SqlAlchemyReviewRepository:
                     break
             if not sources_available:
                 continue
-            integrity_error, expected_path, actual_size, identity = self._ready_package_reuse_integrity(reusable)
+            scanned_reusable_packages.append(
+                (
+                    reusable.id,
+                    reusable_fingerprint(reusable),
+                    self._ready_package_reuse_integrity(reusable),
+                )
+            )
+        if self.session.get_bind().dialect.name == "postgresql":
+            self.session.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": STORAGE_ADMISSION_ADVISORY_LOCK_KEY},
+            )
+            self.session.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": PACKAGE_QUEUE_ADVISORY_LOCK_KEY},
+            )
+        existing_preparing = self.session.scalar(
+            select(FinalCutPackageSnapshotModel)
+            .where(
+                FinalCutPackageSnapshotModel.project_ref_id == project.id,
+                FinalCutPackageSnapshotModel.status == "preparing",
+            )
+            .order_by(FinalCutPackageSnapshotModel.created_at, FinalCutPackageSnapshotModel.id)
+            .limit(1)
+            .with_for_update()
+        )
+        if existing_preparing is not None:
+            return self.package_dto(existing_preparing)
+        for reusable_id, scanned_fingerprint, integrity in scanned_reusable_packages:
+            current_reusable = self.session.scalar(
+                select(FinalCutPackageSnapshotModel)
+                .where(FinalCutPackageSnapshotModel.id == reusable_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if (
+                current_reusable is None
+                or current_reusable.status != "ready"
+                or aware(current_reusable.expires_at) <= utcnow()
+                or current_reusable.total_bytes != total_bytes
+                or current_reusable.items != items
+                or reusable_fingerprint(current_reusable) != scanned_fingerprint
+            ):
+                continue
+            integrity_error, expected_path, actual_size, identity = integrity
             if integrity_error is None:
-                return self.package_dto(reusable)
+                return self.package_dto(current_reusable)
             self._fail_ready_package_reuse(
-                reusable,
+                current_reusable,
                 context,
                 error_code=integrity_error,
                 expected_path=expected_path,
@@ -2000,16 +2169,16 @@ class SqlAlchemyReviewRepository:
         )
         if pending_count >= self.settings.max_pending_package_builds:
             raise ReviewError("RESOURCE_STATE_CONFLICT", "打包队列繁忙，请稍后重试")
-        reserved_bytes = (
-            self.session.scalar(
-                select(func.coalesce(func.sum(FinalCutPackageSnapshotModel.storage_bytes), 0)).where(
-                    FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None)
-                )
-            )
-            or 0
-        )
-        if int(reserved_bytes) + estimated_storage_bytes > self.settings.max_package_storage_bytes:
+        reserved_bytes = active_package_storage_reservation_bytes(self.session)
+        if reserved_bytes + estimated_storage_bytes > self.settings.max_package_storage_bytes:
             raise ReviewError("FILE_TOO_LARGE", "临时包存储配额不足")
+        pending_reserved_bytes = pending_package_storage_reservation_bytes(self.session)
+        ensure_package_filesystem_headroom(
+            self.session,
+            self.settings,
+            package_future_reserved_bytes=pending_reserved_bytes,
+            requested_bytes=estimated_storage_bytes,
+        )
         self._event("review.package.requested", context, project.id, "package", package_id, 1, package_id=package_id)
         snapshot = FinalCutPackageSnapshotModel(
             id=package_id,
@@ -2040,6 +2209,23 @@ class SqlAlchemyReviewRepository:
         try:
             if package_path != expected_path or staging_path != expected_staging_path:
                 raise ReviewError("STORAGE_UNAVAILABLE", "打包输出路径不符合存储合同")
+            if (
+                not isinstance(claim.expected_source_bytes, int)
+                or isinstance(claim.expected_source_bytes, bool)
+                or claim.expected_source_bytes <= 0
+                or not isinstance(claim.reserved_storage_bytes, int)
+                or isinstance(claim.reserved_storage_bytes, bool)
+                or claim.reserved_storage_bytes < claim.expected_source_bytes
+                or sum(
+                    source.expected_size
+                    for source in claim.sources
+                    if isinstance(source.expected_size, int)
+                    and not isinstance(source.expected_size, bool)
+                    and source.expected_size > 0
+                )
+                != claim.expected_source_bytes
+            ):
+                raise ReviewError("PACKAGE_SOURCE_MISSING", "包快照字节数非法")
             flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
             with pin_managed_root(package_root) as (_root_path, directory_fd):
                 descriptor = os.open(staging_path.name, flags, 0o600, dir_fd=directory_fd)
@@ -2053,6 +2239,9 @@ class SqlAlchemyReviewRepository:
                                 or not isinstance(source.storage_path, str)
                                 or not isinstance(source.expected_hash, str)
                                 or len(source.expected_hash) != 64
+                                or not isinstance(source.expected_size, int)
+                                or isinstance(source.expected_size, bool)
+                                or source.expected_size <= 0
                                 or not isinstance(source.archive_name, str)
                                 or Path(source.archive_name).name != source.archive_name
                             ):
@@ -2067,15 +2256,20 @@ class SqlAlchemyReviewRepository:
                                 source_path,
                                 self.settings.storage_root,
                                 source.archive_name,
+                                source.expected_size,
                             )
                             if actual_hash != source.expected_hash:
                                 raise ReviewError("FILE_HASH_MISMATCH", "定稿原片 hash 不匹配")
+                            if package_handle.tell() > claim.reserved_storage_bytes:
+                                raise ReviewError("FILE_TOO_LARGE", "临时包实际大小超出预留空间")
                     package_handle.flush()
                     package_handle.seek(0)
                     package_digest = hashlib.sha256()
                     while chunk := package_handle.read(1024 * 1024):
                         package_digest.update(chunk)
                     actual_storage_bytes = os.fstat(package_handle.fileno()).st_size
+                    if actual_storage_bytes > claim.reserved_storage_bytes:
+                        raise ReviewError("FILE_TOO_LARGE", "临时包实际大小超出预留空间")
                     os.fsync(package_handle.fileno())
                 os.fsync(directory_fd)
             if created_identity is None:
@@ -2152,12 +2346,28 @@ class SqlAlchemyReviewRepository:
         sources: list[PackageBuildSource] = []
         for item in snapshot.items:
             file_id = item.get("original_file_id") if isinstance(item, dict) else None
+            finalization_id = item.get("finalization_id") if isinstance(item, dict) else None
             file = self.session.get(FileObjectModel, file_id) if isinstance(file_id, str) else None
+            finalization = (
+                self.session.get(FinalizationRecordModel, finalization_id)
+                if isinstance(finalization_id, str)
+                else None
+            )
+            expected_size = (
+                finalization.file_size
+                if finalization is not None
+                and finalization.project_ref_id == snapshot.project_ref_id
+                and finalization.original_file_id == file_id
+                and finalization.review_item_id == item.get("review_item_id")
+                and finalization.version_id == item.get("version_id")
+                else None
+            )
             sources.append(
                 PackageBuildSource(
                     file_id=file_id if isinstance(file_id, str) else None,
                     storage_path=file.storage_path if file is not None else None,
                     expected_hash=(item.get("sha256") if isinstance(item, dict) and isinstance(item.get("sha256"), str) else None),
+                    expected_size=expected_size,
                     archive_name=(item.get("archive_name") if isinstance(item, dict) and isinstance(item.get("archive_name"), str) else None),
                 )
             )
@@ -2176,6 +2386,8 @@ class SqlAlchemyReviewRepository:
                         lease_id,
                     )
                 ),
+                expected_source_bytes=snapshot.total_bytes,
+                reserved_storage_bytes=snapshot.storage_bytes,
                 sources=tuple(sources),
             ),
         )
@@ -2186,6 +2398,10 @@ class SqlAlchemyReviewRepository:
         context: ExecutionContext,
     ) -> str:
         if self.session.get_bind().dialect.name == "postgresql":
+            self.session.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": STORAGE_ADMISSION_ADVISORY_LOCK_KEY},
+            )
             self.session.execute(
                 text("SELECT pg_advisory_xact_lock(:lock_key)"),
                 {"lock_key": PACKAGE_QUEUE_ADVISORY_LOCK_KEY},
@@ -2232,6 +2448,19 @@ class SqlAlchemyReviewRepository:
         )
         if int(other_reserved_bytes) + artifact.storage_bytes > self.settings.max_package_storage_bytes:
             return "quota_exceeded"
+        pending_reserved_bytes = pending_package_storage_reservation_bytes(
+            self.session,
+            exclude_package_id=snapshot.id,
+        )
+        try:
+            ensure_package_filesystem_headroom(
+                self.session,
+                self.settings,
+                package_future_reserved_bytes=pending_reserved_bytes,
+                requested_bytes=0,
+            )
+        except ReviewError as exc:
+            return "storage_unavailable" if exc.code == "STORAGE_UNAVAILABLE" else "quota_exceeded"
         try:
             with pin_managed_root(self.settings.package_root) as (_package_root, package_root_fd):
                 staging_metadata = os.stat(

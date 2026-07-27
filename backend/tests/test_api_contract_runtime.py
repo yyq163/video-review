@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml  # type: ignore[import-untyped]
@@ -3783,6 +3783,56 @@ def test_package_worker_rechecks_completed_zip_actual_storage_bytes(
         assert not Path(snapshot.storage_path).exists()
 
 
+def test_package_worker_rejects_source_size_drift_before_archive_entry_write(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.modules.final_cut_review.infra.repositories as repository_module
+    import backend.app.package_builds as package_builds
+
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FileObjectModel,
+        FinalCutPackageSnapshotModel,
+    )
+    from backend.app.package_builds import process_package_snapshot
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="PSIZEDRIFT")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    package = request_package(client, project["project_ref_id"])
+    with SessionLocal() as observer:
+        snapshot = observer.get(FinalCutPackageSnapshotModel, package["id"])
+        assert snapshot is not None
+        source_id = snapshot.items[0]["original_file_id"]
+        source = observer.get(FileObjectModel, source_id)
+        assert source is not None
+        source_path = Path(source.storage_path)
+        original = source_path.read_bytes()
+    source_path.write_bytes(original + b"unexpected-growth")
+    archive_entry_opened = False
+    original_open = repository_module.zipfile.ZipFile.open
+
+    def track_archive_open(*args: object, **kwargs: object) -> Any:
+        nonlocal archive_entry_opened
+        archive_entry_opened = True
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr(repository_module.zipfile.ZipFile, "open", track_archive_open)
+    settings = get_settings()
+    monkeypatch.setattr(package_builds, "get_database_settings", lambda: settings)
+    assert process_package_snapshot(package["id"]) == "failed"
+    assert archive_entry_opened is False
+    with SessionLocal() as observer:
+        failed = observer.get(FinalCutPackageSnapshotModel, package["id"])
+        assert failed is not None
+        assert failed.failure_details == {"error_code": "FILE_HASH_MISMATCH"}
+        assert failed.storage_bytes == 0
+        assert failed.storage_reclaimed_at is not None
+        assert not Path(failed.storage_path).exists()
+        assert not list(settings.package_root.glob(f"{failed.id}.*.staging.zip"))
+
+
 def test_failed_package_keeps_quota_reserved_when_physical_cleanup_cannot_be_confirmed(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -4048,7 +4098,10 @@ def test_package_worker_persists_claim_before_hard_interruption(
 
 def test_package_worker_keeps_newer_canonical_when_stale_lease_publishes_and_cleans(
     client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import backend.app.modules.final_cut_review.infra.repositories as repository_module
+
     from dataclasses import replace
 
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
@@ -4118,6 +4171,12 @@ def test_package_worker_keeps_newer_canonical_when_stale_lease_publishes_and_cle
         inode=second_metadata.st_ino,
     )
     assert first_artifact.storage_path != second_artifact.storage_path
+    monkeypatch.setattr(settings, "upload_storage_low_watermark_bytes", 10)
+    monkeypatch.setattr(
+        repository_module.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=10, used=0, free=10),
+    )
 
     with SessionLocal() as current_publish_session:
         current_repository = SqlAlchemyReviewRepository(current_publish_session, settings)
@@ -4142,6 +4201,37 @@ def test_package_worker_keeps_newer_canonical_when_stale_lease_publishes_and_cle
         assert snapshot.build_lease_id is None
         assert snapshot.build_lease_expires_at is None
         assert snapshot.sha256 == second_artifact.sha256
+
+
+def test_package_publish_preserves_storage_unavailable_failure_semantics(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.modules.final_cut_review.infra.repositories as repository_module
+    import backend.app.package_builds as package_builds
+
+    from backend.app.modules.final_cut_review.domain.errors import ReviewError
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
+    from backend.app.package_builds import process_package_snapshot
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="PPUBLISHSTORE")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    package = request_package(client, project["project_ref_id"])
+    settings = get_settings()
+    monkeypatch.setattr(package_builds, "get_database_settings", lambda: settings)
+
+    def fail_storage_check(*_args: object, **_kwargs: object) -> None:
+        raise ReviewError("STORAGE_UNAVAILABLE", "synthetic shared storage failure")
+
+    monkeypatch.setattr(repository_module, "ensure_package_filesystem_headroom", fail_storage_check)
+    assert process_package_snapshot(package["id"]) == "failed"
+    with SessionLocal() as observer:
+        snapshot = observer.get(FinalCutPackageSnapshotModel, package["id"])
+        assert snapshot is not None
+        assert snapshot.failure_details == {"error_code": "STORAGE_UNAVAILABLE"}
+        assert not Path(snapshot.storage_path).exists()
 
 
 def test_package_download_lease_blocks_concurrent_integrity_scan(client: TestClient) -> None:
@@ -4747,6 +4837,146 @@ def test_upload_init_enforces_filesystem_low_watermark(
     assert api_error(response)["code"] == "STORAGE_UNAVAILABLE"
 
 
+def test_package_admission_counts_active_upload_reservations_on_shared_filesystem(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.modules.final_cut_review.infra.repositories as repository_module
+
+    from sqlalchemy import func, select
+
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="PSHAREDPKG")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    upload = upload_init_request(
+        client,
+        json={
+            "original_filename": "shared-reservation.mp4",
+            "mime_type": "video/mp4",
+            "file_size": 21,
+            "sha256": "a" * 64,
+        },
+    )
+    assert upload.status_code == 200, upload.text
+    settings = get_settings()
+    monkeypatch.setattr(settings, "upload_storage_low_watermark_bytes", 10)
+    monkeypatch.setattr(repository_module, "estimate_package_storage_bytes", lambda _total, _names: 50)
+    monkeypatch.setattr(
+        repository_module.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=100, used=0, free=100),
+    )
+    with SessionLocal() as observer:
+        before_count = observer.scalar(select(func.count()).select_from(FinalCutPackageSnapshotModel))
+    before_paths = set(settings.package_root.iterdir())
+    package_command = command(
+        "PrepareFinalizedPackage",
+        {"project_ref_id": project["project_ref_id"]},
+    )
+    blocked = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages",
+        json=package_command,
+        headers={"Idempotency-Key": package_command["command_id"]},
+    )
+    assert blocked.status_code == 503
+    assert api_error(blocked)["code"] == "STORAGE_UNAVAILABLE"
+    with SessionLocal() as observer:
+        assert observer.scalar(select(func.count()).select_from(FinalCutPackageSnapshotModel)) == before_count
+    assert set(settings.package_root.iterdir()) == before_paths
+
+
+def test_upload_admission_counts_package_reservations_on_shared_filesystem(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.modules.final_cut_review.infra.repositories as repository_module
+    import backend.app.modules.review_media.service as service_module
+
+    from sqlalchemy import func, select
+
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import UploadSessionModel
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="PSHAREDUPL")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    settings = get_settings()
+    monkeypatch.setattr(settings, "upload_storage_low_watermark_bytes", 10)
+    monkeypatch.setattr(repository_module, "estimate_package_storage_bytes", lambda _total, _names: 50)
+    monkeypatch.setattr(
+        repository_module.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=100, used=0, free=100),
+    )
+    package = request_package(client, project["project_ref_id"])
+    assert package["status"] == "preparing"
+    monkeypatch.setattr(
+        service_module.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=100, used=0, free=100),
+    )
+    with SessionLocal() as observer:
+        before_count = observer.scalar(select(func.count()).select_from(UploadSessionModel))
+    blocked = upload_init_request(
+        client,
+        json={
+            "original_filename": "shared-package-reservation.mp4",
+            "mime_type": "video/mp4",
+            "file_size": 21,
+            "sha256": "a" * 64,
+        },
+    )
+    assert blocked.status_code == 503
+    assert api_error(blocked)["code"] == "STORAGE_UNAVAILABLE"
+    with SessionLocal() as observer:
+        assert observer.scalar(select(func.count()).select_from(UploadSessionModel)) == before_count
+
+
+def test_ready_package_bytes_are_not_double_counted_against_upload_headroom(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.modules.review_media.service as service_module
+
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="PREADYHEAD")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    ready, _package_command = prepare_ready_package(client, project["project_ref_id"])
+    assert ready["status"] == "ready"
+    settings = get_settings()
+    monkeypatch.setattr(settings, "upload_storage_low_watermark_bytes", 10)
+    monkeypatch.setattr(
+        service_module.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=60, used=0, free=60),
+    )
+    accepted = upload_init_request(
+        client,
+        json={
+            "original_filename": "ready-package-does-not-double-count.mp4",
+            "mime_type": "video/mp4",
+            "file_size": 21,
+            "sha256": "a" * 64,
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+
+
+def test_shared_storage_lock_is_taken_after_expensive_reuse_integrity_scan() -> None:
+    import inspect
+
+    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+
+    source = inspect.getsource(SqlAlchemyReviewRepository.prepare_package)
+    assert source.index("self._ready_package_reuse_integrity(reusable)") < source.index(
+        '{"lock_key": STORAGE_ADMISSION_ADVISORY_LOCK_KEY}'
+    )
+
+
 def test_upload_finalization_heavy_io_runs_without_database_checkout(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -4809,6 +5039,93 @@ def test_upload_finalization_heavy_io_runs_without_database_checkout(
     assert checked_out_during_finalize is False
 
 
+def test_package_limit_comparison_accepts_exact_boundaries_and_rejects_plus_one() -> None:
+    from backend.app.modules.final_cut_review.domain.errors import ReviewError
+    from backend.app.modules.final_cut_review.infra.repositories import (
+        estimate_package_storage_bytes,
+        validate_package_limits,
+    )
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalizationRecordModel
+    from backend.app.settings import Settings, ZIP_MAX_ARCHIVE_NAME_BYTES
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    max_legal_archive_name = "a" * ZIP_MAX_ARCHIVE_NAME_BYTES
+    assert estimate_package_storage_bytes(
+        settings.max_package_bytes,
+        [max_legal_archive_name] * settings.max_package_files,
+    ) == settings.max_package_storage_bytes
+    assert validate_package_limits(
+        cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=1) for _ in range(200)]),
+        settings,
+    ) == 200
+    with pytest.raises(ReviewError) as count_error:
+        validate_package_limits(
+            cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=1) for _ in range(201)]),
+            settings,
+        )
+    assert count_error.value.code == "FILE_TOO_LARGE"
+    assert count_error.value.message == "项目定稿原片数量超出打包限制"
+
+    assert validate_package_limits(
+        cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=53_687_091_200)]),
+        settings,
+    ) == 53_687_091_200
+    with pytest.raises(ReviewError) as byte_error:
+        validate_package_limits(
+            cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=53_687_091_201)]),
+            settings,
+        )
+    assert byte_error.value.code == "FILE_TOO_LARGE"
+    assert byte_error.value.message == "项目定稿原片总大小超出打包限制"
+
+
+def test_package_archive_stream_forces_zip64_without_large_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.repositories import add_file_to_archive
+
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    source = storage_root / "source.bin"
+    source.write_bytes(b"zip64-stream-path")
+    observed_force_zip64: list[bool] = []
+    original_open = zipfile.ZipFile.open
+
+    def tracked_open(
+        archive: zipfile.ZipFile,
+        name: str | zipfile.ZipInfo,
+        mode: str = "r",
+        pwd: bytes | None = None,
+        *,
+        force_zip64: bool = False,
+    ) -> Any:
+        if mode == "w":
+            observed_force_zip64.append(force_zip64)
+        return original_open(archive, name, mode, pwd, force_zip64=force_zip64)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", tracked_open)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
+        digest = add_file_to_archive(
+            archive,
+            source,
+            storage_root,
+            "source.bin",
+            source.stat().st_size,
+        )
+
+    assert digest == hashlib.sha256(b"zip64-stream-path").hexdigest()
+    assert observed_force_zip64 == [True]
+    payload = output.getvalue()
+    filename_length = int.from_bytes(payload[26:28], "little")
+    extra_length = int.from_bytes(payload[28:30], "little")
+    local_extra = payload[30 + filename_length : 30 + filename_length + extra_length]
+    assert local_extra.startswith(b"\x01\x00\x10\x00")
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert archive.read("source.bin") == b"zip64-stream-path"
+
+
 def test_package_file_and_byte_limits_fail_before_archive_creation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.app.settings import get_settings
 
@@ -4829,9 +5146,11 @@ def test_package_file_and_byte_limits_fail_before_archive_creation(client: TestC
         headers={"Idempotency-Key": file_limit_cmd["command_id"]},
     )
     assert file_limit_response.status_code == 413
-    assert api_error(file_limit_response)["code"] == "FILE_TOO_LARGE"
+    file_limit_error = api_error(file_limit_response)
+    assert file_limit_error["code"] == "FILE_TOO_LARGE"
+    assert file_limit_error["message"] == "项目定稿原片数量超出打包限制"
 
-    monkeypatch.setattr(settings, "max_package_files", 100)
+    monkeypatch.setattr(settings, "max_package_files", 200)
     monkeypatch.setattr(settings, "max_package_bytes", 1)
     package_cmd = command("PrepareFinalizedPackage", {"project_ref_id": project["project_ref_id"]})
     response = client.post(
@@ -4840,7 +5159,9 @@ def test_package_file_and_byte_limits_fail_before_archive_creation(client: TestC
         headers={"Idempotency-Key": package_cmd["command_id"]},
     )
     assert response.status_code == 413
-    assert api_error(response)["code"] == "FILE_TOO_LARGE"
+    byte_limit_error = api_error(response)
+    assert byte_limit_error["code"] == "FILE_TOO_LARGE"
+    assert byte_limit_error["message"] == "项目定稿原片总大小超出打包限制"
     assert not list(settings.package_root.glob("pkg_*.zip"))
 
 

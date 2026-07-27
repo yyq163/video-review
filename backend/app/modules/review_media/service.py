@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session
 
 from backend.app.modules.final_cut_review.application.context import ExecutionContext
 from backend.app.modules.final_cut_review.domain.errors import ReviewError, not_found
-from backend.app.modules.final_cut_review.infra.repositories import new_id
+from backend.app.modules.final_cut_review.infra.repositories import (
+    STORAGE_ADMISSION_ADVISORY_LOCK_KEY,
+    new_id,
+    pending_package_storage_reservation_bytes,
+    storage_roots_share_filesystem,
+)
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, UploadSessionModel, utcnow
 from backend.app.modules.review_contracts.generated import UploadSessionDTO
 from backend.app.safe_files import (
@@ -388,6 +393,10 @@ class LocalMediaService:
         if bind.dialect.name == "postgresql":
             self.session.execute(
                 text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": STORAGE_ADMISSION_ADVISORY_LOCK_KEY},
+            )
+            self.session.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
                 {"lock_key": UPLOAD_INIT_ADVISORY_LOCK_KEY},
             )
         active_reservation = UploadSessionModel.parts_cleanup_confirmed_at.is_(None)
@@ -419,7 +428,17 @@ class LocalMediaService:
             free_bytes = shutil.disk_usage(self.storage_root).free
         except OSError as exc:
             raise ReviewError("STORAGE_UNAVAILABLE", "无法检查上传存储可用空间") from exc
-        conservatively_available = free_bytes - int(global_bytes) - reservation_bytes
+        package_reserved_bytes = (
+            pending_package_storage_reservation_bytes(self.session)
+            if storage_roots_share_filesystem(self.settings)
+            else 0
+        )
+        conservatively_available = (
+            free_bytes
+            - int(global_bytes)
+            - package_reserved_bytes
+            - reservation_bytes
+        )
         if conservatively_available < self.settings.upload_storage_low_watermark_bytes:
             raise ReviewError("STORAGE_UNAVAILABLE", "上传存储已达到低水位保护线")
 

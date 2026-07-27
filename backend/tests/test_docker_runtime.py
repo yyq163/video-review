@@ -109,6 +109,14 @@ def test_compose_secrets_and_capabilities_drop_to_application_user() -> None:
     worker_environment = compose["services"]["package-worker"]["environment"]
     assert worker_environment["PACKAGE_WORKER_MAX_ATTEMPTS"] == "${PACKAGE_WORKER_MAX_ATTEMPTS:-3}"
     assert worker_environment["PACKAGE_WORKER_RETRY_DELAY_SECONDS"] == "${PACKAGE_WORKER_RETRY_DELAY_SECONDS:-30}"
+    expected_package_limits = {
+        "MAX_PACKAGE_FILES": "${MAX_PACKAGE_FILES:-200}",
+        "MAX_PACKAGE_BYTES": "${MAX_PACKAGE_BYTES:-53687091200}",
+        "MAX_PACKAGE_STORAGE_BYTES": "${MAX_PACKAGE_STORAGE_BYTES:-53713408624}",
+    }
+    for service_name in ("backend", "package-worker"):
+        environment = compose["services"][service_name]["environment"]
+        assert {name: environment[name] for name in expected_package_limits} == expected_package_limits
 
 
 def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:

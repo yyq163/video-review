@@ -111,6 +111,43 @@ def test_upload_session_ttl_exceeds_body_timeout_with_safety_margin() -> None:
         )
 
 
+def test_package_settings_cover_exact_limits_and_maximum_archive_name_overhead() -> None:
+    from backend.app.settings import (
+        DEFAULT_MAX_PACKAGE_STORAGE_BYTES,
+        MAX_PACKAGE_BYTES_LIMIT,
+        MAX_PACKAGE_FILES_LIMIT,
+        Settings,
+        minimum_package_storage_bytes,
+    )
+
+    defaults = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert defaults.max_package_files == 200 == MAX_PACKAGE_FILES_LIMIT
+    assert defaults.max_package_bytes == 53_687_091_200 == MAX_PACKAGE_BYTES_LIMIT
+    assert defaults.max_package_storage_bytes == DEFAULT_MAX_PACKAGE_STORAGE_BYTES
+    assert defaults.max_package_storage_bytes == minimum_package_storage_bytes(
+        defaults.max_package_bytes,
+        defaults.max_package_files,
+    )
+
+    accepted = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        max_package_files=200,
+        max_package_bytes=53_687_091_200,
+        max_package_storage_bytes=DEFAULT_MAX_PACKAGE_STORAGE_BYTES,
+    )
+    assert accepted.max_package_storage_bytes == 53_713_408_624
+
+    with pytest.raises(ValidationError, match="max_package_files"):
+        Settings(_env_file=None, max_package_files=201)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError, match="max_package_bytes"):
+        Settings(_env_file=None, max_package_bytes=53_687_091_201)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError, match="MAX_PACKAGE_STORAGE_BYTES must cover"):
+        Settings(  # type: ignore[call-arg]
+            _env_file=None,
+            max_package_storage_bytes=DEFAULT_MAX_PACKAGE_STORAGE_BYTES - 1,
+        )
+
+
 def test_upload_session_admission_cannot_be_relaxed_by_environment() -> None:
     from backend.app.settings import Settings
 

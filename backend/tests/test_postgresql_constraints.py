@@ -1614,7 +1614,9 @@ def test_postgresql_concurrent_upload_init_enforces_global_quota_with_advisory_l
 ) -> None:
     from sqlalchemy import func
 
+    from backend.app.modules.final_cut_review.infra.repositories import STORAGE_ADMISSION_ADVISORY_LOCK_KEY
     from backend.app.modules.review_media.service import LocalMediaService
+    from backend.app.modules.review_media.service import UPLOAD_INIT_ADVISORY_LOCK_KEY
 
     database_url = _postgres_database_url()
     _prepare_postgresql_schema(database_url)
@@ -1652,7 +1654,7 @@ def test_postgresql_concurrent_upload_init_enforces_global_quota_with_advisory_l
     }
     barrier = threading.Barrier(2)
     results: list[str] = []
-    statements: list[str] = []
+    lock_keys: list[int] = []
     results_lock = threading.Lock()
 
     @event.listens_for(engine, "before_cursor_execute")
@@ -1660,12 +1662,13 @@ def test_postgresql_concurrent_upload_init_enforces_global_quota_with_advisory_l
         _conn: object,
         _cursor: object,
         statement: str,
-        _parameters: object,
+        parameters: object,
         _context: object,
         _executemany: bool,
     ) -> None:
         if "pg_advisory_xact_lock" in statement:
-            statements.append(statement)
+            assert isinstance(parameters, dict)
+            lock_keys.append(int(parameters["lock_key"]))
 
     def initialize() -> None:
         with PgSession() as session:
@@ -1690,7 +1693,13 @@ def test_postgresql_concurrent_upload_init_enforces_global_quota_with_advisory_l
     assert not first.is_alive()
     assert not second.is_alive()
     assert sorted(results) == ["RESOURCE_STATE_CONFLICT", "created"]
-    assert len(statements) == 2
+    assert sorted(lock_keys) == sorted(
+        [
+            STORAGE_ADMISSION_ADVISORY_LOCK_KEY,
+            UPLOAD_INIT_ADVISORY_LOCK_KEY,
+        ]
+        * 2
+    )
 
     with PgSession() as cleanup:
         created = cleanup.scalars(
@@ -1701,6 +1710,133 @@ def test_postgresql_concurrent_upload_init_enforces_global_quota_with_advisory_l
         ).all()
         assert len(created) == 1
         cleanup.delete(created[0])
+        cleanup.commit()
+    engine.dispose()
+    get_settings.cache_clear()
+
+
+def test_postgresql_shared_storage_lock_serializes_upload_and_package_reservations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.modules.final_cut_review.infra.repositories as repository_module
+
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
+    from backend.app.modules.review_media.service import LocalMediaService
+
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    monkeypatch.setenv("STORAGE_ROOT", str(tmp_path / "shared" / "storage"))
+    monkeypatch.setenv("PACKAGE_ROOT", str(tmp_path / "shared" / "packages"))
+    monkeypatch.setenv("UPLOAD_STORAGE_LOW_WATERMARK_BYTES", "0")
+    get_settings.cache_clear()
+    settings = get_settings()
+    monkeypatch.setattr(repository_module, "estimate_package_storage_bytes", lambda _total, _names: 1000)
+    monkeypatch.setattr(
+        repository_module.shutil,
+        "disk_usage",
+        lambda _path: type("DiskUsage", (), {"free": 1100})(),
+    )
+    engine = create_engine(database_url)
+    PgSession = sessionmaker(bind=engine, expire_on_commit=False)
+    prefix = _suffix()
+    with PgSession() as seed:
+        project, item, version, file = _seed_item(seed, prefix)
+        finalization = FinalizationRecordModel(
+            id=f"fin_{prefix}",
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            version_no=version.version_no,
+            original_file_id=file.id,
+            original_filename=file.original_filename,
+            mime_type=file.mime_type,
+            file_size=file.file_size,
+            sha256=file.sha256,
+            duration_ms=file.duration_ms,
+            width=file.width,
+            height=file.height,
+            fps_num=file.fps_num,
+            fps_den=file.fps_den,
+            media_probe_version=file.media_probe_version,
+            status="active",
+        )
+        seed.add(finalization)
+        seed.commit()
+        project_id = project.id
+    principal_id = f"shared-reservation-{prefix}"
+    context = ExecutionContext(
+        entry_source="edit",
+        request_id=f"req-{prefix}",
+        principal=PrincipalRef(kind="system", id=principal_id, project_ref_ids=(project_id,)),
+        write_guard=WriteGuardState(mode="none", verified=True),
+    )
+    upload_payload = {
+        "original_filename": "shared-race.mp4",
+        "mime_type": "video/mp4",
+        "file_size": 100,
+        "sha256": "a" * 64,
+    }
+    barrier = threading.Barrier(2)
+    results: list[str] = []
+    results_lock = threading.Lock()
+
+    def reserve_upload() -> None:
+        with PgSession() as session:
+            try:
+                barrier.wait(timeout=5)
+                LocalMediaService(session, settings, context).init_upload(upload_payload)
+                session.commit()
+            except ReviewError as exc:
+                session.rollback()
+                result = exc.code
+            else:
+                result = "upload_created"
+            with results_lock:
+                results.append(result)
+
+    def reserve_package() -> None:
+        with PgSession() as session:
+            try:
+                barrier.wait(timeout=5)
+                SqlAlchemyReviewRepository(session, settings).prepare_package(
+                    {"project_ref_id": project_id},
+                    context,
+                    None,
+                )
+                session.commit()
+            except ReviewError as exc:
+                session.rollback()
+                result = exc.code
+            else:
+                result = "package_created"
+            with results_lock:
+                results.append(result)
+
+    upload_thread = threading.Thread(target=reserve_upload)
+    package_thread = threading.Thread(target=reserve_package)
+    upload_thread.start()
+    package_thread.start()
+    upload_thread.join(timeout=10)
+    package_thread.join(timeout=10)
+    assert not upload_thread.is_alive()
+    assert not package_thread.is_alive()
+    assert sorted(results) in (
+        ["STORAGE_UNAVAILABLE", "package_created"],
+        ["STORAGE_UNAVAILABLE", "upload_created"],
+    )
+
+    with PgSession() as cleanup:
+        for upload in cleanup.scalars(
+            select(UploadSessionModel).where(UploadSessionModel.owner_principal_id == principal_id)
+        ):
+            cleanup.delete(upload)
+        for package in cleanup.scalars(
+            select(FinalCutPackageSnapshotModel).where(
+                FinalCutPackageSnapshotModel.project_ref_id == project_id
+            )
+        ):
+            cleanup.delete(package)
         cleanup.commit()
     engine.dispose()
     get_settings.cache_clear()
