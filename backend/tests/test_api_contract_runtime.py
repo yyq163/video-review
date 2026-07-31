@@ -4837,6 +4837,15 @@ def test_package_worker_persists_claim_before_hard_interruption(
         snapshot = session.get(FinalCutPackageSnapshotModel, package_id)
         assert snapshot is not None and snapshot.status == "preparing"
         assert snapshot.build_attempts == 2
+        assert snapshot.failure_details == {
+            "error_code": "PACKAGE_BUILD_RETRY_SCHEDULED",
+            "last_failure": {
+                "error_code": "PACKAGE_BUILD_LEASE_EXPIRED",
+                "attempt": 1,
+                "retryable": True,
+                "storage_reclaimed": False,
+            },
+        }
         snapshot.next_build_attempt_at = utcnow()
         snapshot.build_lease_expires_at = utcnow()
         session.commit()
@@ -4849,8 +4858,88 @@ def test_package_worker_persists_claim_before_hard_interruption(
         assert snapshot.next_build_attempt_at is None
         assert snapshot.failure_details == {
             "error_code": "PACKAGE_BUILD_INTERRUPTED",
-            "last_failure": None,
+            "last_failure": {
+                "error_code": "PACKAGE_BUILD_LEASE_EXPIRED",
+                "attempt": 2,
+                "retryable": False,
+                "storage_reclaimed": False,
+            },
         }
+
+
+def test_package_writer_periodically_syncs_and_releases_output_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.modules.final_cut_review.infra.repositories as repository_module
+
+    sync_descriptors: list[int] = []
+    cache_releases: list[int] = []
+    sync_function = "fdatasync" if hasattr(repository_module.os, "fdatasync") else "fsync"
+    monkeypatch.setattr(
+        repository_module.os,
+        sync_function,
+        lambda descriptor: sync_descriptors.append(descriptor),
+    )
+    monkeypatch.setattr(
+        repository_module,
+        "release_file_cache",
+        lambda _descriptor, length: cache_releases.append(length),
+    )
+
+    package_path = tmp_path / "bounded-dirty-pages.zip"
+    with package_path.open("wb", buffering=0) as handle:
+        writer = repository_module.SequentialDigestWriter(handle, sync_interval_bytes=4)
+        assert writer.write(b"abc") == 3
+        assert sync_descriptors == []
+        assert writer.write(b"de") == 2
+        assert len(sync_descriptors) == 1
+        assert cache_releases == [5]
+        digest, storage_bytes = writer.finalize()
+
+    assert storage_bytes == 5
+    assert digest == hashlib.sha256(b"abcde").hexdigest()
+    assert len(sync_descriptors) == 2
+    assert cache_releases == [5, 5]
+    assert package_path.read_bytes() == b"abcde"
+
+
+def test_package_archive_releases_source_cache_while_streaming(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.modules.final_cut_review.infra.repositories as repository_module
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source_path = source_root / "episode.mp4"
+    source_payload = b"s" * (1024 * 1024 + 1)
+    source_path.write_bytes(source_payload)
+    cache_releases: list[int] = []
+    monkeypatch.setattr(repository_module, "PACKAGE_IO_SYNC_INTERVAL_BYTES", 4)
+    monkeypatch.setattr(
+        repository_module,
+        "release_file_cache",
+        lambda _descriptor, length: cache_releases.append(length),
+    )
+
+    archive_path = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        digest = repository_module.add_file_to_archive(
+            archive,
+            source_path,
+            source_root,
+            "episode.mp4",
+            len(source_payload),
+        )
+
+    assert digest == hashlib.sha256(source_payload).hexdigest()
+    assert cache_releases[0] == 1024 * 1024
+    assert cache_releases[0] < len(source_payload)
+    assert cache_releases == sorted(cache_releases)
+    assert cache_releases[-1] == len(source_payload)
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.read("episode.mp4") == source_payload
 
 
 def test_package_worker_keeps_newer_canonical_when_stale_lease_publishes_and_cleans(

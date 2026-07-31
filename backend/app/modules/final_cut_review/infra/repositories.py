@@ -2549,8 +2549,24 @@ class SqlAlchemyReviewRepository:
             return "skipped", None
         if snapshot.next_build_attempt_at is not None and aware(snapshot.next_build_attempt_at) > now:
             return "skipped", None
+        expired_lease_failure: dict[str, Any] | None = None
+        if (
+            snapshot.build_lease_id is not None
+            and snapshot.build_lease_expires_at is not None
+            and aware(snapshot.build_lease_expires_at) <= now
+        ):
+            # A dead worker cannot report its root cause. Persist the lease expiry
+            # that this process can prove, without mislabelling it as an OOM or IO
+            # failure. Host/container telemetry remains the authority for that
+            # deeper diagnosis.
+            expired_lease_failure = {
+                "error_code": "PACKAGE_BUILD_LEASE_EXPIRED",
+                "attempt": snapshot.build_attempts,
+                "retryable": snapshot.build_attempts < self.settings.package_worker_max_attempts,
+                "storage_reclaimed": False,
+            }
         if snapshot.build_attempts >= self.settings.package_worker_max_attempts:
-            last_failure = snapshot.failure_details
+            last_failure = expired_lease_failure or snapshot.failure_details
             snapshot.status = "failed"
             snapshot.sha256 = None
             snapshot.next_build_attempt_at = None
@@ -2573,6 +2589,11 @@ class SqlAlchemyReviewRepository:
                 payload={"error_code": "PACKAGE_BUILD_INTERRUPTED"},
             )
             return "failed", None
+        if expired_lease_failure is not None:
+            snapshot.failure_details = {
+                "error_code": "PACKAGE_BUILD_RETRY_SCHEDULED",
+                "last_failure": expired_lease_failure,
+            }
         lease_id = f"build_{uuid.uuid4().hex}"
         lease_expires_at = now + timedelta(seconds=self.settings.package_worker_retry_delay_seconds)
         snapshot.build_attempts += 1
