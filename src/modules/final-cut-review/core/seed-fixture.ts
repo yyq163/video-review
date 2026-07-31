@@ -22,6 +22,7 @@ export function buildSeedData(): SeedData {
     code: 'FJ-DEMO-28',
     description: '短剧成片审阅演示项目，覆盖 V1 修改、V2 独立复审、定稿和打包。',
     status: 'active',
+    completionStatus: 'in_progress',
     deletedAt: null,
     createdAt: seededAt,
     updatedAt: seededAt,

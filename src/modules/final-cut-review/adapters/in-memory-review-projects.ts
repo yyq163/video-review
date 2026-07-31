@@ -29,6 +29,7 @@ export class InMemoryReviewProjects {
       code: input.code.trim(),
       description: input.description.trim(),
       status: 'active',
+      completionStatus: 'empty',
       deletedAt: null,
       createdAt: timestamp,
       updatedAt: timestamp,

@@ -278,6 +278,159 @@ def _ensure_database(
         cursor.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(database, runtime))
 
 
+def _ensure_pg_stat_statements(
+    connection: psycopg.Connection[tuple[object, ...]],
+    *,
+    admin_user: str,
+    runtime_user: str,
+) -> None:
+    """Install pg_stat_statements without granting query text to the runtime role."""
+    schema_name = "fcr_observability"
+    schema = sql.Identifier(schema_name)
+    admin = sql.Identifier(admin_user)
+    runtime = sql.Identifier(runtime_user)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_get_userbyid(namespace.nspowner) "
+            "FROM pg_namespace namespace WHERE namespace.nspname = %s",
+            (schema_name,),
+        )
+        schema_owner = cursor.fetchone()
+        if schema_owner is None:
+            cursor.execute(
+                sql.SQL("CREATE SCHEMA {} AUTHORIZATION {}").format(
+                    schema,
+                    admin,
+                )
+            )
+        elif schema_owner != (admin_user,):
+            raise RuntimeError(
+                "the observability schema must remain owned by the administration role"
+            )
+        cursor.execute(
+            sql.SQL("REVOKE ALL PRIVILEGES ON SCHEMA {} FROM PUBLIC").format(
+                schema
+            )
+        )
+        cursor.execute(
+            "SELECT namespace.nspname, pg_get_userbyid(extension.extowner) "
+            "FROM pg_extension extension "
+            "JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace "
+            "WHERE extension.extname = 'pg_stat_statements'"
+        )
+        extension = cursor.fetchone()
+        if extension is None:
+            cursor.execute(
+                sql.SQL(
+                    "CREATE EXTENSION pg_stat_statements WITH SCHEMA {}"
+                ).format(schema)
+            )
+        else:
+            extension_schema, extension_owner = extension
+            if extension_owner != admin_user:
+                raise RuntimeError(
+                    "pg_stat_statements must remain owned by the administration role"
+                )
+            if extension_schema != schema_name:
+                cursor.execute(
+                    sql.SQL(
+                        "ALTER EXTENSION pg_stat_statements SET SCHEMA {}"
+                    ).format(schema)
+                )
+        cursor.execute(
+            "SELECT namespace.nspname, pg_get_userbyid(extension.extowner) "
+            "FROM pg_extension extension "
+            "JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace "
+            "WHERE extension.extname = 'pg_stat_statements'"
+        )
+        if cursor.fetchone() != (schema_name, admin_user):
+            raise RuntimeError(
+                "pg_stat_statements must be owned by the administration role "
+                "in the dedicated observability schema"
+            )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA {} FROM PUBLIC"
+            ).format(schema)
+        )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA {} FROM {}"
+            ).format(schema, runtime)
+        )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA {} FROM PUBLIC"
+            ).format(schema)
+        )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA {} FROM {}"
+            ).format(schema, runtime)
+        )
+        cursor.execute(
+            sql.SQL(
+                "GRANT USAGE ON SCHEMA {} TO {}"
+            ).format(schema, runtime)
+        )
+        cursor.execute(
+            sql.SQL(
+                """
+            CREATE OR REPLACE FUNCTION {}.fcr_pg_stat_summary()
+            RETURNS TABLE (
+                calls bigint,
+                total_exec_time_ms double precision,
+                rows bigint,
+                shared_blocks_hit bigint,
+                shared_blocks_read bigint,
+                temp_blocks_written bigint
+            )
+            LANGUAGE sql
+            SECURITY DEFINER
+            SET search_path = pg_catalog
+            AS $function$
+                SELECT
+                    coalesce(sum(statements.calls), 0)::bigint,
+                    coalesce(sum(statements.total_exec_time), 0)::double precision,
+                    coalesce(sum(statements.rows), 0)::bigint,
+                    coalesce(sum(statements.shared_blks_hit), 0)::bigint,
+                    coalesce(sum(statements.shared_blks_read), 0)::bigint,
+                    coalesce(sum(statements.temp_blks_written), 0)::bigint
+                FROM {}.pg_stat_statements AS statements
+                WHERE statements.dbid = (
+                    SELECT database.oid
+                    FROM pg_catalog.pg_database AS database
+                    WHERE database.datname = pg_catalog.current_database()
+                )
+                  AND statements.userid = (
+                    SELECT role.oid
+                    FROM pg_catalog.pg_roles AS role
+                    WHERE role.rolname = session_user
+                  )
+            $function$
+            """
+            ).format(schema, schema)
+        )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE ALL PRIVILEGES ON FUNCTION "
+                "{}.fcr_pg_stat_summary() FROM PUBLIC"
+            ).format(schema)
+        )
+        cursor.execute(
+            sql.SQL(
+                "GRANT EXECUTE ON FUNCTION "
+                "{}.fcr_pg_stat_summary() TO {}"
+            ).format(schema, runtime)
+        )
+        cursor.execute(
+            "SELECT pg_has_role(%s, 'pg_read_all_stats', 'member')",
+            (runtime_user,),
+        )
+        if cursor.fetchone() != (False,):
+            raise RuntimeError("the runtime role must not inherit pg_read_all_stats")
+
+
 def _public_object_owners(
     connection: psycopg.Connection[tuple[object, ...]],
 ) -> set[str]:
@@ -468,6 +621,11 @@ def bootstrap_database_roles(
                 )
             for database_name in (config.application_database, config.test_database):
                 with _connect(config, database_name) as database_connection:
+                    _ensure_pg_stat_statements(
+                        database_connection,
+                        admin_user=config.admin_user,
+                        runtime_user=config.runtime_user,
+                    )
                     _transfer_database_objects(
                         database_connection,
                         config.owner_user,

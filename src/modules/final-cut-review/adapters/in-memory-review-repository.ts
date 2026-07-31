@@ -20,7 +20,9 @@ export class InMemoryReviewRepository {
   readonly snapshot: InMemoryReviewStore['snapshot'];
   readonly relinkOriginalFiles: InMemoryReviewStore['relinkOriginalFiles'];
   readonly listProjects: InMemoryReviewQueries['listProjects'];
-  readonly getProjectDetail: InMemoryReviewQueries['getProjectDetail'];
+  readonly getProjectSummary: InMemoryReviewQueries['getProjectSummary'];
+  readonly getVersionIssues: InMemoryReviewQueries['getVersionIssues'];
+  readonly getIssueDetail: InMemoryReviewQueries['getIssueDetail'];
   readonly getWorkspace: InMemoryReviewQueries['getWorkspace'];
   readonly getActiveFinalizations: InMemoryReviewQueries['getActiveFinalizations'];
   readonly getAllProjectVersions: InMemoryReviewQueries['getAllProjectVersions'];
@@ -43,8 +45,8 @@ export class InMemoryReviewRepository {
   readonly replyToIssue: InMemoryReviewIssues['replyToIssue'];
   readonly setIssueStatus: InMemoryReviewIssues['setIssueStatus'];
   readonly deleteIssue: InMemoryReviewIssues['deleteIssue'];
-  readonly requestChanges: InMemoryReviewFinalizations['requestChanges'];
   readonly finalizeCurrentVersion: InMemoryReviewFinalizations['finalizeCurrentVersion'];
+  readonly revokeFinalization: InMemoryReviewFinalizations['revokeFinalization'];
 
   constructor(
     seed: Partial<InMemoryReviewRepositorySnapshot> = createSeedData(),
@@ -60,7 +62,9 @@ export class InMemoryReviewRepository {
     this.snapshot = store.snapshot;
     this.relinkOriginalFiles = store.relinkOriginalFiles;
     this.listProjects = queries.listProjects;
-    this.getProjectDetail = queries.getProjectDetail;
+    this.getProjectSummary = queries.getProjectSummary;
+    this.getVersionIssues = queries.getVersionIssues;
+    this.getIssueDetail = queries.getIssueDetail;
     this.getWorkspace = queries.getWorkspace;
     this.getActiveFinalizations = queries.getActiveFinalizations;
     this.getAllProjectVersions = queries.getAllProjectVersions;
@@ -83,8 +87,8 @@ export class InMemoryReviewRepository {
     this.replyToIssue = issues.replyToIssue;
     this.setIssueStatus = issues.setIssueStatus;
     this.deleteIssue = issues.deleteIssue;
-    this.requestChanges = finalizations.requestChanges;
     this.finalizeCurrentVersion = finalizations.finalizeCurrentVersion;
+    this.revokeFinalization = finalizations.revokeFinalization;
   }
 
   static seededFiles(): StoredOriginalFile[] {

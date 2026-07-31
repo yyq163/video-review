@@ -1,29 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { CapabilityGate, EmptyState, IconText, StatusBadge } from '../components/shared';
 import { ReviewItemMetadataEditor, type ReviewItemMetadataValues } from '../components/MetadataEditors';
-import type {
-  EntryMode,
-  FinalizationRecord,
-  ReviewIssue,
-  ReviewItem,
-  ReviewVersion,
-} from '../contracts/types';
+import type { EntryMode, FinalizationRevocation, ReviewItem } from '../contracts/types';
 import { formatEpisodeDisplayValue, type ReviewEpisodeGroup } from '../core/episode-dedupe';
-import type { ReviewItemWithMetadata } from '../ports';
+import type { ReviewProjectSummaryItem } from '../ports';
+import { RevokeFinalizationResultUncertainError } from '../adapters/http-review-finalization-operation';
 
 export type ProjectDetailMetadataEpisodeGroup = Omit<ReviewEpisodeGroup, 'items' | 'representative'> & {
-  items: ReviewItemWithMetadata[];
-  representative: ReviewItemWithMetadata;
+  items: ReviewProjectSummaryItem[];
+  representative: ReviewProjectSummaryItem;
 };
+
+type RevokeUiState = 'pending' | 'uncertain';
 
 interface ProjectDetailItemListProps {
   entryMode: EntryMode;
   episodeGroups: ProjectDetailMetadataEpisodeGroup[];
-  finalizations: FinalizationRecord[];
   isArchived: boolean;
-  issuesByVersion: Record<string, ReviewIssue[]>;
   itemActionPending: boolean;
   bulkActionHost?: HTMLElement | null;
   onBulkDeleteReviewItems?: (
@@ -34,113 +29,141 @@ interface ProjectDetailItemListProps {
     uncertainIds: string[];
   }>;
   onDeleteReviewItem: (item: ReviewItem) => void;
-  onUpdateReviewItemMetadata: (item: ReviewItemWithMetadata, values: ReviewItemMetadataValues) => Promise<void>;
+  onRevokeFinalization?: (item: ReviewProjectSummaryItem) => Promise<FinalizationRevocation>;
+  revocationUncertainIds?: ReadonlySet<string>;
+  onUpdateReviewItemMetadata: (
+    item: ReviewProjectSummaryItem,
+    values: ReviewItemMetadataValues,
+  ) => Promise<void>;
   projectRefId: string;
-  versionsByItem: Record<string, ReviewVersion[]>;
+}
+
+function isControlTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(
+    target.closest('a, button, input, textarea, select, label, summary'),
+  );
+}
+
+function thumbnailState(item: ReviewProjectSummaryItem) {
+  if (
+    item.currentVersion.thumbnailStatus === 'ready' &&
+    item.currentVersion.thumbnailUrl
+  ) {
+    return (
+      <img
+        alt={`第${formatEpisodeDisplayValue(item.episode)}集 ${item.currentVersion.versionLabel} 首帧`}
+        className="fj-review-item-thumbnail"
+        data-testid={`item-row-thumbnail-${item.reviewItemId}`}
+        loading="lazy"
+        src={item.currentVersion.thumbnailUrl}
+      />
+    );
+  }
+  return (
+    <span
+      className={`fj-review-item-thumbnail-placeholder is-${item.currentVersion.thumbnailStatus}`}
+      data-testid={`item-row-thumbnail-${item.reviewItemId}`}
+    >
+      {item.currentVersion.thumbnailStatus === 'failed' ? '首帧生成失败' : '首帧生成中'}
+    </span>
+  );
 }
 
 export function ProjectDetailItemList({
   entryMode,
   episodeGroups,
-  finalizations,
   isArchived,
-  issuesByVersion,
   itemActionPending,
   bulkActionHost,
   onBulkDeleteReviewItems,
   onDeleteReviewItem,
+  onRevokeFinalization,
+  revocationUncertainIds,
   onUpdateReviewItemMetadata,
   projectRefId,
-  versionsByItem,
 }: ProjectDetailItemListProps) {
   const [selectedDeleteIds, setSelectedDeleteIds] = useState<Set<string>>(() => new Set());
   const [batchDeleteFailures, setBatchDeleteFailures] = useState<Record<string, string>>({});
   const [batchDeleteUncertainIds, setBatchDeleteUncertainIds] = useState<Set<string>>(() => new Set());
   const [locallyDeletedIds, setLocallyDeletedIds] = useState<Set<string>>(() => new Set());
   const [batchDeletePending, setBatchDeletePending] = useState(false);
-  const selectAllRef = useRef<HTMLInputElement>(null);
-  const visibleEpisodeGroups = useMemo(
+  const [revokeUiStates, setRevokeUiStates] = useState<Record<string, RevokeUiState>>({});
+  const visibleItems = useMemo(
     () =>
       episodeGroups
-        .map((group) => {
-          const items = group.items.filter((item) => !locallyDeletedIds.has(item.reviewItemId));
-          return {
-            ...group,
-            items,
-            representative:
-              items.find(
-                (item) => item.reviewItemId === group.representative.reviewItemId,
-              ) ??
-              items[0] ??
-              group.representative,
-          };
-        })
-        .filter((group) => group.items.length > 0),
+        .flatMap((group) => group.items)
+        .filter((item) => !locallyDeletedIds.has(item.reviewItemId)),
     [episodeGroups, locallyDeletedIds],
   );
-  const deletableItems = useMemo(
+  const serverEligibleItems = useMemo(
     () =>
-      visibleEpisodeGroups.flatMap((group) =>
-        group.items.filter((candidate) => {
-          const candidateVersions = versionsByItem[candidate.reviewItemId] ?? [];
-          const candidateIssues = candidateVersions.flatMap(
-            (version) => issuesByVersion[version.versionId] ?? [],
-          );
-          const candidateHasFinalization = finalizations.some(
-            (finalization) => finalization.reviewItemId === candidate.reviewItemId,
-          );
-          return (
-            !isArchived &&
-            candidate.status === 'pending_review' &&
-            !candidate.activeFinalizationId &&
-            candidateVersions.length === 1 &&
-            candidateIssues.length === 0 &&
-            !candidateHasFinalization
-          );
-        }),
+      visibleItems.filter(
+        (item) =>
+          !isArchived &&
+          item.bulkDelete.eligible &&
+          !item.bulkDelete.locked &&
+          !batchDeleteUncertainIds.has(item.reviewItemId),
       ),
-    [finalizations, isArchived, issuesByVersion, versionsByItem, visibleEpisodeGroups],
+    [batchDeleteUncertainIds, isArchived, visibleItems],
   );
-  const retryableDeletableItems = deletableItems.filter(
-    (item) => !batchDeleteUncertainIds.has(item.reviewItemId),
+  const serverEligibleIds = useMemo(
+    () => new Set(serverEligibleItems.map((item) => item.reviewItemId)),
+    [serverEligibleItems],
   );
-  const deletableIds = useMemo(
-    () => new Set(deletableItems.map((item) => item.reviewItemId)),
-    [deletableItems],
+  const selectedItems = serverEligibleItems.filter((item) =>
+    selectedDeleteIds.has(item.reviewItemId),
   );
-  const selectedItems = retryableDeletableItems.filter((item) => selectedDeleteIds.has(item.reviewItemId));
   const allSelected =
-    retryableDeletableItems.length > 0 &&
-    selectedItems.length === retryableDeletableItems.length;
-  const partiallySelected = selectedItems.length > 0 && !allSelected;
-  const bulkDeleteControls = onBulkDeleteReviewItems && deletableItems.length ? (
+    serverEligibleItems.length > 0 &&
+    selectedItems.length === serverEligibleItems.length;
+
+  const toggleItem = (item: ReviewProjectSummaryItem) => {
+    if (
+      batchDeletePending ||
+      itemActionPending ||
+      !serverEligibleIds.has(item.reviewItemId)
+    ) {
+      return;
+    }
+    setSelectedDeleteIds((current) => {
+      const next = new Set(current);
+      if (next.has(item.reviewItemId)) next.delete(item.reviewItemId);
+      else next.add(item.reviewItemId);
+      return next;
+    });
+    setBatchDeleteFailures((current) => {
+      if (!(item.reviewItemId in current)) return current;
+      const next = { ...current };
+      delete next[item.reviewItemId];
+      return next;
+    });
+  };
+
+  const bulkDeleteControls = onBulkDeleteReviewItems && visibleItems.some(
+    (item) => item.bulkDelete.eligible || item.bulkDelete.locked,
+  ) ? (
     <CapabilityGate entryMode={entryMode} capability="review.item.delete">
       <div
         aria-label="待审分集批量操作"
-        className="fj-review-bulk-delete-controls"
+        className={`fj-review-bulk-delete-controls ${allSelected ? 'is-all-selected' : ''}`.trim()}
         role="group"
       >
-        <label className="fj-review-bulk-select-all">
-          <input
-            ref={selectAllRef}
-            aria-label="全选可删除分集"
-            checked={allSelected}
-            disabled={batchDeletePending || itemActionPending}
-            onChange={(event) => {
-              const checked = event.currentTarget.checked;
-              setSelectedDeleteIds(
-                checked
-                  ? new Set(retryableDeletableItems.map((item) => item.reviewItemId))
-                  : new Set(),
-              );
-            }}
-            type="checkbox"
-          />
-          <span>全选</span>
-        </label>
-        <span className="fj-review-sr-only" aria-live="polite">
-          已选择 {selectedItems.length} 条
-        </span>
+        <button
+          aria-pressed={allSelected}
+          className="fj-review-bulk-select-all"
+          disabled={batchDeletePending || itemActionPending || serverEligibleItems.length === 0}
+          onClick={() => {
+            setSelectedDeleteIds(
+              allSelected
+                ? new Set()
+                : new Set(serverEligibleItems.map((item) => item.reviewItemId)),
+            );
+          }}
+          type="button"
+        >
+          {allSelected ? '取消全选' : '全选'}
+        </button>
+        <span aria-live="polite">已选择 {selectedItems.length} 条</span>
         <button
           className="fj-review-secondary is-danger fj-review-bulk-delete-button"
           disabled={!selectedItems.length || batchDeletePending || itemActionPending}
@@ -168,12 +191,10 @@ export function ProjectDetailItemList({
                   for (const item of batch) delete next[item.reviewItemId];
                   return { ...next, ...result.failures };
                 });
-                setBatchDeleteUncertainIds((current) => {
-                  const next = new Set(current);
-                  for (const id of result.succeededIds) next.delete(id);
-                  for (const id of result.uncertainIds) next.add(id);
-                  return next;
-                });
+                setBatchDeleteUncertainIds((current) => new Set([
+                  ...current,
+                  ...result.uncertainIds,
+                ]));
               })
               .catch((error: unknown) => {
                 const message = error instanceof Error
@@ -199,26 +220,38 @@ export function ProjectDetailItemList({
   ) : null;
 
   useEffect(() => {
-    if (selectAllRef.current) selectAllRef.current.indeterminate = partiallySelected;
-  }, [partiallySelected]);
-
-  useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       setSelectedDeleteIds((current) => {
-        const next = new Set([...current].filter((id) => deletableIds.has(id)));
+        const next = new Set([...current].filter((id) => serverEligibleIds.has(id)));
         return next.size === current.size ? current : next;
       });
       setBatchDeleteFailures((current) =>
-        Object.fromEntries(Object.entries(current).filter(([id]) => deletableIds.has(id))),
+        Object.fromEntries(
+          Object.entries(current).filter(([id]) =>
+            visibleItems.some((item) => item.reviewItemId === id),
+          ),
+        ),
       );
-      setBatchDeleteUncertainIds((current) =>
-        new Set([...current].filter((id) => deletableIds.has(id))),
+      setRevokeUiStates((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([id]) => {
+            const item = visibleItems.find((candidate) => candidate.reviewItemId === id);
+            if (
+              current[id] === 'uncertain' &&
+              revocationUncertainIds &&
+              !revocationUncertainIds.has(id)
+            ) {
+              return false;
+            }
+            return item?.status === 'finalized' && item.finalization?.status === 'active';
+          }),
+        ),
       );
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [deletableIds]);
+  }, [revocationUncertainIds, serverEligibleIds, visibleItems]);
 
-  if (visibleEpisodeGroups.length === 0) {
+  if (visibleItems.length === 0) {
     return <EmptyState title="暂无成片" detail="剪辑入口可创建成片并上传 V1。" icon="upload" />;
   }
 
@@ -229,105 +262,110 @@ export function ProjectDetailItemList({
           ? createPortal(bulkDeleteControls, bulkActionHost)
           : bulkDeleteControls
         : null}
-      {visibleEpisodeGroups.map((group) => {
-        const item = group.representative;
-        const versions = versionsByItem[item.reviewItemId] ?? [];
-        const currentVersion = versions.find((version) => version.versionId === item.currentVersionId);
-        const currentOriginalFilename = currentVersion?.originalMedia.originalFilename || currentVersion?.fileName || '-';
-        const currentIssues = currentVersion ? issuesByVersion[currentVersion.versionId] ?? [] : [];
-        const openCount = currentIssues.filter((issue) => issue.status === 'unresolved').length;
-        const groupDeletableItems = group.items.filter((candidate) =>
-          deletableIds.has(candidate.reviewItemId),
-        );
-        const hasDuplicateDeleteTargets = groupDeletableItems.length > 1;
-        const isFinalized = item.status === 'finalized';
+      {visibleItems.map((item) => {
+        const selected = selectedDeleteIds.has(item.reviewItemId);
+        const selectable = serverEligibleIds.has(item.reviewItemId);
+        const revokeState = revokeUiStates[item.reviewItemId];
+        const revokePending = revokeState === 'pending';
+        const revokeUncertain =
+          revokeState === 'uncertain' ||
+          Boolean(revocationUncertainIds?.has(item.reviewItemId));
+        const cleanupPending = item.revocationCleanupStatus === 'pending';
+        const cleanupFailed = item.revocationCleanupStatus === 'failed';
+        const isFinalized = item.status === 'finalized' && item.finalization?.status === 'active';
+        const classes = [
+          'fj-review-item-row',
+          selected ? 'is-selected-for-delete' : '',
+          !selected && item.status === 'changes_requested' ? 'is-changes-requested' : '',
+          !selected && isFinalized ? 'is-finalized' : '',
+          selectable ? 'is-selectable' : '',
+          item.bulkDelete.locked || revokePending || revokeUncertain || cleanupPending ? 'is-locked' : '',
+        ].filter(Boolean).join(' ');
         return (
           <article
-            key={group.episodeKey}
-            className={`fj-review-item-row ${isFinalized ? 'is-finalized' : ''}`.trim()}
+            aria-pressed={selectable ? selected : undefined}
+            className={classes}
+            data-testid={`review-item-row-${item.reviewItemId}`}
+            key={item.reviewItemId}
+            onClick={(event) => {
+              if (!isControlTarget(event.target)) toggleItem(item);
+            }}
+            onKeyDown={(event) => {
+              if (!selectable || isControlTarget(event.target)) return;
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                toggleItem(item);
+              }
+            }}
+            role={selectable ? 'button' : undefined}
+            tabIndex={selectable ? 0 : undefined}
           >
-            <div className={`fj-review-item-select-column ${hasDuplicateDeleteTargets ? 'has-duplicates' : ''}`}>
-              {groupDeletableItems.map((candidate) => (
-                <CapabilityGate
-                  entryMode={entryMode}
-                  capability="review.item.delete"
-                  key={candidate.reviewItemId}
-                >
-                  {onBulkDeleteReviewItems ? (
-                    <label className="fj-review-item-delete-select">
-                      <input
-                        aria-describedby={
-                          hasDuplicateDeleteTargets
-                            ? `delete-target-${candidate.reviewItemId}`
-                            : undefined
-                        }
-                        aria-label={`选择第${formatEpisodeDisplayValue(candidate.episode)}集`}
-                        checked={selectedDeleteIds.has(candidate.reviewItemId)}
-                        disabled={
-                          batchDeletePending ||
-                          itemActionPending ||
-                          batchDeleteUncertainIds.has(candidate.reviewItemId)
-                        }
-                        onChange={(event) => {
-                          const checked = event.currentTarget.checked;
-                          setSelectedDeleteIds((current) => {
-                            const next = new Set(current);
-                            if (checked) next.add(candidate.reviewItemId);
-                            else next.delete(candidate.reviewItemId);
-                            return next;
-                          });
-                          setBatchDeleteFailures((current) => {
-                            const next = { ...current };
-                            delete next[candidate.reviewItemId];
-                            return next;
-                          });
-                        }}
-                        type="checkbox"
-                      />
-                      {hasDuplicateDeleteTargets ? (
-                        <span
-                          className="fj-review-delete-target-identity"
-                          id={`delete-target-${candidate.reviewItemId}`}
-                        >
-                          <strong>{candidate.title}</strong>
-                          <small>
-                            {(versionsByItem[candidate.reviewItemId] ?? [])
-                              .find((version) => version.versionId === candidate.currentVersionId)
-                              ?.originalMedia.originalFilename ??
-                              candidate.itemCode}
-                          </small>
-                        </span>
-                      ) : null}
-                    </label>
-                  ) : null}
-                </CapabilityGate>
-              ))}
+            <div className="fj-review-item-thumbnail-slot">
+              {thumbnailState(item)}
             </div>
             <div className="fj-review-item-summary">
               <div className="fj-review-item-summary-text">
-                <strong>第 {item.episode} 集</strong>
-                <span>原文件：{currentOriginalFilename} · {versions.length}个版本 · 当前 {currentVersion?.label ?? '-'}</span>
-              </div>
-              {currentVersion ? (
-                <span
-                  aria-hidden="true"
-                  className="fj-review-item-version-watermark"
-                  data-testid={`item-row-version-watermark-${item.reviewItemId}`}
-                >
-                  {currentVersion.label}
+                <strong>第 {formatEpisodeDisplayValue(item.episode)} 集</strong>
+                <span>
+                  {item.title} · {item.currentVersion.versionLabel} · {Math.round(item.currentVersion.durationMs / 1000)} 秒 · {Math.round(item.currentVersion.fileSize / 1024 / 1024)} MiB
                 </span>
-              ) : null}
+              </div>
+              <span
+                aria-hidden="true"
+                className="fj-review-item-version-watermark"
+                data-testid={`item-row-version-watermark-${item.reviewItemId}`}
+              >
+                {item.currentVersion.versionLabel}
+              </span>
             </div>
-            <StatusBadge status={item.status} />
+            {isFinalized && entryMode === 'review' && !isArchived && onRevokeFinalization ? (
+              <CapabilityGate entryMode={entryMode} capability="review.finalization.revoke">
+                <button
+                  aria-label={`撤销第${formatEpisodeDisplayValue(item.episode)}集定稿`}
+                  className="fj-review-finalized-revoke"
+                  disabled={itemActionPending || revokePending || revokeUncertain}
+                  onClick={() => {
+                    if (!window.confirm(`确认撤销第 ${item.episode} 集定稿？关联项目包将立即失效并进入受控清理。`)) {
+                      return;
+                    }
+                    setRevokeUiStates((current) => ({
+                      ...current,
+                      [item.reviewItemId]: 'pending',
+                    }));
+                    void onRevokeFinalization(item).catch((error: unknown) => {
+                      setRevokeUiStates((current) => {
+                        const next = { ...current };
+                        if (error instanceof RevokeFinalizationResultUncertainError) {
+                          next[item.reviewItemId] = 'uncertain';
+                        } else {
+                          delete next[item.reviewItemId];
+                        }
+                        return next;
+                      });
+                    });
+                  }}
+                  type="button"
+                >
+                  <span className="fj-review-finalized-label">已定稿</span>
+                  <span className="fj-review-revoke-label">
+                    {revokePending ? '撤销中' : revokeUncertain ? '确认中' : '撤销'}
+                  </span>
+                </button>
+              </CapabilityGate>
+            ) : (
+              <StatusBadge status={item.status} />
+            )}
             <span className="fj-review-item-open-count">
               <span
                 aria-hidden="true"
                 className="fj-review-item-count-watermark"
                 data-testid={`item-row-count-watermark-${item.reviewItemId}`}
               >
-                {openCount}
+                {item.unresolvedCurrentVersionCount}
               </span>
-              <span className="fj-review-item-open-count-text">当前未修改 {openCount}</span>
+              <span className="fj-review-item-open-count-text">
+                当前未修改 {item.unresolvedCurrentVersionCount}
+              </span>
             </span>
             <div className="fj-review-item-actions">
               <Link
@@ -340,54 +378,57 @@ export function ProjectDetailItemList({
               </Link>
               {!isArchived ? (
                 <CapabilityGate entryMode={entryMode} capability="review.item.update">
-                  {group.items.map((candidate) => (
-                    <ReviewItemMetadataEditor
-                      item={candidate}
-                      key={candidate.reviewItemId}
-                      pending={itemActionPending}
-                      onSubmit={onUpdateReviewItemMetadata}
-                    />
-                  ))}
+                  <ReviewItemMetadataEditor
+                    item={item}
+                    pending={itemActionPending}
+                    onSubmit={onUpdateReviewItemMetadata}
+                  />
                 </CapabilityGate>
               ) : null}
-              {groupDeletableItems.map((candidate) => (
-                <span key={candidate.reviewItemId} className="fj-review-duplicate-item-action">
-                  <CapabilityGate entryMode={entryMode} capability="review.item.delete">
-                    <button
-                      aria-label={`删除分集 ${candidate.title}`}
-                      className="fj-review-secondary is-danger"
-                      disabled={
-                        itemActionPending ||
-                        batchDeleteUncertainIds.has(candidate.reviewItemId)
-                      }
-                      onClick={() => onDeleteReviewItem(candidate)}
-                      type="button"
-                    >
-                      {candidate.reviewItemId === item.reviewItemId && group.items.length === 1
-                        ? '删除'
-                        : '删除重复项'}
-                    </button>
-                    {batchDeleteFailures[candidate.reviewItemId] ? (
-                      <span
-                        className="fj-review-form-error"
-                        data-testid={`batch-delete-error-${candidate.reviewItemId}`}
-                        role="alert"
-                      >
-                        {batchDeleteFailures[candidate.reviewItemId]}
-                      </span>
-                    ) : null}
-                    {batchDeleteUncertainIds.has(candidate.reviewItemId) ? (
-                      <span
-                        className="fj-review-form-error"
-                        data-testid={`batch-delete-uncertain-${candidate.reviewItemId}`}
-                        role="alert"
-                      >
-                        删除结果不确定，已锁定；请刷新页面核对后再操作。
-                      </span>
-                    ) : null}
-                  </CapabilityGate>
+              {item.bulkDelete.eligible ? (
+                <CapabilityGate entryMode={entryMode} capability="review.item.delete">
+                  <button
+                    aria-label={`删除分集 ${item.title}`}
+                    className="fj-review-secondary is-danger"
+                    disabled={itemActionPending || item.bulkDelete.locked || batchDeleteUncertainIds.has(item.reviewItemId)}
+                    onClick={() => onDeleteReviewItem(item)}
+                    type="button"
+                  >
+                    删除
+                  </button>
+                </CapabilityGate>
+              ) : null}
+              {batchDeleteFailures[item.reviewItemId] ? (
+                <span
+                  className="fj-review-form-error"
+                  data-testid={`batch-delete-error-${item.reviewItemId}`}
+                  role="alert"
+                >
+                  {batchDeleteFailures[item.reviewItemId]}
                 </span>
-              ))}
+              ) : null}
+              {batchDeleteUncertainIds.has(item.reviewItemId) ? (
+                <span
+                  className="fj-review-form-error"
+                  data-testid={`batch-delete-uncertain-${item.reviewItemId}`}
+                  role="alert"
+                >
+                  删除结果不确定，已锁定；请刷新页面核对后再操作。
+                </span>
+              ) : null}
+              {revokeUncertain ? (
+                <span className="fj-review-revoke-state" role="status">
+                  撤回结果确认中
+                </span>
+              ) : cleanupPending ? (
+                <span className="fj-review-revoke-state" role="status">
+                  定稿已撤回，关联包清理中
+                </span>
+              ) : cleanupFailed ? (
+                <span className="fj-review-form-error" role="alert">
+                  定稿已撤回，关联包清理失败，等待受控重试
+                </span>
+              ) : null}
             </div>
           </article>
         );

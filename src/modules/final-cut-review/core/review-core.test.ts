@@ -157,13 +157,13 @@ it('restores mock repository state from a snapshot and relinks uploaded original
   const restored = new InMemoryReviewRepository(repository.snapshot());
   restored.relinkOriginalFiles([{ ...file, playbackUrl: 'blob:restored-original' }]);
 
-  const detail = await restored.getProjectDetail(project.projectRefId);
+  const summary = await restored.getProjectSummary(project.projectRefId);
   const workspace = await restored.getWorkspace({
     projectRefId: project.projectRefId,
     reviewItemId: created.item.reviewItemId,
   });
 
-  expect(detail.items).toHaveLength(1);
+  expect(summary.items).toHaveLength(1);
   expect(workspace.currentVersion.fileName).toBe('persisted-v1.mp4');
   expect(workspace.currentVersion.playbackUrl).toBe('blob:restored-original');
 });
@@ -986,40 +986,28 @@ describe('generated HTTP envelope client', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('uses generated HTTP queries for project detail when API runtime is configured', async () => {
+  it('uses the single generated project summary query when API runtime is configured', async () => {
     const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
       const pathname = new URL(String(url)).pathname;
-      if (pathname.endsWith('/api/v1/final-cut-review/projects/prj_runtime_http')) {
+      if (pathname.endsWith('/api/v1/final-cut-review/projects/prj_runtime_http/summary')) {
         return new Response(
           JSON.stringify({
             data: {
-              project_ref_id: 'prj_runtime_http',
-              project_code: 'RHTTP',
-              project_name: 'Runtime HTTP',
-              source: 'local',
-              external_project_id: null,
-              lifecycle_status: 'active',
-              completion_status: 'empty',
-              lock_version: 1,
-              created_at: '2026-06-20T00:00:00.000Z',
-              updated_at: '2026-06-21T00:00:00.000Z',
+              project: {
+                project_ref_id: 'prj_runtime_http',
+                project_code: 'RHTTP',
+                project_name: 'Runtime HTTP',
+                source: 'local',
+                external_project_id: null,
+                lifecycle_status: 'active',
+                completion_status: 'empty',
+                lock_version: 1,
+                created_at: '2026-06-20T00:00:00.000Z',
+                updated_at: '2026-06-21T00:00:00.000Z',
+              },
+              items: [],
             },
             meta: { request_id: 'req-project', contract_version: '1.0' },
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
-      if (pathname.endsWith('/api/v1/final-cut-review/projects/prj_runtime_http/items')) {
-        return new Response(
-          JSON.stringify({
-            data: [],
-            meta: {
-              request_id: 'req-items',
-              contract_version: '1.0',
-              total_count: 0,
-              page: 1,
-              page_size: 200,
-            },
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
@@ -1029,12 +1017,13 @@ describe('generated HTTP envelope client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const runtime = createReviewRuntime({ apiBaseUrl: 'https://review.example/' });
-    const detail = await runtime.getApi('review').getProjectDetail('prj_runtime_http');
+    const summary = await runtime.getApi('review').getProjectSummary('prj_runtime_http');
 
-    expect(detail.project.projectRefId).toBe('prj_runtime_http');
-    expect(detail.items).toEqual([]);
+    expect(summary.project.projectRefId).toBe('prj_runtime_http');
+    expect(summary.items).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://review.example/api/v1/final-cut-review/projects/prj_runtime_http/items?page=1&page_size=200',
+      'https://review.example/api/v1/final-cut-review/projects/prj_runtime_http/summary',
       expect.objectContaining({ credentials: 'include' }),
     );
   });
@@ -1637,7 +1626,18 @@ describe('final cut review core invariants', () => {
   it('keeps issue numbers monotonically increasing across all versions of one review item', async () => {
     const { review } = makeHarness();
     const workspace = await review.getWorkspace({ projectRefId: 'prj_seed_final_cut', reviewItemId: 'item_ep28' });
-    expect([...workspace.currentIssues, ...workspace.historicalIssues].map((issue) => issue.issueNo).sort((left, right) => left - right)).toEqual([1, 2, 3, 4]);
+    const allIssues = (
+      await Promise.all(
+        workspace.versions.map((version) =>
+          review.getVersionIssues({
+            projectRefId: workspace.project.projectRefId,
+            reviewItemId: workspace.item.reviewItemId,
+            versionId: version.versionId,
+          }),
+        ),
+      )
+    ).flat();
+    expect(allIssues.map((issue) => issue.issueNo).sort((left, right) => left - right)).toEqual([1, 2, 3, 4]);
 
     const created = await review.createIssue(
       {
@@ -1732,14 +1732,18 @@ describe('final cut review core invariants', () => {
   });
 
   it('archives projects as read-only and restores them without deleting descendants', async () => {
-    const { edit, review } = makeHarness();
-    const before = await edit.getProjectDetail('prj_seed_final_cut');
-    const beforeVersionIds = Object.values(before.versionsByItem)
-      .flat()
+    const { edit, review, repository } = makeHarness();
+    const before = repository.snapshot();
+    const beforeItemIds = before.items
+      .filter((item) => item.projectRefId === 'prj_seed_final_cut')
+      .map((item) => item.reviewItemId)
+      .sort();
+    const beforeVersionIds = before.versions
+      .filter((version) => version.projectRefId === 'prj_seed_final_cut')
       .map((version) => version.versionId)
       .sort();
-    const beforeIssueIds = Object.values(before.issuesByVersion)
-      .flat()
+    const beforeIssueIds = before.issues
+      .filter((issue) => issue.projectRefId === 'prj_seed_final_cut')
       .map((issue) => issue.issueId)
       .sort();
     await review.finalizeCurrentVersion(
@@ -1760,10 +1764,21 @@ describe('final cut review core invariants', () => {
     await expect(review.archiveProject({ projectRefId: 'prj_seed_final_cut' }, ctx(review))).rejects.toMatchObject({
       code: 'RESOURCE_STATE_CONFLICT',
     });
-    const archivedDetail = await edit.getProjectDetail('prj_seed_final_cut');
-    expect(archivedDetail.items.map((item) => item.reviewItemId)).toEqual(before.items.map((item) => item.reviewItemId));
-    expect(Object.values(archivedDetail.versionsByItem).flat().map((version) => version.versionId).sort()).toEqual(beforeVersionIds);
-    expect(Object.values(archivedDetail.issuesByVersion).flat().map((issue) => issue.issueId).sort()).toEqual(beforeIssueIds);
+    const archivedSummary = await edit.getProjectSummary('prj_seed_final_cut');
+    const archivedSnapshot = repository.snapshot();
+    expect(archivedSummary.items.map((item) => item.reviewItemId).sort()).toEqual(beforeItemIds);
+    expect(
+      archivedSnapshot.versions
+        .filter((version) => version.projectRefId === 'prj_seed_final_cut')
+        .map((version) => version.versionId)
+        .sort(),
+    ).toEqual(beforeVersionIds);
+    expect(
+      archivedSnapshot.issues
+        .filter((issue) => issue.projectRefId === 'prj_seed_final_cut')
+        .map((issue) => issue.issueId)
+        .sort(),
+    ).toEqual(beforeIssueIds);
 
     await expect(
       edit.updateProject(
@@ -1815,9 +1830,21 @@ describe('final cut review core invariants', () => {
     await expect(review.restoreProject({ projectRefId: 'prj_seed_final_cut' }, ctx(review))).rejects.toMatchObject({
       code: 'RESOURCE_STATE_CONFLICT',
     });
-    const restoredDetail = await edit.getProjectDetail('prj_seed_final_cut');
-    expect(Object.values(restoredDetail.versionsByItem).flat().map((version) => version.versionId).sort()).toEqual(beforeVersionIds);
-    expect(Object.values(restoredDetail.issuesByVersion).flat().map((issue) => issue.issueId).sort()).toEqual(beforeIssueIds);
+    const restoredSummary = await edit.getProjectSummary('prj_seed_final_cut');
+    const restoredSnapshot = repository.snapshot();
+    expect(restoredSummary.items.map((item) => item.reviewItemId).sort()).toEqual(beforeItemIds);
+    expect(
+      restoredSnapshot.versions
+        .filter((version) => version.projectRefId === 'prj_seed_final_cut')
+        .map((version) => version.versionId)
+        .sort(),
+    ).toEqual(beforeVersionIds);
+    expect(
+      restoredSnapshot.issues
+        .filter((issue) => issue.projectRefId === 'prj_seed_final_cut')
+        .map((issue) => issue.issueId)
+        .sort(),
+    ).toEqual(beforeIssueIds);
     await expect(
       edit.createReviewItemWithVersion(
         {
@@ -1833,7 +1860,16 @@ describe('final cut review core invariants', () => {
 
   it('soft-deletes projects from lists without physically deleting descendants', async () => {
     const { edit, review, repository } = makeHarness();
-    const before = await edit.getProjectDetail('prj_seed_final_cut');
+    const before = repository.snapshot();
+    const beforeItemCount = before.items.filter(
+      (item) => item.projectRefId === 'prj_seed_final_cut',
+    ).length;
+    const beforeVersionCount = before.versions.filter(
+      (version) => version.projectRefId === 'prj_seed_final_cut',
+    ).length;
+    const beforeIssueCount = before.issues.filter(
+      (issue) => issue.projectRefId === 'prj_seed_final_cut',
+    ).length;
 
     const deleted = await review.deleteProject({ projectRefId: 'prj_seed_final_cut', confirmed: true }, ctx(review));
     expect(deleted.deletedAt).toEqual(expect.any(String));
@@ -1845,16 +1881,14 @@ describe('final cut review core invariants', () => {
       expect.arrayContaining([expect.objectContaining({ projectRefId: 'prj_seed_final_cut' })]),
     );
 
-    await expect(edit.getProjectDetail('prj_seed_final_cut')).rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' });
+    await expect(edit.getProjectSummary('prj_seed_final_cut')).rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' });
     const snapshot = repository.snapshot();
-    expect(snapshot.items.filter((item) => item.projectRefId === 'prj_seed_final_cut').map((item) => item.reviewItemId)).toEqual(
-      before.items.map((item) => item.reviewItemId),
-    );
+    expect(snapshot.items.filter((item) => item.projectRefId === 'prj_seed_final_cut')).toHaveLength(beforeItemCount);
     expect(snapshot.versions.filter((version) => version.projectRefId === 'prj_seed_final_cut')).toHaveLength(
-      Object.values(before.versionsByItem).flat().length,
+      beforeVersionCount,
     );
     expect(snapshot.issues.filter((issue) => issue.projectRefId === 'prj_seed_final_cut')).toHaveLength(
-      Object.values(before.issuesByVersion).flat().length,
+      beforeIssueCount,
     );
     await expect(review.createProjectFinalizedPackage('prj_seed_final_cut', ctx(review))).rejects.toMatchObject({
       code: 'RESOURCE_STATE_CONFLICT',
@@ -1949,7 +1983,6 @@ describe('final cut review core invariants', () => {
     await expect(edit.resolveIssue({ ...writeInput, issueId: 'issue_v2_001' }, ctx(edit))).rejects.toMatchObject({
       code: 'FINALIZED_READONLY',
     });
-    await expect(review.requestChanges(writeInput, ctx(review))).rejects.toMatchObject({ code: 'CAPABILITY_DENIED' });
   });
 
   it('requires the item-delete confirmation at the port boundary', async () => {
@@ -2014,7 +2047,19 @@ describe('final cut review core invariants', () => {
     expect(workspace.currentVersion.label).toBe('V3');
     expect(workspace.currentVersion.status).toBe('pending_review');
     expect(workspace.currentIssues).toHaveLength(0);
-    expect(workspace.historicalIssues.map((issue) => issue.versionId).sort()).toEqual([
+    expect(workspace.historicalIssues).toHaveLength(0);
+    const historicalIssues = (
+      await Promise.all(
+        ['ver_ep28_v1', 'ver_ep28_v2'].map((versionId) =>
+          review.getVersionIssues({
+            projectRefId: 'prj_seed_final_cut',
+            reviewItemId: 'item_ep28',
+            versionId,
+          }),
+        ),
+      )
+    ).flat();
+    expect(historicalIssues.map((issue) => issue.versionId).sort()).toEqual([
       'ver_ep28_v1',
       'ver_ep28_v2',
       'ver_ep28_v2',
@@ -2077,7 +2122,7 @@ describe('final cut review core invariants', () => {
     );
     expect(issue.issueNo).toBe(1);
     const workspace = await review.getWorkspace({ projectRefId: project.projectRefId, reviewItemId: created.item.reviewItemId });
-    expect(workspace.item.status).toBe('in_review');
+    expect(workspace.item.status).toBe('changes_requested');
 
     const nextVersion = await edit.appendVersion(
       {
@@ -2093,7 +2138,14 @@ describe('final cut review core invariants', () => {
       reviewItemId: created.item.reviewItemId,
     });
     expect(nextWorkspace.currentIssues).toHaveLength(0);
-    expect(nextWorkspace.historicalIssues.map((candidate) => candidate.issueId)).toEqual([issue.issueId]);
+    expect(nextWorkspace.historicalIssues).toHaveLength(0);
+    await expect(
+      review.getVersionIssues({
+        projectRefId: project.projectRefId,
+        reviewItemId: created.item.reviewItemId,
+        versionId: created.version.versionId,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ issueId: issue.issueId })]);
   });
 
   it('edits issue by creating a current revision and keeps replies separate from playback', async () => {
@@ -2172,7 +2224,15 @@ describe('final cut review core invariants', () => {
     expect(finalization.originalFileId).toBe(before.currentVersion.originalFileId);
     expect(finalization.sha256).toBe(before.currentVersion.sha256);
     expect(finalization.originalMedia).toMatchObject(before.currentVersion.originalMedia);
-    expect(before.historicalIssues.some((issue) => issue.versionId === 'ver_ep28_v1' && issue.status === 'unresolved')).toBe(true);
+    await expect(
+      review.getVersionIssues({
+        projectRefId: 'prj_seed_final_cut',
+        reviewItemId: 'item_ep28',
+        versionId: 'ver_ep28_v1',
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ versionId: 'ver_ep28_v1', status: 'unresolved' }),
+    ]);
   });
 
   it('packages only active finalizations in the requested project', async () => {

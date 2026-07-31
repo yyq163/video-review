@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { EntryMode } from '../contracts/types';
 import {
-  useProjectDetail,
+  useProjectSummary,
   useReviewMutations,
   useWorkspace,
 } from '../entry/use-review-queries';
@@ -11,12 +11,12 @@ import { ProjectDetailPage } from './ProjectDetailPage';
 import { ReviewWorkspacePage } from './ReviewWorkspacePage';
 
 vi.mock('../entry/use-review-queries', () => ({
-  useProjectDetail: vi.fn(),
+  useProjectSummary: vi.fn(),
   useReviewMutations: vi.fn(),
   useWorkspace: vi.fn(),
 }));
 
-const projectDetailQuery = vi.mocked(useProjectDetail);
+const projectDetailQuery = vi.mocked(useProjectSummary);
 const reviewMutations = vi.mocked(useReviewMutations);
 const workspaceQuery = vi.mocked(useWorkspace);
 
@@ -71,8 +71,10 @@ function renderWorkspace(entryMode: EntryMode) {
 
 describe.each(['edit', 'review'] satisfies EntryMode[])('%s entry navigation in query boundary states', (entryMode) => {
   it('keeps the approved links while project detail is loading', () => {
-    reviewMutations.mockReturnValue({} as ReturnType<typeof useReviewMutations>);
-    projectDetailQuery.mockReturnValue({ isLoading: true } as ReturnType<typeof useProjectDetail>);
+    reviewMutations.mockReturnValue({
+      revokeFinalization: { mutateAsync: vi.fn() },
+    } as unknown as ReturnType<typeof useReviewMutations>);
+    projectDetailQuery.mockReturnValue({ isLoading: true } as ReturnType<typeof useProjectSummary>);
 
     renderProjectDetail(entryMode);
 
@@ -81,12 +83,14 @@ describe.each(['edit', 'review'] satisfies EntryMode[])('%s entry navigation in 
   });
 
   it('keeps the approved links when project detail fails', () => {
-    reviewMutations.mockReturnValue({} as ReturnType<typeof useReviewMutations>);
+    reviewMutations.mockReturnValue({
+      revokeFinalization: { mutateAsync: vi.fn() },
+    } as unknown as ReturnType<typeof useReviewMutations>);
     projectDetailQuery.mockReturnValue({
       isLoading: false,
       data: undefined,
       error: new Error('project detail unavailable'),
-    } as ReturnType<typeof useProjectDetail>);
+    } as ReturnType<typeof useProjectSummary>);
 
     renderProjectDetail(entryMode);
 

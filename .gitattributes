@@ -4,3 +4,6 @@ docs/archive/tdd-bdd/provisional-rc1/*.md whitespace=-blank-at-eol,-blank-at-eof
 # Historical RC2 delivery archive is restored byte-for-byte from Git history.
 docs/archive/tdd-bdd/v1.3-rc2/** binary
 docs/archive/tdd-bdd/FJ_Final_Cut_Review_TDD_BDD_V1.3_RC2.zip binary
+
+# License texts are harvested verbatim; preserve upstream whitespace and line endings.
+compliance/license-texts/*.txt whitespace=-blank-at-eol,-blank-at-eof

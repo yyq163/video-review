@@ -40,9 +40,9 @@ export class MockReviewDownloads implements DownloadApi {
     await this.context.ready();
     this.context.assertContext(executionContext, 'review.package.create');
     this.context.repository.ensureProjectNotDeleted(projectRefId);
-    const detail = await this.context.repository.getProjectDetail(projectRefId);
+    const summary = await this.context.repository.getProjectSummary(projectRefId);
     return this.context.packageAdapter.createProjectPackage({
-      project: detail.project,
+      project: summary.project,
       items: this.context.repository.getAllProjectItems(projectRefId),
       versions: this.context.repository.getAllProjectVersions(projectRefId),
       finalizations: this.context.repository.getActiveFinalizations(projectRefId),

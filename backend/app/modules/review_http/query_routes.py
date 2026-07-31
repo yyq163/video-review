@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -35,7 +36,8 @@ from .envelope import ok
 
 router = APIRouter(prefix="/api/v1/final-cut-review")
 LOGGER = logging.getLogger(__name__)
-PACKAGE_DOWNLOAD_HEARTBEAT_MAX_INTERVAL_SECONDS = 300.0
+PACKAGE_DOWNLOAD_HEARTBEAT_MAX_INTERVAL_SECONDS = 2.0
+PROTECTED_MEDIA_INTERNAL_PREFIX = "/_protected_media"
 
 
 class PackageDownloadLeaseHeartbeat:
@@ -276,6 +278,45 @@ def regular_file_response(
     )
 
 
+def protected_media_response(
+    file: Any,
+    *,
+    range_header: str | None,
+) -> Response:
+    settings = get_settings()
+    if settings.protected_media_direct_stream_enabled:
+        path = contained_existing_path(
+            file.storage_path,
+            settings.storage_root,
+            "PLAYBACK_NOT_READY",
+            Path("files") / file.id,
+        )
+        start, end, status_code = parse_range_header(range_header, file.file_size)
+        headers = {"Accept-Ranges": "bytes"}
+        if status_code == 206:
+            headers["Content-Range"] = f"bytes {start}-{end}/{file.file_size}"
+        return regular_file_response(
+            path,
+            settings.storage_root,
+            media_type=file.mime_type,
+            start=start,
+            end=end,
+            status_code=status_code,
+            headers=headers,
+        )
+    if not isinstance(file.id, str) or re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", file.id) is None:
+        raise ReviewError("STORAGE_UNAVAILABLE", "媒体文件标识非法")
+    return Response(
+        status_code=200,
+        media_type=file.mime_type,
+        headers={
+            **MEDIA_RESPONSE_HEADERS,
+            "Accept-Ranges": "bytes",
+            "X-Accel-Redirect": f"{PROTECTED_MEDIA_INTERNAL_PREFIX}/{quote(file.id, safe='')}",
+        },
+    )
+
+
 def package_download_cookie_name(package_id: str) -> str:
     return f"fj_pkg_{package_id}"
 
@@ -357,6 +398,22 @@ def get_project(
 ) -> dict[str, object]:
     authorize_query(query_context(request, request_id), "review.project.read", project_ref_id)
     return ok(query_service(session).get_project(project_ref_id), request_id)
+
+
+@router.get("/projects/{project_ref_id}/summary")
+def get_project_summary(
+    project_ref_id: str,
+    request: Request,
+    session: Session = Depends(session_dependency),
+    request_id: str = Depends(get_request_id),
+) -> dict[str, object]:
+    authorize_query(query_context(request, request_id), "review.project.read", project_ref_id)
+    return ok(
+        SqlAlchemyReviewRepository(session, get_settings()).get_project_summary(
+            project_ref_id
+        ),
+        request_id,
+    )
 
 
 @router.get("/projects/{project_ref_id}/items")
@@ -519,31 +576,30 @@ def stream_version(
     session: Session = Depends(session_dependency),
     request_id: str = Depends(get_request_id),
     range_header: str | None = Header(default=None, alias="Range"),
-) -> StreamingResponse:
+) -> Response:
     authorize_query(query_context(request, request_id), "review.version.read", project_ref_id)
-    settings = get_settings()
-    repo = SqlAlchemyReviewRepository(session, settings)
+    repo = SqlAlchemyReviewRepository(session, get_settings())
     file = repo.get_file_for_version(project_ref_id, review_item_id, version_id)
-    path = contained_existing_path(
-        file.storage_path,
-        settings.storage_root,
-        "PLAYBACK_NOT_READY",
-        Path("files") / file.id,
-    )
-    start, end, status_code = parse_range_header(range_header, file.file_size)
+    return protected_media_response(file, range_header=range_header)
 
-    headers = {"Accept-Ranges": "bytes"}
-    if status_code == 206:
-        headers["Content-Range"] = f"bytes {start}-{end}/{file.file_size}"
-    return regular_file_response(
-        path,
-        settings.storage_root,
-        media_type=file.mime_type,
-        start=start,
-        end=end,
-        status_code=status_code,
-        headers=headers,
+
+@router.get("/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/thumbnail")
+def get_review_version_thumbnail(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    request: Request,
+    session: Session = Depends(session_dependency),
+    request_id: str = Depends(get_request_id),
+) -> Response:
+    authorize_query(query_context(request, request_id), "review.version.read", project_ref_id)
+    repo = SqlAlchemyReviewRepository(session, get_settings())
+    file = repo.get_thumbnail_file_for_current_version(
+        project_ref_id,
+        review_item_id,
+        version_id,
     )
+    return protected_media_response(file, range_header=None)
 
 
 @router.get("/projects/{project_ref_id}/items/{review_item_id}/finalized-original/download")

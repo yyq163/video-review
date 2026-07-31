@@ -53,6 +53,7 @@ def test_compose_secrets_and_capabilities_drop_to_application_user() -> None:
         "postgres_app_password",
         "write_guard_code",
         "write_guard_session_secret",
+        "edge_handoff_secret",
     }
     assert compose["services"]["postgres"]["environment"] == {
         "POSTGRES_DB": "${POSTGRES_ADMIN_DB:-postgres}",
@@ -119,6 +120,41 @@ def test_compose_secrets_and_capabilities_drop_to_application_user() -> None:
         assert {name: environment[name] for name in expected_package_limits} == expected_package_limits
 
 
+def test_worker_metrics_are_management_only_and_prometheus_scraped() -> None:
+    root = Path(__file__).resolve().parents[2]
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text(encoding="utf-8"))
+    for service_name, port in (("package-worker", "9101"), ("media-worker", "9102")):
+        service = compose["services"][service_name]
+        assert service["expose"] == [port]
+        assert "ports" not in service
+        assert set(service["networks"]) == {"app-internal", "management"}
+        assert service["environment"]["WORKER_METRICS_BIND_HOST"] == (
+            "${PACKAGE_WORKER_MANAGEMENT_IP:-172.30.0.12}"
+            if service_name == "package-worker"
+            else "${MEDIA_WORKER_MANAGEMENT_IP:-172.30.0.13}"
+        )
+    prometheus = yaml.safe_load(
+        (root / "ops/prometheus/prometheus.yml").read_text(encoding="utf-8")
+    )
+    scrape_targets = {
+        target
+        for scrape in prometheus["scrape_configs"]
+        for static_config in scrape["static_configs"]
+        for target in static_config["targets"]
+    }
+    assert "package-worker:9101" in scrape_targets
+    assert "media-worker:9102" in scrape_targets
+    assert compose["networks"]["management"]["internal"] is True
+    assert set(compose["services"]["prometheus"]["networks"]) == {"management"}
+    assert compose["services"]["backend"]["environment"]["MANAGEMENT_NETWORK_CIDR"] == (
+        "${MANAGEMENT_NETWORK_SUBNET:-172.30.0.0/24}"
+    )
+    assert compose["networks"]["management"]["ipam"]["config"] == [
+        {"subnet": "${MANAGEMENT_NETWORK_SUBNET:-172.30.0.0/24}"}
+    ]
+    assert "ports" not in compose["services"]["prometheus"]
+
+
 def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:
     root = Path(__file__).resolve().parents[2]
     script = (root / "scripts/verify-compose-persistence.sh").read_text(encoding="utf-8")
@@ -129,9 +165,9 @@ def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:
     assert "for offset in range(0, len(line), 64 * 1024)" in script
     assert script.index("stop_writers\nbefore=$(database_snapshot)") < script.index("before=$(database_snapshot)")
     assert script.count("stop_writers\nafter_") == 2
-    assert "compose stop backend maintenance package-worker" in script
-    assert "compose ps --format json postgres backend maintenance package-worker" in script
-    assert 'expected = {"postgres", "backend", "maintenance", "package-worker"}' in script
+    assert "compose stop backend maintenance package-worker media-worker" in script
+    assert "compose ps --format json postgres backend maintenance package-worker media-worker nginx" in script
+    assert 'expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "nginx"}' in script
     assert script.count("restore_four_services") >= 4
     restore_block = script[script.index("restore_four_services()") : script.index(
         "restart_four_services_in_dependency_order()"
@@ -220,7 +256,7 @@ def test_fixed_docker_runtime_gate_covers_delivery_lifecycle() -> None:
     assert positions == sorted(positions)
     assert "down -v" not in script
     assert 'sh "$script_dir/compose-delivery.sh" "$@"' in script
-    assert 'expected = {"postgres", "backend", "maintenance", "package-worker"}' in script
+    assert 'expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "nginx"}' in script
     assert 're.fullmatch(r"(?:sha256:)?([0-9a-f]{64})", image_id)' in script
     assert 'docker image inspect "$image_id"' in script
     assert 'docker container inspect "$1"' in script
@@ -244,7 +280,7 @@ printf '%s\\n' "$*" >> "$FAKE_COMPOSE_LOG"
 if [ "${1:-}" = ps ] && [ "${2:-}" = -q ]; then
     printf '%s-container\n' "${3:-unknown}"
 elif [ "${1:-}" = ps ]; then
-    printf '%s\\n' '[{"Service":"postgres","State":"running","Health":"healthy"},{"Service":"backend","State":"running","Health":"healthy"},{"Service":"maintenance","State":"running","Health":"healthy"},{"Service":"package-worker","State":"running","Health":"healthy"}]'
+    printf '%s\\n' '[{"Service":"postgres","State":"running","Health":"healthy"},{"Service":"backend","State":"running","Health":"healthy"},{"Service":"maintenance","State":"running","Health":"healthy"},{"Service":"package-worker","State":"running","Health":"healthy"},{"Service":"media-worker","State":"running","Health":"healthy"},{"Service":"nginx","State":"running","Health":"healthy"}]'
 elif [ "${1:-}" = images ] && [ "${2:-}" = -q ]; then
     printf 'a%.0s' $(seq 1 64)
     printf '\\n'
@@ -442,6 +478,7 @@ def test_compose_runtime_scripts_resolve_passwords_from_secret_files_only() -> N
     assert "COMPOSE_POSTGRES_OWNER_PASSWORD_FILE={owner_path}" in upgrade
     assert "COMPOSE_POSTGRES_APP_PASSWORD_FILE={app_path}" in upgrade
     assert "COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE={session_path}" in upgrade
+    assert "COMPOSE_EDGE_HANDOFF_SECRET_FILE={edge_path}" in upgrade
     assert "COMPOSE_WRITE_GUARD_CODE_FILE={code_path}" in upgrade
     assert "POSTGRES_ADMIN_PASSWORD=$admin_password" not in upgrade
     assert "POSTGRES_OWNER_PASSWORD=$owner_password" not in upgrade
@@ -572,7 +609,7 @@ def test_delivery_wrapper_uses_project_relative_immutable_secret_snapshots_from_
     caller.mkdir()
     secret_dir = root / "secrets"
     secret_dir.mkdir(mode=0o700)
-    for name in ("admin", "owner", "app", "code", "session"):
+    for name in ("admin", "owner", "app", "code", "session", "edge"):
         secret = secret_dir / name
         secret.write_text(f"original-{name}\n", encoding="utf-8")
         secret.chmod(0o600)
@@ -595,6 +632,7 @@ def test_delivery_wrapper_uses_project_relative_immutable_secret_snapshots_from_
                 "    printf '%s\\n' 'COMPOSE_POSTGRES_APP_PASSWORD_FILE=secrets/app'",
                 "    printf '%s\\n' 'COMPOSE_WRITE_GUARD_CODE_FILE=secrets/code'",
                 "    printf '%s\\n' 'COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE=secrets/session'",
+                "    printf '%s\\n' 'COMPOSE_EDGE_HANDOFF_SECRET_FILE=secrets/edge'",
                 "    exit 0",
                 "    ;;",
                 "esac",
@@ -607,7 +645,7 @@ def test_delivery_wrapper_uses_project_relative_immutable_secret_snapshots_from_
                 "done",
                 'test -n "$env_file"',
                 ": >\"$SNAPSHOT_REPORT\"",
-                "for mapping in COMPOSE_POSTGRES_ADMIN_PASSWORD_FILE:admin COMPOSE_POSTGRES_OWNER_PASSWORD_FILE:owner COMPOSE_POSTGRES_APP_PASSWORD_FILE:app COMPOSE_WRITE_GUARD_CODE_FILE:code COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE:session; do",
+                "for mapping in COMPOSE_POSTGRES_ADMIN_PASSWORD_FILE:admin COMPOSE_POSTGRES_OWNER_PASSWORD_FILE:owner COMPOSE_POSTGRES_APP_PASSWORD_FILE:app COMPOSE_WRITE_GUARD_CODE_FILE:code COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE:session COMPOSE_EDGE_HANDOFF_SECRET_FILE:edge; do",
                 "    variable=${mapping%%:*}",
                 "    label=${mapping#*:}",
                 "    snapshot=$(sed -n \"s/^${variable}=//p\" \"$env_file\" | tail -n 1)",
@@ -641,13 +679,14 @@ def test_delivery_wrapper_uses_project_relative_immutable_secret_snapshots_from_
 
     assert result.returncode == 0, result.stderr
     report_lines = report.read_text(encoding="utf-8").splitlines()
-    assert len(report_lines) == 5
+    assert len(report_lines) == 6
     expected_labels = {
         "COMPOSE_POSTGRES_ADMIN_PASSWORD_FILE": "admin",
         "COMPOSE_POSTGRES_OWNER_PASSWORD_FILE": "owner",
         "COMPOSE_POSTGRES_APP_PASSWORD_FILE": "app",
         "COMPOSE_WRITE_GUARD_CODE_FILE": "code",
         "COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE": "session",
+        "COMPOSE_EDGE_HANDOFF_SECRET_FILE": "edge",
     }
     for line in report_lines:
         variable, raw_snapshot = line.split("|", 1)
@@ -684,6 +723,7 @@ def test_delivery_wrapper_rejects_unsafe_compose_secret_files(
         "COMPOSE_POSTGRES_APP_PASSWORD_FILE": secret_dir / "app",
         "COMPOSE_WRITE_GUARD_CODE_FILE": secret_dir / "code",
         "COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE": secret_dir / "session",
+        "COMPOSE_EDGE_HANDOFF_SECRET_FILE": secret_dir / "edge",
     }
     for secret_path in secret_paths.values():
         secret_path.write_text("test-only-secret\n", encoding="utf-8")
@@ -715,6 +755,7 @@ case "$*" in
     printf 'COMPOSE_POSTGRES_APP_PASSWORD_FILE=%s\n' "$FAKE_APP_SECRET"
     printf 'COMPOSE_WRITE_GUARD_CODE_FILE=%s\n' "$FAKE_CODE_SECRET"
     printf 'COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE=%s\n' "$FAKE_SESSION_SECRET"
+    printf 'COMPOSE_EDGE_HANDOFF_SECRET_FILE=%s\n' "$FAKE_EDGE_SECRET"
     ;;
 esac
 exit 0
@@ -733,6 +774,7 @@ exit 0
             "FAKE_APP_SECRET": str(secret_paths["COMPOSE_POSTGRES_APP_PASSWORD_FILE"]),
             "FAKE_CODE_SECRET": str(secret_paths["COMPOSE_WRITE_GUARD_CODE_FILE"]),
             "FAKE_SESSION_SECRET": str(secret_paths["COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE"]),
+            "FAKE_EDGE_SECRET": str(secret_paths["COMPOSE_EDGE_HANDOFF_SECRET_FILE"]),
         },
         check=False,
         capture_output=True,
@@ -969,8 +1011,8 @@ def test_delivery_overlay_constructs_digest_only_image_reference() -> None:
     root = Path(__file__).resolve().parents[2]
     overlay = (root / "docker-compose.delivery.yml").read_text(encoding="utf-8")
     expected = "${BACKEND_IMAGE_REPOSITORY:?BACKEND_IMAGE_REPOSITORY is required}@sha256:${BACKEND_IMAGE_DIGEST:?BACKEND_IMAGE_DIGEST is required}"
-    assert overlay.count(expected) == 4
-    for service_name in ("migrate", "backend", "maintenance", "package-worker"):
+    assert overlay.count(expected) == 5
+    for service_name in ("migrate", "backend", "maintenance", "package-worker", "media-worker"):
         assert f"  {service_name}:\n    image: {expected}\n    build: !reset null" in overlay
     persistence = (root / "scripts/verify-compose-persistence.sh").read_text(encoding="utf-8")
     assert "sh scripts/compose-delivery.sh" in persistence
@@ -2480,6 +2522,7 @@ file_names = {
     "COMPOSE_POSTGRES_APP_PASSWORD_FILE",
     "COMPOSE_WRITE_GUARD_CODE_FILE",
     "COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE",
+    "COMPOSE_EDGE_HANDOFF_SECRET_FILE",
 }
 if not file_names <= values.keys():
     raise SystemExit("probe secret-file mapping is incomplete")

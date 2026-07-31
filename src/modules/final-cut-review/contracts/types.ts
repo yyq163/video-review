@@ -22,9 +22,9 @@ export type Capability =
   | 'review.issue.reopen'
   | 'review.issue.delete'
   | 'review.session.start'
-  | 'review.session.request_changes'
   | 'review.finalization.read'
   | 'review.finalization.create'
+  | 'review.finalization.revoke'
   | 'review.download.finalized_original'
   | 'review.package.create'
   | 'review.package.read'
@@ -123,6 +123,7 @@ export interface Project {
   code: string;
   description: string;
   status: 'active' | 'archived';
+  completionStatus: 'empty' | 'in_progress' | 'completed';
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -143,6 +144,7 @@ export interface ReviewItem {
   title: string;
   episode: string;
   currentVersionId: VersionId;
+  unresolvedCurrentVersionCount?: number;
   activeFinalizationId: FinalizationId | null;
   status: ReviewItemStatus;
   createdAt: string;
@@ -166,8 +168,11 @@ export interface ReviewVersion {
   height: number;
   fpsNum: number;
   fpsDen: number;
-  playbackAssetId: string;
+  playbackStatus: 'pending' | 'ready' | 'failed';
+  playbackAssetId: string | null;
   playbackUrl: string;
+  thumbnailAssetId: string | null;
+  thumbnailUrl: string | null;
   status: ReviewItemStatus;
   versionNote?: string | null;
   changeSummary?: string | null;
@@ -229,6 +234,15 @@ export interface FinalizationRecord {
   fileName: string;
   originalMedia: OriginalMediaSnapshot;
   frozenAt: string;
+  status?: 'active' | 'revoked';
+  revokedAt?: string | null;
+}
+
+export interface FinalizationRevocation {
+  finalization: FinalizationRecord;
+  reviewItem: ReviewItem;
+  cleanupStatus: 'pending' | 'failed' | 'complete';
+  invalidatedPackageIds: string[];
 }
 
 export interface StoredOriginalFile {

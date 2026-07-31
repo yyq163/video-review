@@ -32,10 +32,10 @@ capabilities:
     - review.issue.delete
     - review.finalization.read
     - review.finalization.create
+    - review.finalization.revoke
     - review.download.finalized_original
     - review.package.create
     - review.package.read
     - review.package.download
   compatibility:
     - review.session.start
-    - review.session.request_changes

@@ -20,6 +20,7 @@ export function projectFromDto(dto: ProjectDTO): Project {
     name: dto.project_name,
     description: dto.description,
     status: dto.lifecycle_status,
+    completionStatus: dto.completion_status,
     deletedAt: dto.deleted_at ?? null,
     createdAt: dto.created_at,
     updatedAt: dto.updated_at,
@@ -52,6 +53,7 @@ export function itemFromDto(dto: ReviewItemDTO): ReviewItem {
         ? dto.item_code
         : dto.episode_no?.toString() ?? dto.item_code,
     currentVersionId: dto.current_version_id,
+    unresolvedCurrentVersionCount: dto.unresolved_current_version_count,
     activeFinalizationId: dto.active_finalization_id ?? null,
     status: dto.workflow_status,
     createdAt: dto.created_at,
@@ -68,6 +70,7 @@ function versionStatus(dto: ReviewVersionDTO, item?: ReviewItemDTO): ReviewVersi
 
 export function versionFromDto(dto: ReviewVersionDTO, baseUrl: string, item?: ReviewItemDTO): ReviewVersion {
   const media = originalMediaFromDto(dto);
+  const playbackReady = dto.playback_status === 'ready' && Boolean(dto.playback_asset_id);
   return {
     versionId: dto.id,
     projectRefId: dto.project_ref_id,
@@ -85,8 +88,18 @@ export function versionFromDto(dto: ReviewVersionDTO, baseUrl: string, item?: Re
     height: media.height,
     fpsNum: media.fpsNum,
     fpsDen: media.fpsDen,
-    playbackAssetId: dto.playback_asset_id ?? media.originalFileId,
-    playbackUrl: `${baseUrl}/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.review_item_id}/versions/${dto.id}/stream`,
+    playbackStatus:
+      dto.playback_status === 'processing'
+        ? 'pending'
+        : dto.playback_status,
+    playbackAssetId: dto.playback_asset_id ?? null,
+    playbackUrl: playbackReady
+      ? `${baseUrl}/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.review_item_id}/versions/${dto.id}/stream`
+      : '',
+    thumbnailAssetId: dto.thumbnail_asset_id ?? null,
+    thumbnailUrl: dto.thumbnail_asset_id
+      ? `${baseUrl}/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.review_item_id}/versions/${dto.id}/thumbnail`
+      : null,
     status: versionStatus(dto, item),
     versionNote: dto.version_note ?? null,
     changeSummary: dto.change_summary ?? null,
@@ -107,6 +120,8 @@ export function finalizationFromDto(dto: FinalizationDTO): FinalizationRecord {
     fileName: media.originalFilename,
     originalMedia: media,
     frozenAt: dto.finalized_at,
+    status: dto.status,
+    revokedAt: dto.revoked_at ?? null,
   };
 }
 

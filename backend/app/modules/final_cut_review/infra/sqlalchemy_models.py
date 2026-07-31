@@ -271,6 +271,62 @@ Index(
 Index("ix_review_versions_project_item", ReviewVersionModel.project_ref_id, ReviewVersionModel.review_item_id)
 
 
+class MediaDerivativeTaskModel(Base):
+    __tablename__ = "media_derivative_tasks"
+    __table_args__ = (
+        UniqueConstraint("version_id", "kind", name="uq_media_derivative_tasks_version_kind"),
+        ForeignKeyConstraint(
+            ["version_id", "project_ref_id", "review_item_id"],
+            ["review_versions.id", "review_versions.project_ref_id", "review_versions.review_item_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["output_file_id"], ["file_objects.id"], ondelete="RESTRICT"),
+        CheckConstraint("kind in ('playback_faststart','thumbnail')", name="ck_media_derivative_tasks_kind"),
+        CheckConstraint("status in ('queued','running','ready','failed')", name="ck_media_derivative_tasks_status"),
+        CheckConstraint("attempts >= 0", name="ck_media_derivative_tasks_attempts"),
+        CheckConstraint(
+            "(status = 'running' AND lease_id IS NOT NULL AND lease_expires_at IS NOT NULL) "
+            "OR (status != 'running' AND lease_id IS NULL AND lease_expires_at IS NULL)",
+            name="ck_media_derivative_tasks_lease",
+        ),
+        CheckConstraint(
+            "(status = 'ready' AND output_file_id IS NOT NULL) OR status != 'ready'",
+            name="ck_media_derivative_tasks_ready_output",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_ref_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_item_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    version_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_id: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    output_file_id: Mapped[str | None] = mapped_column(String(64))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    failure_details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+Index(
+    "ix_media_derivative_tasks_queue",
+    MediaDerivativeTaskModel.status,
+    MediaDerivativeTaskModel.next_attempt_at,
+    MediaDerivativeTaskModel.created_at,
+    MediaDerivativeTaskModel.id,
+)
+Index(
+    "ix_media_derivative_tasks_version",
+    MediaDerivativeTaskModel.project_ref_id,
+    MediaDerivativeTaskModel.review_item_id,
+    MediaDerivativeTaskModel.version_id,
+)
+
+
 class ReviewIssueModel(Base):
     __tablename__ = "review_issues"
     __table_args__ = (
@@ -445,9 +501,13 @@ class FinalizationRecordModel(Base):
             ["review_versions.id", "review_versions.project_ref_id", "review_versions.review_item_id", "review_versions.original_file_id"],
             ondelete="RESTRICT",
         ),
-        CheckConstraint("status = 'active'", name="ck_finalization_active_only"),
+        CheckConstraint("status in ('active','revoked')", name="ck_finalization_status"),
         CheckConstraint("version_no >= 1", name="ck_finalizations_version_no"),
         CheckConstraint("file_size > 0", name="ck_finalizations_file_size"),
+        CheckConstraint(
+            "(status = 'active' AND revoked_at IS NULL) OR (status = 'revoked' AND revoked_at IS NOT NULL)",
+            name="ck_finalizations_revoked_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -468,6 +528,7 @@ class FinalizationRecordModel(Base):
     media_probe_version: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     finalized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 Index(
@@ -485,7 +546,7 @@ class FinalCutPackageSnapshotModel(Base):
     __table_args__ = (
         UniqueConstraint("id", "project_ref_id", name="uq_package_snapshots_id_project"),
         ForeignKeyConstraint(["project_ref_id"], ["project_refs.id"], ondelete="RESTRICT"),
-        CheckConstraint("status in ('preparing','ready','failed','expired')", name="ck_package_snapshots_status"),
+        CheckConstraint("status in ('preparing','ready','failed','expired','invalidated')", name="ck_package_snapshots_status"),
         CheckConstraint("sha256 is null or length(sha256) = 64", name="ck_package_snapshots_sha256"),
         CheckConstraint("status != 'ready' or sha256 is not null", name="ck_package_snapshots_ready_sha256"),
         CheckConstraint("storage_bytes >= 0", name="ck_package_snapshots_storage_bytes"),
@@ -561,6 +622,47 @@ Index(
     unique=True,
     sqlite_where=FinalCutPackageSnapshotModel.status == "preparing",
     postgresql_where=FinalCutPackageSnapshotModel.status == "preparing",
+)
+
+
+class FinalizationPackageInvalidationModel(Base):
+    __tablename__ = "finalization_package_invalidations"
+    __table_args__ = (
+        UniqueConstraint("finalization_id", "package_id", name="uq_finalization_package_invalidations_identity"),
+        ForeignKeyConstraint(
+            ["finalization_id", "project_ref_id", "review_item_id"],
+            ["finalizations.id", "finalizations.project_ref_id", "finalizations.review_item_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["package_id", "project_ref_id"],
+            ["package_snapshots.id", "package_snapshots.project_ref_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("cleanup_status in ('pending','failed','complete')", name="ck_finalization_package_invalidations_status"),
+        CheckConstraint("cleanup_attempts >= 0", name="ck_finalization_package_invalidations_attempts"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_ref_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_item_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    finalization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    package_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    cleanup_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    cleanup_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+Index(
+    "ix_finalization_package_invalidations_finalization",
+    FinalizationPackageInvalidationModel.finalization_id,
+    FinalizationPackageInvalidationModel.cleanup_status,
+)
+Index(
+    "ix_finalization_package_invalidations_package",
+    FinalizationPackageInvalidationModel.package_id,
 )
 
 

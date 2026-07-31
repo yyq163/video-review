@@ -175,9 +175,9 @@ review.issue.reply
 review.issue.resolve
 review.issue.reopen
 review.session.start
-review.session.request_changes
 review.finalization.read
 review.finalization.create
+review.finalization.revoke
 review.download.finalized_original
 review.package.create
 review.package.read

@@ -69,7 +69,7 @@ export function useReviewWorkspaceActions(input: {
   };
 
   const finalize = () => {
-    const confirmed = window.confirm('确认将当前版本定稿？定稿后当前版本将冻结，且不可撤销。');
+    const confirmed = window.confirm('确认将当前版本定稿？定稿后当前版本将冻结；未归档项目可在项目详情二次确认后撤回。');
     if (!confirmed) return;
     input.mutations.finalizeCurrentVersion.mutate(
       { ...input.currentInput, confirmed: true },

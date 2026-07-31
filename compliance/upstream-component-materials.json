@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "components": {
+    "prometheus": {
+      "version": "3.13.0",
+      "tag": "v3.13.0",
+      "commit_sha": "40af9c2cdc0eda00f3622e867a27f6359f7295f3",
+      "repository": "https://github.com/prometheus/prometheus",
+      "modifications": "none",
+      "license": {
+        "path": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "source_url": "https://raw.githubusercontent.com/prometheus/prometheus/40af9c2cdc0eda00f3622e867a27f6359f7295f3/LICENSE"
+      },
+      "notice": {
+        "status": "present",
+        "path": "compliance/upstream-license-texts/Prometheus-NOTICE.txt",
+        "sha256": "ac9e304462a58a4d71b6488423d4447e614c8b31d517fe24345016522c102a78",
+        "source_url": "https://raw.githubusercontent.com/prometheus/prometheus/40af9c2cdc0eda00f3622e867a27f6359f7295f3/NOTICE"
+      }
+    },
+    "cadvisor": {
+      "version": "0.57.0",
+      "tag": "v0.57.0",
+      "commit_sha": "4098bb73867d45b7ced21695e073d047025403b8",
+      "repository": "https://github.com/google/cadvisor",
+      "modifications": "none",
+      "license": {
+        "path": "compliance/upstream-license-texts/cAdvisor-Apache-2.0-LICENSE.txt",
+        "sha256": "1d0e6c88b109130755ed46ea261745192813ad175eff727c2ee77bbb220104c8",
+        "source_url": "https://raw.githubusercontent.com/google/cadvisor/4098bb73867d45b7ced21695e073d047025403b8/LICENSE"
+      },
+      "notice": {
+        "status": "absent",
+        "checked_at": "2026-07-31",
+        "immutable_tree_url": "https://github.com/google/cadvisor/tree/4098bb73867d45b7ced21695e073d047025403b8",
+        "expected_notice_url": "https://raw.githubusercontent.com/google/cadvisor/4098bb73867d45b7ced21695e073d047025403b8/NOTICE",
+        "conclusion": "The immutable upstream v0.57.0 root tree contains no NOTICE file; no project-authored substitute is created."
+      }
+    }
+  }
+}

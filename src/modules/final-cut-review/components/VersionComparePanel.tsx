@@ -1,12 +1,39 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
-import type { ReviewAnnotationShape, ReviewIssue, ReviewVersion, VersionId } from '../contracts/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  EntryMode,
+  ReviewAnnotationShape,
+  ReviewIssue,
+  ReviewItemId,
+  ReviewVersion,
+  VersionId,
+} from '../contracts/types';
 import { normalizedPathToCanvasPath, normalizedVideoPointToCanvasPoint } from '../core/coordinates';
 import { formatTimestampTimecode } from '../core/timecode';
+import { useVersionIssues } from '../entry/use-review-queries';
 
 interface VersionComparePanelProps {
+  entryMode: EntryMode;
+  projectRefId: string;
+  reviewItemId: ReviewItemId;
   versions: ReviewVersion[];
   currentVersionId: VersionId;
-  issues: ReviewIssue[];
+  workspaceVersionId: VersionId;
+  workspaceIssues: ReviewIssue[];
+}
+
+type ComparePlaybackState = 'loading' | 'ready' | 'playing' | 'paused' | 'waiting' | 'seeking' | 'error';
+
+function comparePlaybackLabel(version: ReviewVersion, state: ComparePlaybackState): string {
+  const labels: Record<ComparePlaybackState, string> = {
+    loading: '正在加载',
+    ready: '可播放',
+    playing: '播放中',
+    paused: '已暂停',
+    waiting: '缓冲中',
+    seeking: '正在定位',
+    error: '播放失败',
+  };
+  return `${version.label} ${labels[state]}`;
 }
 
 function issueTimecode(issue: ReviewIssue, version: ReviewVersion) {
@@ -107,14 +134,39 @@ function ComparePane({
   issues,
   onPlaybackEvent,
   onVideoElement,
+  issuesLoading,
+  issuesError,
 }: {
   side: 'left' | 'right';
   version: ReviewVersion;
   issues: ReviewIssue[];
   onPlaybackEvent: (side: 'left' | 'right', event: 'play' | 'pause' | 'seek' | 'timeupdate') => void;
   onVideoElement: (element: HTMLVideoElement | null) => void;
+  issuesLoading: boolean;
+  issuesError: boolean;
 }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [playbackState, setPlaybackState] = useState<ComparePlaybackState>('loading');
   const shapes = issues.flatMap((issue) => issue.currentAnnotationSet?.shapes ?? []);
+  const playbackReady = version.playbackStatus === 'ready' && Boolean(version.playbackUrl);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !playbackReady || !version.playbackUrl) {
+      onVideoElement(null);
+      return;
+    }
+    setPlaybackState('loading');
+    video.setAttribute('src', version.playbackUrl);
+    video.load();
+    onVideoElement(video);
+    return () => {
+      onVideoElement(null);
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    };
+  }, [onVideoElement, playbackReady, version.playbackUrl, version.versionId]);
+
   return (
     <article className="fj-review-compare-pane" data-testid={`version-compare-${side}`}>
       <header>
@@ -122,17 +174,36 @@ function ComparePane({
         <span>{version.fileName}</span>
       </header>
       <div className="fj-review-compare-frame">
-        <video
-          ref={onVideoElement}
-          src={version.playbackUrl}
-          controls
-          preload="metadata"
-          aria-label={`${side === 'left' ? '左侧' : '右侧'}版本播放器 ${version.label}`}
-          onPlay={() => onPlaybackEvent(side, 'play')}
-          onPause={() => onPlaybackEvent(side, 'pause')}
-          onSeeked={() => onPlaybackEvent(side, 'seek')}
-          onTimeUpdate={() => onPlaybackEvent(side, 'timeupdate')}
-        />
+        {playbackReady ? (
+          <video
+            key={version.versionId}
+            ref={videoRef}
+            controls
+            crossOrigin="use-credentials"
+            preload="metadata"
+            aria-label={`${side === 'left' ? '左侧' : '右侧'}版本播放器 ${version.label}`}
+            onCanPlay={() => setPlaybackState('ready')}
+            onError={() => setPlaybackState('error')}
+            onLoadStart={() => setPlaybackState('loading')}
+            onPause={() => {
+              setPlaybackState('paused');
+              onPlaybackEvent(side, 'pause');
+            }}
+            onPlay={() => onPlaybackEvent(side, 'play')}
+            onPlaying={() => setPlaybackState('playing')}
+            onSeeking={() => setPlaybackState('seeking')}
+            onSeeked={() => {
+              setPlaybackState('ready');
+              onPlaybackEvent(side, 'seek');
+            }}
+            onTimeUpdate={() => onPlaybackEvent(side, 'timeupdate')}
+            onWaiting={() => setPlaybackState('waiting')}
+          />
+        ) : (
+          <div className="fj-review-media-not-ready" role="status">
+            {version.playbackStatus === 'failed' ? '播放资产生成失败' : '播放资产生成中'}
+          </div>
+        )}
         <svg
           className="fj-review-compare-annotation-layer"
           data-testid={`version-compare-${side}-annotation-layer`}
@@ -142,6 +213,15 @@ function ComparePane({
           {shapes.map((shape) => renderCompareShape(shape, version.width, version.height))}
         </svg>
       </div>
+      {playbackReady ? (
+        <div
+          className={`fj-review-compare-playback-status is-${playbackState}`}
+          data-testid={`version-compare-${side}-playback-status`}
+          role={playbackState === 'error' ? 'alert' : 'status'}
+        >
+          {comparePlaybackLabel(version, playbackState)}
+        </div>
+      ) : null}
       <dl>
         <div>
           <dt>分辨率</dt>
@@ -165,7 +245,11 @@ function ComparePane({
         </div>
       </dl>
       <ul className="fj-review-compare-issues" aria-label={`${version.label} 独立意见`}>
-        {issues.length ? (
+        {issuesLoading ? (
+          <li>正在加载当前比较版本意见...</li>
+        ) : issuesError ? (
+          <li role="alert">比较版本意见加载失败</li>
+        ) : issues.length ? (
           issues.map((issue) => (
             <li key={issue.issueId}>
               <span>#{issue.issueNo.toString().padStart(3, '0')}</span>
@@ -184,6 +268,14 @@ function ComparePane({
 
 export function VersionComparePanel(props: VersionComparePanelProps) {
   const sortedVersions = useMemo(() => [...props.versions].sort((a, b) => a.versionNo - b.versionNo), [props.versions]);
+  if (sortedVersions.length < 2) return null;
+  return <VersionCompareBody {...props} sortedVersions={sortedVersions} />;
+}
+
+function VersionCompareBody(
+  props: VersionComparePanelProps & { sortedVersions: ReviewVersion[] },
+) {
+  const { sortedVersions } = props;
   const [leftVersionId, setLeftVersionId] = useState(sortedVersions[0]?.versionId ?? props.currentVersionId);
   const [rightVersionId, setRightVersionId] = useState(props.currentVersionId);
   const [syncPlayback, setSyncPlayback] = useState(false);
@@ -198,14 +290,29 @@ export function VersionComparePanel(props: VersionComparePanelProps) {
     rightRef.current = element;
   }, []);
 
-  if (sortedVersions.length < 2) return null;
-
   const leftVersion = sortedVersions.find((version) => version.versionId === leftVersionId) ?? sortedVersions[0];
   const rightVersion =
     sortedVersions.find((version) => version.versionId === rightVersionId && version.versionId !== leftVersion.versionId) ??
     sortedVersions.find((version) => version.versionId !== leftVersion.versionId) ??
     sortedVersions[1];
-  const issuesByVersion = (versionId: VersionId) => props.issues.filter((issue) => issue.versionId === versionId);
+  const leftIssues = useVersionIssues(props.entryMode, {
+    projectRefId: props.projectRefId,
+    reviewItemId: props.reviewItemId,
+    versionId: leftVersion.versionId,
+    initialData:
+      props.workspaceVersionId === leftVersion.versionId
+        ? props.workspaceIssues
+        : undefined,
+  });
+  const rightIssues = useVersionIssues(props.entryMode, {
+    projectRefId: props.projectRefId,
+    reviewItemId: props.reviewItemId,
+    versionId: rightVersion.versionId,
+    initialData:
+      props.workspaceVersionId === rightVersion.versionId
+        ? props.workspaceIssues
+        : undefined,
+  });
 
   const syncPeer = (side: 'left' | 'right', event: 'play' | 'pause' | 'seek' | 'timeupdate') => {
     if (!syncPlayback || applyingSyncRef.current) return;
@@ -276,14 +383,18 @@ export function VersionComparePanel(props: VersionComparePanelProps) {
         <ComparePane
           side="left"
           version={leftVersion}
-          issues={issuesByVersion(leftVersion.versionId)}
+          issues={leftIssues.data ?? []}
+          issuesLoading={leftIssues.isLoading}
+          issuesError={leftIssues.isError}
           onVideoElement={setLeftVideoElement}
           onPlaybackEvent={syncPeer}
         />
         <ComparePane
           side="right"
           version={rightVersion}
-          issues={issuesByVersion(rightVersion.versionId)}
+          issues={rightIssues.data ?? []}
+          issuesLoading={rightIssues.isLoading}
+          issuesError={rightIssues.isError}
           onVideoElement={setRightVideoElement}
           onPlaybackEvent={syncPeer}
         />

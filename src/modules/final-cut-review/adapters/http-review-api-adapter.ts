@@ -12,7 +12,9 @@ import { HttpReviewWorkflow } from './http-review-workflow';
 export class HttpReviewApiAdapter implements ReviewApiPort {
   private readonly uploads: HttpReviewUploads;
   readonly listProjects: ReviewApiPort['listProjects'];
-  readonly getProjectDetail: ReviewApiPort['getProjectDetail'];
+  readonly getProjectSummary: ReviewApiPort['getProjectSummary'];
+  readonly getVersionIssues: ReviewApiPort['getVersionIssues'];
+  readonly getIssueDetail: ReviewApiPort['getIssueDetail'];
   readonly getWorkspace: ReviewApiPort['getWorkspace'];
   readonly createProject: ReviewApiPort['createProject'];
   readonly updateProject: ReviewApiPort['updateProject'];
@@ -30,8 +32,8 @@ export class HttpReviewApiAdapter implements ReviewApiPort {
   readonly resolveIssue: ReviewApiPort['resolveIssue'];
   readonly reopenIssue: ReviewApiPort['reopenIssue'];
   readonly deleteIssue: ReviewApiPort['deleteIssue'];
-  readonly requestChanges: ReviewApiPort['requestChanges'];
   readonly finalizeCurrentVersion: ReviewApiPort['finalizeCurrentVersion'];
+  readonly revokeFinalization: ReviewApiPort['revokeFinalization'];
   readonly downloadFinalizedOriginal: ReviewApiPort['downloadFinalizedOriginal'];
   readonly createProjectFinalizedPackage: ReviewApiPort['createProjectFinalizedPackage'];
   readonly downloadProjectFinalizedPackage: ReviewApiPort['downloadProjectFinalizedPackage'];
@@ -56,7 +58,9 @@ export class HttpReviewApiAdapter implements ReviewApiPort {
     const downloads = new HttpReviewDownloads(transport, hostBridge);
 
     this.listProjects = projects.listProjects;
-    this.getProjectDetail = projects.getProjectDetail;
+    this.getProjectSummary = projects.getProjectSummary;
+    this.getVersionIssues = projects.getVersionIssues;
+    this.getIssueDetail = projects.getIssueDetail;
     this.getWorkspace = projects.getWorkspace;
     this.createProject = projects.createProject;
     this.updateProject = projects.updateProject;
@@ -74,8 +78,8 @@ export class HttpReviewApiAdapter implements ReviewApiPort {
     this.resolveIssue = issues.resolveIssue;
     this.reopenIssue = issues.reopenIssue;
     this.deleteIssue = issues.deleteIssue;
-    this.requestChanges = workflow.requestChanges;
     this.finalizeCurrentVersion = workflow.finalizeCurrentVersion;
+    this.revokeFinalization = workflow.revokeFinalization;
     this.downloadFinalizedOriginal = downloads.downloadFinalizedOriginal;
     this.createProjectFinalizedPackage = downloads.createProjectFinalizedPackage;
     this.downloadProjectFinalizedPackage = downloads.downloadProjectFinalizedPackage;

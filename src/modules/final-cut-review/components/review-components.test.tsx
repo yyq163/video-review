@@ -13,6 +13,7 @@ import { createSeedData } from '../core/seed';
 import { playbackTargetFromIssue } from '../core/playback';
 import { IssuePanel } from './IssuePanel';
 import { ReviewPlayer, VersionRail, type ReviewPlayerHandle } from './ReviewPlayer';
+import { VersionComparePanel } from './VersionComparePanel';
 import {
   AppendVersionPanel,
   CreateItemUploadPanel,
@@ -238,6 +239,77 @@ describe('VersionRail component', () => {
     expect(css).toMatch(
       /\.fj-review-episode-watermark\s*\{[^}]*font-style:\s*italic;[^}]*pointer-events:\s*none;/s,
     );
+  });
+});
+
+describe('VersionComparePanel media lifecycle', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('reports each stream state and explicitly releases the previous Range source on version replacement', async () => {
+    const seed = createSeedData();
+    const v3 = {
+      ...seed.versions[0],
+      versionId: 'ver_ep28_v3',
+      versionNo: 3,
+      label: 'V3',
+      fileName: 'episode-28-v3.mp4',
+      playbackUrl: 'blob:episode-28-v3',
+    };
+    const runtime = createReviewRuntime();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const pauseSpy = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+    const loadSpy = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => undefined);
+    const renderCompare = (versions: typeof seed.versions) => (
+      <QueryClientProvider client={queryClient}>
+        <ReviewRuntimeProvider runtime={runtime}>
+          <VersionComparePanel
+            entryMode="review"
+            projectRefId="prj_seed_final_cut"
+            reviewItemId="item_ep28"
+            versions={versions}
+            currentVersionId="ver_ep28_v2"
+            workspaceVersionId="ver_ep28_v2"
+            workspaceIssues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
+          />
+        </ReviewRuntimeProvider>
+      </QueryClientProvider>
+    );
+    const result = render(renderCompare(seed.versions));
+    const oldLeft = screen.getByLabelText('左侧版本播放器 V1') as HTMLVideoElement;
+    expect(oldLeft).toHaveAttribute('crossorigin', 'use-credentials');
+
+    fireEvent.waiting(oldLeft);
+    expect(screen.getByTestId('version-compare-left-playback-status')).toHaveTextContent('V1 缓冲中');
+    fireEvent.canPlay(oldLeft);
+    expect(screen.getByTestId('version-compare-left-playback-status')).toHaveTextContent('V1 可播放');
+    fireEvent.seeking(oldLeft);
+    expect(screen.getByTestId('version-compare-left-playback-status')).toHaveTextContent('V1 正在定位');
+    fireEvent.seeked(oldLeft);
+    expect(screen.getByTestId('version-compare-left-playback-status')).toHaveTextContent('V1 可播放');
+    fireEvent.error(oldLeft);
+    expect(screen.getByTestId('version-compare-left-playback-status')).toHaveTextContent('V1 播放失败');
+    expect(screen.getByTestId('version-compare-left-playback-status')).toHaveAttribute('role', 'alert');
+
+    result.rerender(renderCompare([seed.versions[1], v3]));
+
+    await waitFor(() => {
+      expect(oldLeft.getAttribute('src')).toBeNull();
+      expect(pauseSpy).toHaveBeenCalled();
+      expect(loadSpy.mock.calls.length).toBeGreaterThanOrEqual(4);
+    });
+    expect(screen.queryByLabelText('左侧版本播放器 V1')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('左侧版本播放器 V2')).toBeInTheDocument();
+    expect(screen.getByLabelText('右侧版本播放器 V3')).toBeInTheDocument();
+
+    result.unmount();
+    cleanupRuntime(runtime, queryClient);
   });
 });
 
@@ -871,8 +943,10 @@ describe('ProjectListPage filtering and paging', () => {
   });
 
   it('filters projects by search text, lifecycle, and derived completion state', async () => {
+    let getProjectSummary: ReturnType<typeof vi.spyOn> | undefined;
     const runtimeResult = await renderProjectList(async (runtime) => {
       const edit = runtime.getApi('edit');
+      getProjectSummary = vi.spyOn(edit, 'getProjectSummary');
       const context = edit.entryPolicy.createContext('edit');
       await edit.createProject(
         {
@@ -895,6 +969,7 @@ describe('ProjectListPage filtering and paging', () => {
     });
 
     expect(await screen.findByRole('heading', { name: '项目列表' })).toBeInTheDocument();
+    expect(getProjectSummary).not.toHaveBeenCalled();
     await screen.findByText('001模拟测试');
     expect(screen.getByText('真千金是男的')).toBeInTheDocument();
 
@@ -1023,7 +1098,7 @@ describe('ProjectDetailPage archive workflow', () => {
 
     expect(await screen.findByText('第 02 集', { selector: 'strong' })).toBeInTheDocument();
     expect(screen.queryByText('不作为卡片大标题', { selector: 'strong' })).not.toBeInTheDocument();
-    expect(await screen.findByText('原文件：王爷02.mp4 · 1个版本 · 当前 V1')).toBeInTheDocument();
+    expect(await screen.findByText(/不作为卡片大标题 · V1/)).toBeInTheDocument();
     expect(screen.queryByTestId('item-workspace')).not.toBeInTheDocument();
     expect(screen.queryByTestId('upload-row-0')).not.toBeInTheDocument();
     expect((screen.getByTestId('create-item-file') as HTMLInputElement).files).toHaveLength(0);
@@ -1037,11 +1112,11 @@ describe('ProjectDetailPage archive workflow', () => {
     const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
     const editApi = runtimeResult.runtime.getApi('edit');
-    const originalGetProjectDetail = editApi.getProjectDetail.bind(editApi);
+    const originalGetProjectSummary = editApi.getProjectSummary.bind(editApi);
     let refreshCount = 0;
-    vi.spyOn(editApi, 'getProjectDetail').mockImplementation((...args) => {
+    vi.spyOn(editApi, 'getProjectSummary').mockImplementation((...args) => {
       refreshCount += 1;
-      return refreshCount === 1 ? originalGetProjectDetail(...args) : Promise.reject(new Error('refresh offline'));
+      return refreshCount === 1 ? originalGetProjectSummary(...args) : Promise.reject(new Error('refresh offline'));
     });
     await userEvent.upload(screen.getByTestId('create-item-file'), new File(['v1'], 'refresh-fail.mp4', { type: 'video/mp4' }));
     const row = screen.getByTestId('upload-row-0');
@@ -1319,12 +1394,12 @@ describe('ProjectDetailPage archive workflow', () => {
     await userEvent.type(within(row).getByLabelText('集数'), '29');
     await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
 
-    expect(screen.getAllByText(/原文件：.* · 2个版本 · 当前 V2/)).toHaveLength(1);
+    expect(screen.getAllByText('V2', { selector: '.fj-review-item-version-watermark' })).toHaveLength(1);
     await userEvent.click(await screen.findByRole('button', { name: '删除分集 第 29 集误传' }));
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('审核开始前去重'));
     await waitFor(() => expect(screen.queryByRole('button', { name: '删除分集 第 29 集误传' })).not.toBeInTheDocument());
-    expect(screen.getAllByText(/原文件：.* · 2个版本 · 当前 V2/)).toHaveLength(1);
+    expect(screen.getAllByText('V2', { selector: '.fj-review-item-version-watermark' })).toHaveLength(1);
     expect(await screen.findByText('分集已删除，列表已刷新。')).toBeInTheDocument();
 
     confirmSpy.mockRestore();
@@ -1735,11 +1810,11 @@ describe('ReviewWorkspacePage issue playback', () => {
     cleanupRuntime(rendered.runtime, rendered.queryClient);
   });
 
-  it('keeps fresh workspace V3 metadata when the project detail query is still on V2', async () => {
+  it('keeps fresh workspace V3 metadata when the project summary query is still on V2', async () => {
     const runtime = createReviewRuntime();
     const editApi = runtime.getApi('edit');
     const reviewApi = runtime.getApi('review');
-    const staleProjectDetail = await reviewApi.getProjectDetail('prj_seed_final_cut');
+    const staleProjectSummary = await reviewApi.getProjectSummary('prj_seed_final_cut');
     const v3 = await editApi.appendVersion(
       {
         projectRefId: 'prj_seed_final_cut',
@@ -1769,7 +1844,7 @@ describe('ReviewWorkspacePage issue playback', () => {
       },
       reviewApi.entryPolicy.createContext('review'),
     );
-    vi.spyOn(reviewApi, 'getProjectDetail').mockResolvedValue(staleProjectDetail);
+    vi.spyOn(reviewApi, 'getProjectSummary').mockResolvedValue(staleProjectSummary);
 
     const rendered = renderReviewWorkspace(
       '/review/projects/prj_seed_final_cut/items/item_ep28',
@@ -1861,28 +1936,38 @@ describe('ReviewWorkspacePage issue playback', () => {
     );
     expect(deletedIssue.deletedAt).toEqual(expect.any(String));
 
-    const baseDetail = await reviewApi.getProjectDetail('prj_seed_final_cut');
-    expect(baseDetail.issuesByVersion.ver_ep28_v1).toEqual(
+    const historicalIssues = await reviewApi.getVersionIssues({
+      projectRefId: 'prj_seed_final_cut',
+      reviewItemId: 'item_ep28',
+      versionId: 'ver_ep28_v1',
+    });
+    expect(historicalIssues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ status: 'unresolved', versionId: 'ver_ep28_v1' }),
       ]),
     );
-    expect(baseDetail.issuesByVersion[created.version.versionId]).toEqual(
+    const createdVersionIssues = await reviewApi.getVersionIssues({
+      projectRefId: 'prj_seed_final_cut',
+      reviewItemId: created.item.reviewItemId,
+      versionId: created.version.versionId,
+    });
+    expect(createdVersionIssues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ issueId: unresolvedIssue.issueId, status: 'unresolved' }),
         expect.objectContaining({ issueId: resolvedIssue.issueId, status: 'resolved' }),
       ]),
     );
-    vi.spyOn(reviewApi, 'getProjectDetail').mockResolvedValue({
-      ...baseDetail,
-      issuesByVersion: {
-        ...baseDetail.issuesByVersion,
-        [created.version.versionId]: [
-          ...baseDetail.issuesByVersion[created.version.versionId],
-          deletedIssue,
-        ],
-      },
-    });
+    expect(createdVersionIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ issueId: deletedIssue.issueId }),
+      ]),
+    );
+    const projectSummary = await reviewApi.getProjectSummary('prj_seed_final_cut');
+    expect(
+      projectSummary.items.find(
+        (item) => item.reviewItemId === created.item.reviewItemId,
+      )?.unresolvedCurrentVersionCount,
+    ).toBe(1);
 
     const rendered = renderReviewWorkspace(
       '/review/projects/prj_seed_final_cut/items/item_ep28',
@@ -1984,7 +2069,7 @@ describe('ReviewWorkspacePage issue playback', () => {
     cleanupRuntime(rendered.runtime, rendered.queryClient);
   });
 
-  it('polls only the mounted current workspace with the bounded React Query interval', async () => {
+  it('polls only a mounted workspace whose playback derivative is still pending', async () => {
     const current = renderReviewWorkspace();
     expect(await screen.findByTestId('review-workspace-frame')).toBeInTheDocument();
     const currentQuery = current.queryClient.getQueryCache().find({
@@ -1992,10 +2077,18 @@ describe('ReviewWorkspacePage issue playback', () => {
     });
     const currentPollingOptions = currentQuery?.options as NonNullable<typeof currentQuery>['options'] & {
       refetchInterval?: (query: typeof currentQuery) => number | false;
-      refetchIntervalInBackground?: boolean;
     };
-    expect(currentPollingOptions.refetchInterval?.(currentQuery)).toBe(2_500);
-    expect(currentPollingOptions.refetchIntervalInBackground).toBe(true);
+    expect(currentPollingOptions.refetchInterval?.(currentQuery)).toBe(false);
+    const pendingDerivativeQuery = {
+      state: {
+        data: {
+          currentVersion: {
+            playbackStatus: 'pending',
+          },
+        },
+      },
+    } as typeof currentQuery;
+    expect(currentPollingOptions.refetchInterval?.(pendingDerivativeQuery)).toBe(5_000);
     current.unmount();
     expect(currentQuery?.getObserversCount()).toBe(0);
     cleanupRuntime(current.runtime, current.queryClient);
@@ -2020,7 +2113,7 @@ describe('ReviewWorkspacePage issue playback', () => {
     const explicitCurrentPollingOptions = explicitCurrentQuery?.options as NonNullable<typeof explicitCurrentQuery>['options'] & {
       refetchInterval?: (query: typeof explicitCurrentQuery) => number | false;
     };
-    expect(explicitCurrentPollingOptions.refetchInterval?.(explicitCurrentQuery)).toBe(2_500);
+    expect(explicitCurrentPollingOptions.refetchInterval?.(explicitCurrentQuery)).toBe(false);
     explicitCurrent.unmount();
     cleanupRuntime(explicitCurrent.runtime, explicitCurrent.queryClient);
   });
@@ -2238,8 +2331,12 @@ describe('ReviewWorkspacePage issue playback', () => {
     expect(screen.getByLabelText('右侧版本播放器 V2')).toBeInTheDocument();
     expect(screen.getByTestId('version-compare-left-annotation-layer')).toBeInTheDocument();
     expect(screen.getByTestId('version-compare-right-annotation-layer')).toBeInTheDocument();
-    expect(within(screen.getByTestId('version-compare-left')).getByText(/#001/)).toBeInTheDocument();
-    expect(within(screen.getByTestId('version-compare-right')).getByText(/#002/)).toBeInTheDocument();
+    expect(
+      await within(screen.getByTestId('version-compare-left')).findByText(/#001/),
+    ).toBeInTheDocument();
+    expect(
+      await within(screen.getByTestId('version-compare-right')).findByText(/#002/),
+    ).toBeInTheDocument();
     const rightLayer = screen.getByTestId('version-compare-right-annotation-layer');
     expect(rightLayer.querySelector('path[stroke="rgba(0,0,0,0.72)"]')).not.toBeNull();
     expect(rightLayer.querySelector('path[stroke="#ffcc3d"]')).not.toBeNull();

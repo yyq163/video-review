@@ -115,6 +115,7 @@ export function ReviewPlayerStage({
   onCloseTextEditor,
 }: ReviewPlayerStageProps) {
   const textCompositionRef = useRef(false);
+  const playbackReady = version.playbackStatus === 'ready' && Boolean(version.playbackUrl);
   const textEditorStyle = activeTextShape
     ? createTextEditorStyle(activeTextShape, videoRect, displayVideoWidth)
     : undefined;
@@ -133,34 +134,41 @@ export function ReviewPlayerStage({
         onPointerUp={onEndDraw}
         onPointerCancel={onEndDraw}
       >
-        <video
-          ref={videoRef}
-          src={version.playbackUrl}
-          crossOrigin="use-credentials"
-          data-version-id={version.versionId}
-          style={containedMediaStyle}
-          controls={false}
-          muted={muted}
-          playsInline
-          preload="metadata"
-          onLoadedMetadata={(event) => {
-            onMediaDimensions(event.currentTarget);
-            onLoadedMetadata(event.currentTarget);
-          }}
-          onLoadedData={(event) => onMediaDimensions(event.currentTarget)}
-          onCanPlay={(event) => {
-            onMediaDimensions(event.currentTarget);
-            onCanPlay();
-          }}
-          onResize={(event) => onMediaDimensions(event.currentTarget)}
-          onWaiting={onWaiting}
-          onSeeked={(event) => onSeeked(event.currentTarget)}
-          onError={onError}
-          onPlay={onPlay}
-          onPause={onPause}
-          onTimeUpdate={(event) => onTimeUpdate(event.currentTarget)}
-          onEnded={onEnded}
-        />
+        {playbackReady ? (
+          <video
+            ref={videoRef}
+            src={version.playbackUrl}
+            crossOrigin="use-credentials"
+            data-version-id={version.versionId}
+            style={containedMediaStyle}
+            controls={false}
+            muted={muted}
+            playsInline
+            preload="metadata"
+            onLoadedMetadata={(event) => {
+              onMediaDimensions(event.currentTarget);
+              onLoadedMetadata(event.currentTarget);
+            }}
+            onLoadedData={(event) => onMediaDimensions(event.currentTarget)}
+            onCanPlay={(event) => {
+              onMediaDimensions(event.currentTarget);
+              onCanPlay();
+            }}
+            onResize={(event) => onMediaDimensions(event.currentTarget)}
+            onWaiting={onWaiting}
+            onSeeked={(event) => onSeeked(event.currentTarget)}
+            onError={onError}
+            onPlay={onPlay}
+            onPause={onPause}
+            onTimeUpdate={(event) => onTimeUpdate(event.currentTarget)}
+            onEnded={onEnded}
+          />
+        ) : (
+          <div className="fj-review-media-not-ready" role="status">
+            <strong>{version.playbackStatus === 'failed' ? '播放资产生成失败' : '播放资产生成中'}</strong>
+            <span>原片不会作为播放回退；衍生资产就绪后页面会自动刷新。</span>
+          </div>
+        )}
         <div className="fj-review-video-fallback" style={containedMediaStyle}>
           <strong>{version.label}</strong>
           <span>{version.fileName}</span>

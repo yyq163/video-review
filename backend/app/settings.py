@@ -190,6 +190,15 @@ class Settings(BaseSettings):
     upload_session_ttl_seconds: int = Field(default=15 * 60, ge=300, le=7 * 24 * 60 * 60)
     media_probe_command: str = Field(default="ffprobe", min_length=1, max_length=4096)
     media_probe_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    media_transform_command: str = Field(default="ffmpeg", min_length=1, max_length=4096)
+    media_transform_timeout_seconds: float = Field(default=1800.0, gt=0, le=7200)
+    media_transform_output_limit_bytes: int = Field(default=256 * 1024, ge=4096, le=4 * 1024 * 1024)
+    media_worker_max_attempts: int = Field(default=3, ge=1, le=10)
+    media_worker_retry_delay_seconds: int = Field(default=30, ge=1, le=3600)
+    media_worker_lease_seconds: int = Field(default=3600, ge=60, le=7200)
+    media_worker_concurrency: int = Field(default=1, ge=1, le=4)
+    media_thumbnail_width: int = Field(default=320, ge=160, le=1920)
+    protected_media_direct_stream_enabled: bool = False
     package_ttl_seconds: int = Field(default=24 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
     max_package_files: int = Field(default=MAX_PACKAGE_FILES_LIMIT, ge=1, le=MAX_PACKAGE_FILES_LIMIT)
     max_package_bytes: int = Field(default=MAX_PACKAGE_BYTES_LIMIT, ge=1, le=MAX_PACKAGE_BYTES_LIMIT)
@@ -217,6 +226,7 @@ class Settings(BaseSettings):
     reverse_proxy_write_header: str = "x-write-guard-verified"
     reverse_proxy_trusted_hosts: str = ""
     browser_allowed_origins: str = "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174,http://localhost:5174,http://127.0.0.1:8000,http://localhost:8000"
+    prometheus_multiproc_dir: str = ""
     log_level: str = "INFO"
 
     @model_validator(mode="after")
@@ -237,6 +247,14 @@ class Settings(BaseSettings):
         if self.max_package_storage_bytes < minimum_storage_bytes:
             raise ValueError(
                 "MAX_PACKAGE_STORAGE_BYTES must cover MAX_PACKAGE_BYTES plus conservative ZIP_STORED overhead"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_protected_media_transport(self) -> Self:
+        if self.protected_media_direct_stream_enabled and not self.allow_sqlite_for_tests:
+            raise ValueError(
+                "PROTECTED_MEDIA_DIRECT_STREAM_ENABLED is restricted to explicit SQLite test runtimes"
             )
         return self
 

@@ -3,6 +3,7 @@ queries:
   - module_manifest
   - list_projects
   - get_project
+  - get_project_summary
   - list_items
   - get_item
   - list_versions
@@ -12,6 +13,7 @@ queries:
   - list_revisions
   - list_messages
   - stream_review_version
+  - get_review_version_thumbnail
   - get_finalization
   - download_finalized_original
   - get_package

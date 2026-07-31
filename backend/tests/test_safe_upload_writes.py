@@ -954,7 +954,7 @@ def test_compose_keeps_process_local_upload_limiter_single_worker_and_replica() 
 
     assert "container_name" not in backend
     assert backend["deploy"]["replicas"] == 1
-    assert "uvicorn backend.app.main:app" in command
+    assert "uvicorn backend.app.observability:app" in command
     assert "--workers 1" in command
     assert environment["UPLOAD_RUNTIME_WORKER_COUNT"] == 1
     assert "MAX_INFLIGHT_UPLOAD_PART_CANDIDATES" in environment

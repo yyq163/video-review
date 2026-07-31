@@ -17,6 +17,7 @@ owner_secret_file="$probe_dir/postgres-owner-password"
 app_secret_file="$probe_dir/postgres-app-password"
 code_secret_file="$probe_dir/write-guard-code"
 session_secret_file="$probe_dir/write-guard-session-secret"
+edge_secret_file="$probe_dir/edge-handoff-secret"
 probe_resources_owned=0
 
 cleanup() {
@@ -72,7 +73,7 @@ cleanup() {
     done
   fi
   if ! rm -f "$env_file" "$admin_secret_file" "$owner_secret_file" \
-    "$app_secret_file" "$code_secret_file" "$session_secret_file"; then
+    "$app_secret_file" "$code_secret_file" "$session_secret_file" "$edge_secret_file"; then
     cleanup_failed=1
   fi
   rmdir "$probe_dir" 2>/dev/null || true
@@ -92,6 +93,7 @@ owner_password="$(openssl rand -hex 24)"
 app_password="$(openssl rand -hex 24)"
 write_guard_code="$(openssl rand -hex 24)"
 session_secret="$(openssl rand -hex 32)"
+edge_secret="$(openssl rand -hex 32)"
 probe_name="fj_probe_${safe_id}"
 
 FCR_ADMIN_PASSWORD="$admin_password" \
@@ -99,8 +101,9 @@ FCR_OWNER_PASSWORD="$owner_password" \
 FCR_APP_PASSWORD="$app_password" \
 FCR_WRITE_GUARD_CODE="$write_guard_code" \
 FCR_SESSION_SECRET="$session_secret" \
+FCR_EDGE_SECRET="$edge_secret" \
 python3 - "$env_file" "$admin_secret_file" "$owner_secret_file" \
-  "$app_secret_file" "$code_secret_file" "$session_secret_file" "$probe_name" "$postgres_volume" \
+  "$app_secret_file" "$code_secret_file" "$session_secret_file" "$edge_secret_file" "$probe_name" "$postgres_volume" \
   "$data_volume" "$runtime_state_volume" "$current_project" "$safe_id" <<'PY'
 import os
 import stat
@@ -113,6 +116,7 @@ import sys
     app_path,
     code_path,
     session_path,
+    edge_path,
     probe_name,
     postgres_volume,
     data_volume,
@@ -149,6 +153,7 @@ secret_files = (
     (app_path, os.environ.pop("FCR_APP_PASSWORD").encode("utf-8")),
     (code_path, os.environ.pop("FCR_WRITE_GUARD_CODE").encode("utf-8")),
     (session_path, os.environ.pop("FCR_SESSION_SECRET").encode("utf-8")),
+    (edge_path, os.environ.pop("FCR_EDGE_SECRET").encode("utf-8")),
 )
 for secret_path, secret_value in secret_files:
     write_private_file(secret_path, secret_value, single_line=True)
@@ -172,6 +177,7 @@ COMPOSE_POSTGRES_OWNER_PASSWORD_FILE={owner_path}
 COMPOSE_POSTGRES_APP_PASSWORD_FILE={app_path}
 COMPOSE_WRITE_GUARD_CODE_FILE={code_path}
 COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE={session_path}
+COMPOSE_EDGE_HANDOFF_SECRET_FILE={edge_path}
 """
 write_private_file(
     environment_path,
@@ -179,7 +185,7 @@ write_private_file(
     single_line=False,
 )
 PY
-unset admin_password owner_password app_password write_guard_code session_secret
+unset admin_password owner_password app_password write_guard_code session_secret edge_secret
 
 legacy_probe_python='import os
 import sys

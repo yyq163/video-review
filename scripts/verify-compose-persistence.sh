@@ -316,11 +316,11 @@ fingerprint() {
 }
 
 assert_four_services_healthy() {
-    compose ps --format json postgres backend maintenance package-worker | python3 -c '
+    compose ps --format json postgres backend maintenance package-worker media-worker nginx | python3 -c '
 import json
 import sys
 
-expected = {"postgres", "backend", "maintenance", "package-worker"}
+expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "nginx"}
 payload = sys.stdin.read().strip()
 if not payload:
     raise SystemExit("Compose returned no service health records")
@@ -332,7 +332,7 @@ except json.JSONDecodeError:
 
 by_service = {record.get("Service"): record for record in records}
 if set(by_service) != expected:
-    raise SystemExit("Compose did not return exactly the four required services")
+    raise SystemExit("Compose did not return exactly the required services")
 unhealthy = [
     service
     for service in sorted(expected)
@@ -357,7 +357,7 @@ restart_four_services_in_dependency_order() {
 
 stop_writers() {
     writers_stopped=1
-    compose stop backend maintenance package-worker >/dev/null
+    compose stop backend maintenance package-worker media-worker >/dev/null
 }
 
 create_sentinel

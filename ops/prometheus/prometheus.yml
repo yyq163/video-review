@@ -1,0 +1,44 @@
+global:
+  scrape_interval: 30s
+  scrape_timeout: 5s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: fj-final-cut-review-backend
+    metrics_path: /internal/metrics
+    honor_labels: false
+    sample_limit: 5000
+    static_configs:
+      - targets:
+          - backend:8000
+
+  - job_name: fj-final-cut-review-package-worker
+    metrics_path: /metrics
+    honor_labels: false
+    sample_limit: 5000
+    static_configs:
+      - targets:
+          - package-worker:9101
+
+  - job_name: fj-final-cut-review-media-worker
+    metrics_path: /metrics
+    honor_labels: false
+    sample_limit: 5000
+    static_configs:
+      - targets:
+          - media-worker:9102
+
+  - job_name: fj-final-cut-review-cadvisor
+    metrics_path: /metrics
+    honor_labels: false
+    sample_limit: 20000
+    static_configs:
+      - targets:
+          - cadvisor:8080
+    metric_relabel_configs:
+      - action: labeldrop
+        regex: "container_label_.*|id|image"
+      - source_labels:
+          - name
+        regex: "fj-final-cut-review-(backend|package-worker|media-worker|postgres)-.*"
+        action: keep

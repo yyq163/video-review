@@ -1,13 +1,14 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import type { EntryMode, ReviewItem } from '../contracts/types';
+import type { EntryMode, FinalizationRevocation, ReviewItem } from '../contracts/types';
 import { entryLinksFor } from '../entry/entry-links';
-import { useProjectDetail, useReviewMutations } from '../entry/use-review-queries';
+import { useProjectSummary, useReviewMutations } from '../entry/use-review-queries';
 import { AppShell, CapabilityGate, ErrorView, LoadingBlock, StatusBadge, actionError } from '../components/shared';
 import { CreateItemUploadPanel } from '../components/UploadPanel';
 import { ProjectMetadataEditor, type ReviewItemMetadataValues } from '../components/MetadataEditors';
 import { uploadSchema, type ProjectFormValues } from '../components/ProjectForms';
 import type { ReviewItemWithMetadata } from '../ports';
+import type { ReviewProjectSummaryItem } from '../ports';
 import { groupReviewItemsByEpisode } from '../core/episode-dedupe';
 import {
   DeleteReviewItemResultUncertainError,
@@ -16,12 +17,34 @@ import {
   getV1ListProtectionState,
   markV1ListConfirmationRequired,
 } from '../adapters/http-review-uploads';
+import {
+  clearRevokeFinalizationOperation,
+  createRevokeFinalizationReconciliationState,
+  getRevokeFinalizationProtectionState,
+  nextRevokeFinalizationReconciliationStep,
+  REVOKE_FINALIZATION_RECONCILIATION_INTERVAL_MS,
+  RevokeFinalizationResultUncertainError,
+  type RevokeFinalizationReconciliationState,
+} from '../adapters/http-review-finalization-operation';
 import { ProjectDetailItemList, type ProjectDetailMetadataEpisodeGroup } from './project-detail-item-list';
+
+function revocationSuccessMessage(
+  item: ReviewProjectSummaryItem,
+  result: FinalizationRevocation,
+): string {
+  if (result.cleanupStatus === 'complete') {
+    return `第 ${item.episode} 集已撤回定稿，关联包已失效并完成清理。`;
+  }
+  if (result.cleanupStatus === 'failed') {
+    return `第 ${item.episode} 集已撤回定稿；关联包已失效，物理清理失败并等待受控重试。`;
+  }
+  return `第 ${item.episode} 集已撤回定稿；关联包已失效，物理清理正在进行。`;
+}
 
 export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const navigate = useNavigate();
   const { projectRefId = '' } = useParams();
-  const detail = useProjectDetail(props.entryMode, projectRefId);
+  const detail = useProjectSummary(props.entryMode, projectRefId);
   const mutations = useReviewMutations(props.entryMode);
   const [projectActionError, setProjectActionError] = useState<string | null>(null);
   const [projectActionMessage, setProjectActionMessage] = useState<string | null>(null);
@@ -33,6 +56,262 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const v1UncertainRef = useRef(v1ListProtectionState !== 'clear');
   const v1ListConfirmationRequired = v1ListProtectionState !== 'clear';
   const [v1ListConfirmationPending, setV1ListConfirmationPending] = useState(false);
+  const [revocationProtectionVersion, setRevocationProtectionVersion] = useState(0);
+  const revocationReconciliationStatesRef = useRef(
+    new Map<string, RevokeFinalizationReconciliationState>(),
+  );
+  const [revocationAuthorityRequiredIds, setRevocationAuthorityRequiredIds] =
+    useState(() => new Set<string>());
+  const revocationAuthorityRequiredIdsRef = useRef(
+    revocationAuthorityRequiredIds,
+  );
+  const updateRevocationAuthorityRequired = useCallback(
+    (reviewItemId: string, required: boolean) => {
+      const current = revocationAuthorityRequiredIdsRef.current;
+      if (current.has(reviewItemId) === required) return;
+      const next = new Set(current);
+      if (required) next.add(reviewItemId);
+      else next.delete(reviewItemId);
+      revocationAuthorityRequiredIdsRef.current = next;
+      setRevocationAuthorityRequiredIds(next);
+    },
+    [],
+  );
+  const revocationProtectionById = useMemo(
+    () => {
+      void revocationProtectionVersion;
+      return new Map(
+        (detail.data?.items ?? []).map((item) => [
+          item.reviewItemId,
+          getRevokeFinalizationProtectionState(
+            projectRefId,
+            item.reviewItemId,
+          ),
+        ]),
+      );
+    },
+    [detail.data?.items, projectRefId, revocationProtectionVersion],
+  );
+  const revocationUncertainIds = useMemo(() => {
+    const items = detail.data?.items ?? [];
+    return new Set(
+      items
+        .filter(
+          (item) =>
+            item.status === 'finalized' &&
+            item.finalization?.status === 'active' &&
+            (revocationProtectionById.get(item.reviewItemId) !== 'clear' ||
+              revocationAuthorityRequiredIds.has(item.reviewItemId)),
+        )
+        .map((item) => item.reviewItemId),
+    );
+  }, [
+    detail.data?.items,
+    revocationAuthorityRequiredIds,
+    revocationProtectionById,
+  ]);
+  const revocationUncertainKey = [...revocationUncertainIds].sort().join('|');
+  const refetchProjectSummary = detail.refetch;
+  const replayRevokeFinalization = mutations.revokeFinalization.mutateAsync;
+  useEffect(() => {
+    const items = detail.data?.items ?? [];
+    const activeFinalizedIds = new Set(
+      items
+        .filter(
+          (item) =>
+            item.status === 'finalized' &&
+            item.finalization?.status === 'active',
+        )
+        .map((item) => item.reviewItemId),
+    );
+    for (const reviewItemId of [
+      ...revocationAuthorityRequiredIdsRef.current,
+    ]) {
+      if (!activeFinalizedIds.has(reviewItemId)) {
+        updateRevocationAuthorityRequired(reviewItemId, false);
+      }
+    }
+    for (const reviewItemId of activeFinalizedIds) {
+      if (revocationProtectionById.get(reviewItemId) !== 'clear') {
+        updateRevocationAuthorityRequired(reviewItemId, true);
+      }
+    }
+  }, [
+    detail.data?.items,
+    revocationProtectionById,
+    updateRevocationAuthorityRequired,
+  ]);
+  useEffect(() => {
+    const items = detail.data?.items ?? [];
+    for (const item of items) {
+      if (
+        getRevokeFinalizationProtectionState(projectRefId, item.reviewItemId) === 'required' &&
+        (item.status !== 'finalized' || item.finalization?.status === 'revoked')
+      ) {
+        clearRevokeFinalizationOperation(projectRefId, item.reviewItemId);
+      }
+    }
+  }, [detail.data?.items, projectRefId]);
+  useEffect(() => {
+    if (!revocationUncertainKey) return;
+    const uncertainIds = revocationUncertainKey.split('|');
+    const uncertainIdSet = new Set(uncertainIds);
+    const reconciliationStates = revocationReconciliationStatesRef.current;
+    for (const id of [...reconciliationStates.keys()]) {
+      if (!uncertainIdSet.has(id)) reconciliationStates.delete(id);
+    }
+    let disposed = false;
+    let reconciling = false;
+    let interval: number | undefined;
+
+    const markAttempt = (
+      reviewItemId: string,
+      authoritativeFinalized: boolean,
+    ) => {
+      const current =
+        reconciliationStates.get(reviewItemId) ??
+        createRevokeFinalizationReconciliationState();
+      const step = nextRevokeFinalizationReconciliationStep(
+        current,
+        authoritativeFinalized,
+      );
+      reconciliationStates.set(reviewItemId, step.state);
+      return step;
+    };
+
+    const reportExhausted = (reviewItemId: string) => {
+      const state = reconciliationStates.get(reviewItemId);
+      if (!state?.exhausted) return;
+      const protectionState = getRevokeFinalizationProtectionState(
+        projectRefId,
+        reviewItemId,
+      );
+      const identityUnavailable =
+        protectionState === 'storage-unavailable' ||
+        (protectionState === 'clear' &&
+          revocationAuthorityRequiredIdsRef.current.has(reviewItemId));
+      setProjectActionError(
+        identityUnavailable
+          ? `撤回结果仍不确定：会话存储不可用，无法恢复原请求身份；已完成 ${state.confirmationAttempts} 次权威查询，未发送新的撤回命令，自动确认已暂停，期间保持锁定。`
+          : `撤回结果仍不确定：已完成 ${state.confirmationAttempts} 次权威查询和 ${state.replayAttempts} 次同请求安全重试，自动确认已暂停；刷新页面会继续使用原请求身份，期间保持锁定。`,
+      );
+    };
+
+    const reconcile = async () => {
+      if (disposed || reconciling) return;
+      reconciling = true;
+      try {
+        let refreshedItems: ReviewProjectSummaryItem[] | null = null;
+        try {
+          const refreshed = await refetchProjectSummary({ throwOnError: true });
+          if (!refreshed.data) throw new Error('项目摘要缺失');
+          refreshedItems = refreshed.data.items;
+        } catch {
+          for (const reviewItemId of uncertainIds) {
+            markAttempt(reviewItemId, false);
+            reportExhausted(reviewItemId);
+          }
+          return;
+        }
+
+        for (const reviewItemId of uncertainIds) {
+          if (disposed) return;
+          const protectionState = getRevokeFinalizationProtectionState(
+            projectRefId,
+            reviewItemId,
+          );
+          if (protectionState !== 'clear') {
+            updateRevocationAuthorityRequired(reviewItemId, true);
+          }
+          if (
+            protectionState === 'clear' &&
+            !revocationAuthorityRequiredIdsRef.current.has(reviewItemId)
+          ) {
+            reconciliationStates.delete(reviewItemId);
+            setRevocationProtectionVersion((current) => current + 1);
+            continue;
+          }
+          const item = refreshedItems.find(
+            (candidate) => candidate.reviewItemId === reviewItemId,
+          );
+          if (!item) {
+            markAttempt(reviewItemId, false);
+            reportExhausted(reviewItemId);
+            continue;
+          }
+          if (
+            item.status !== 'finalized' ||
+            item.finalization?.status === 'revoked'
+          ) {
+            clearRevokeFinalizationOperation(projectRefId, reviewItemId);
+            reconciliationStates.delete(reviewItemId);
+            updateRevocationAuthorityRequired(reviewItemId, false);
+            setRevocationProtectionVersion((current) => current + 1);
+            continue;
+          }
+
+          const step = markAttempt(
+            reviewItemId,
+            protectionState === 'required',
+          );
+          if (step.shouldReplay && protectionState === 'required') {
+            try {
+              const result = await replayRevokeFinalization({
+                projectRefId,
+                reviewItemId,
+                confirmed: true,
+              });
+              reconciliationStates.delete(reviewItemId);
+              setProjectActionError(null);
+              setProjectActionMessage(revocationSuccessMessage(item, result));
+              setRevocationProtectionVersion((current) => current + 1);
+              continue;
+            } catch (caught) {
+              if (!(caught instanceof RevokeFinalizationResultUncertainError)) {
+                clearRevokeFinalizationOperation(projectRefId, reviewItemId);
+                reconciliationStates.delete(reviewItemId);
+                updateRevocationAuthorityRequired(reviewItemId, false);
+                setProjectActionError(
+                  `撤回未执行：${actionError(caught)}。已解除结果不确定锁定，可重新确认后撤回。`,
+                );
+                setRevocationProtectionVersion((current) => current + 1);
+                continue;
+              }
+            }
+          }
+          reportExhausted(reviewItemId);
+        }
+      } finally {
+        reconciling = false;
+        if (
+          interval !== undefined &&
+          uncertainIds.every(
+            (reviewItemId) =>
+              reconciliationStates.get(reviewItemId)?.exhausted === true,
+          )
+        ) {
+          window.clearInterval(interval);
+          interval = undefined;
+        }
+      }
+    };
+
+    void reconcile();
+    interval = window.setInterval(
+      () => void reconcile(),
+      REVOKE_FINALIZATION_RECONCILIATION_INTERVAL_MS,
+    );
+    return () => {
+      disposed = true;
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [
+    projectRefId,
+    refetchProjectSummary,
+    replayRevokeFinalization,
+    revocationUncertainKey,
+    updateRevocationAuthorityRequired,
+  ]);
   const settleV1UploadAttempt = (mayClearProtection: boolean) => {
     activeV1UploadCountRef.current = Math.max(0, activeV1UploadCountRef.current - 1);
     setActiveV1UploadCount(activeV1UploadCountRef.current);
@@ -63,8 +342,8 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     );
   }
 
-  const { project, items, versionsByItem, issuesByVersion, finalizations } = detail.data;
-  const episodeGroups = groupReviewItemsByEpisode(items, { versionsByItem }) as ProjectDetailMetadataEpisodeGroup[];
+  const { project, items } = detail.data;
+  const episodeGroups = groupReviewItemsByEpisode(items) as ProjectDetailMetadataEpisodeGroup[];
   const isArchived = project.status === 'archived';
   const projectActionPending =
     mutations.updateProject.isPending ||
@@ -74,7 +353,8 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const itemActionPending =
     mutations.updateReviewItem.isPending ||
     mutations.deleteReviewItem.isPending ||
-    mutations.bulkDeleteReviewItems.isPending;
+    mutations.bulkDeleteReviewItems.isPending ||
+    mutations.revokeFinalization.isPending;
 
   const updateProjectMetadata = async (values: ProjectFormValues) => {
     setProjectActionError(null);
@@ -196,6 +476,31 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
       }`,
     );
     return { succeededIds, failures, uncertainIds };
+  };
+
+  const revokeFinalization = async (item: ReviewProjectSummaryItem) => {
+    setProjectActionError(null);
+    setProjectActionMessage(null);
+    try {
+      const result = await mutations.revokeFinalization.mutateAsync({
+        projectRefId,
+        reviewItemId: item.reviewItemId,
+        confirmed: true,
+      });
+      setProjectActionMessage(revocationSuccessMessage(item, result));
+      setRevocationProtectionVersion((current) => current + 1);
+      return result;
+    } catch (caught) {
+      if (caught instanceof RevokeFinalizationResultUncertainError) {
+        setRevocationProtectionVersion((current) => current + 1);
+      }
+      setProjectActionError(
+        caught instanceof RevokeFinalizationResultUncertainError
+          ? '撤回结果确认中：页面会持续查询权威状态，禁止新建撤回操作。'
+          : actionError(caught),
+      );
+      throw caught;
+    }
   };
 
   const confirmV1List = async () => {
@@ -379,16 +684,15 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
         <ProjectDetailItemList
           entryMode={props.entryMode}
           episodeGroups={episodeGroups}
-          finalizations={finalizations}
           isArchived={isArchived}
-          issuesByVersion={issuesByVersion}
           itemActionPending={itemActionPending}
           bulkActionHost={bulkActionsHost}
           onBulkDeleteReviewItems={bulkDeleteReviewItems}
           onDeleteReviewItem={(item) => void deleteReviewItem(item)}
+          onRevokeFinalization={revokeFinalization}
           onUpdateReviewItemMetadata={updateReviewItemMetadata}
           projectRefId={projectRefId}
-          versionsByItem={versionsByItem}
+          revocationUncertainIds={revocationUncertainIds}
         />
       </section>
     </AppShell>

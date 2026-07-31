@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { EntryMode, ProjectRefId, ReviewItemId, VersionId } from '../contracts/types';
+import type { EntryMode, IssueId, ProjectRefId, ReviewIssue, ReviewItemId, VersionId } from '../contracts/types';
 import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
 import { useReviewApi } from './runtime';
 
@@ -7,13 +7,20 @@ const MAX_CONCURRENT_REVIEW_ITEM_DELETES = 5;
 
 export const reviewKeys = {
   projects: ['fj-review', 'projects'] as const,
-  project: (projectRefId: ProjectRefId) => ['fj-review', 'project', projectRefId] as const,
+  projectSummary: (projectRefId: ProjectRefId) =>
+    ['fj-review', 'project-summary', projectRefId] as const,
   item: (projectRefId: ProjectRefId, reviewItemId: ReviewItemId) =>
     ['fj-review', 'item', projectRefId, reviewItemId] as const,
   workspace: (projectRefId: ProjectRefId, reviewItemId: ReviewItemId, versionId?: VersionId) =>
     ['fj-review', 'workspace', projectRefId, reviewItemId, versionId ?? 'current'] as const,
   issues: (projectRefId: ProjectRefId, reviewItemId: ReviewItemId, versionId: VersionId) =>
     ['fj-review', 'issues', projectRefId, reviewItemId, versionId] as const,
+  issueDetail: (
+    projectRefId: ProjectRefId,
+    reviewItemId: ReviewItemId,
+    versionId: VersionId,
+    issueId: IssueId,
+  ) => ['fj-review', 'issue-detail', projectRefId, reviewItemId, versionId, issueId] as const,
 };
 
 function isAbortError(error: unknown): boolean {
@@ -29,12 +36,18 @@ export function useProjects(mode: EntryMode) {
   });
 }
 
-export function useProjectDetail(mode: EntryMode, projectRefId: ProjectRefId) {
+export function useProjectSummary(mode: EntryMode, projectRefId: ProjectRefId) {
   const api = useReviewApi(mode);
   return useQuery({
-    queryKey: reviewKeys.project(projectRefId),
-    queryFn: ({ signal }) => api.getProjectDetail(projectRefId, { signal }),
+    queryKey: reviewKeys.projectSummary(projectRefId),
+    queryFn: ({ signal }) => api.getProjectSummary(projectRefId, { signal }),
     retry: (failureCount, error) => !isAbortError(error) && failureCount < 2,
+    refetchInterval: (query) =>
+      query.state.data?.items.some(
+        (item) => item.revocationCleanupStatus === 'pending',
+      )
+        ? 3_000
+        : false,
   });
 }
 
@@ -44,13 +57,57 @@ export function useWorkspace(mode: EntryMode, input: { projectRefId: ProjectRefI
     queryKey: reviewKeys.workspace(input.projectRefId, input.reviewItemId, input.versionId),
     queryFn: ({ signal }) => api.getWorkspace(input, { signal }),
     retry: (failureCount, error) => !isAbortError(error) && failureCount < 2,
-    refetchInterval: (query) => {
-      const workspace = query.state.data;
-      return !input.versionId || workspace?.currentVersion.versionId === workspace?.item.currentVersionId
-        ? 2_500
-        : false;
+    refetchInterval: (query) =>
+      query.state.data?.currentVersion.playbackStatus === 'pending'
+        ? 5_000
+        : false,
+  });
+}
+
+export function useVersionIssues(
+  mode: EntryMode,
+  input: {
+    projectRefId: ProjectRefId;
+    reviewItemId: ReviewItemId;
+    versionId: VersionId;
+    initialData?: ReviewIssue[];
+  },
+) {
+  const api = useReviewApi(mode);
+  return useQuery({
+    queryKey: reviewKeys.issues(input.projectRefId, input.reviewItemId, input.versionId),
+    queryFn: ({ signal }) => api.getVersionIssues(input, { signal }),
+    initialData: input.initialData,
+    staleTime: input.initialData ? 5_000 : 0,
+    retry: (failureCount, error) => !isAbortError(error) && failureCount < 2,
+  });
+}
+
+export function useIssueDetail(
+  mode: EntryMode,
+  input: {
+    projectRefId: ProjectRefId;
+    reviewItemId: ReviewItemId;
+    versionId: VersionId;
+    issueId?: IssueId;
+  },
+  enabled: boolean,
+) {
+  const api = useReviewApi(mode);
+  const issueId = input.issueId ?? 'not-selected';
+  return useQuery({
+    queryKey: reviewKeys.issueDetail(
+      input.projectRefId,
+      input.reviewItemId,
+      input.versionId,
+      issueId,
+    ),
+    queryFn: ({ signal }) => {
+      if (!input.issueId) throw new Error('意见 ID 缺失');
+      return api.getIssueDetail({ ...input, issueId: input.issueId }, { signal });
     },
-    refetchIntervalInBackground: true,
+    enabled: enabled && Boolean(input.issueId),
+    retry: (failureCount, error) => !isAbortError(error) && failureCount < 2,
   });
 }
 
@@ -59,11 +116,30 @@ export function useReviewMutations(mode: EntryMode) {
   const queryClient = useQueryClient();
   const context = () => api.entryPolicy.createContext(mode);
   const invalidateProject = (projectRefId: ProjectRefId) =>
-    queryClient.invalidateQueries({ queryKey: reviewKeys.project(projectRefId) });
+    queryClient.invalidateQueries({ queryKey: reviewKeys.projectSummary(projectRefId) });
   const invalidateWorkspace = (projectRefId: ProjectRefId, reviewItemId: ReviewItemId, versionId?: VersionId) =>
     queryClient.invalidateQueries({ queryKey: reviewKeys.workspace(projectRefId, reviewItemId, versionId) });
   const invalidateCurrentWorkspace = (projectRefId: ProjectRefId, reviewItemId: ReviewItemId) =>
     queryClient.invalidateQueries({ queryKey: reviewKeys.workspace(projectRefId, reviewItemId) });
+  const invalidateIssueQueries = (issue: {
+    projectRefId: ProjectRefId;
+    reviewItemId: ReviewItemId;
+    versionId: VersionId;
+    issueId: IssueId;
+  }) =>
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: reviewKeys.issues(issue.projectRefId, issue.reviewItemId, issue.versionId),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: reviewKeys.issueDetail(
+          issue.projectRefId,
+          issue.reviewItemId,
+          issue.versionId,
+          issue.issueId,
+        ),
+      }),
+    ]);
   const refreshInBackground = (...refreshes: Promise<unknown>[]) => {
     void Promise.allSettled(refreshes);
   };
@@ -169,6 +245,7 @@ export function useReviewMutations(mode: EntryMode) {
         invalidateProject(issue.projectRefId);
         invalidateCurrentWorkspace(issue.projectRefId, issue.reviewItemId);
         invalidateWorkspace(issue.projectRefId, issue.reviewItemId, issue.versionId);
+        invalidateIssueQueries(issue);
       },
     }),
     replyToIssue: useMutation({
@@ -176,6 +253,7 @@ export function useReviewMutations(mode: EntryMode) {
       onSuccess: (issue) => {
         invalidateCurrentWorkspace(issue.projectRefId, issue.reviewItemId);
         invalidateWorkspace(issue.projectRefId, issue.reviewItemId, issue.versionId);
+        invalidateIssueQueries(issue);
       },
     }),
     editIssue: useMutation({
@@ -184,6 +262,7 @@ export function useReviewMutations(mode: EntryMode) {
         invalidateProject(issue.projectRefId);
         invalidateCurrentWorkspace(issue.projectRefId, issue.reviewItemId);
         invalidateWorkspace(issue.projectRefId, issue.reviewItemId, issue.versionId);
+        invalidateIssueQueries(issue);
       },
     }),
     resolveIssue: useMutation({
@@ -192,6 +271,7 @@ export function useReviewMutations(mode: EntryMode) {
         invalidateProject(issue.projectRefId);
         invalidateCurrentWorkspace(issue.projectRefId, issue.reviewItemId);
         invalidateWorkspace(issue.projectRefId, issue.reviewItemId, issue.versionId);
+        invalidateIssueQueries(issue);
       },
     }),
     reopenIssue: useMutation({
@@ -200,6 +280,7 @@ export function useReviewMutations(mode: EntryMode) {
         invalidateProject(issue.projectRefId);
         invalidateCurrentWorkspace(issue.projectRefId, issue.reviewItemId);
         invalidateWorkspace(issue.projectRefId, issue.reviewItemId, issue.versionId);
+        invalidateIssueQueries(issue);
       },
     }),
     deleteIssue: useMutation({
@@ -208,6 +289,7 @@ export function useReviewMutations(mode: EntryMode) {
         invalidateProject(issue.projectRefId);
         invalidateCurrentWorkspace(issue.projectRefId, issue.reviewItemId);
         invalidateWorkspace(issue.projectRefId, issue.reviewItemId, issue.versionId);
+        invalidateIssueQueries(issue);
       },
     }),
     finalizeCurrentVersion: useMutation({
@@ -216,6 +298,20 @@ export function useReviewMutations(mode: EntryMode) {
         invalidateProject(finalization.projectRefId);
         invalidateCurrentWorkspace(finalization.projectRefId, finalization.reviewItemId);
         invalidateWorkspace(finalization.projectRefId, finalization.reviewItemId, finalization.versionId);
+      },
+    }),
+    revokeFinalization: useMutation({
+      mutationFn: (input: Parameters<typeof api.revokeFinalization>[0]) =>
+        api.revokeFinalization(input, context()),
+      onSuccess: (revocation) => {
+        refreshInBackground(
+          invalidateProject(revocation.reviewItem.projectRefId),
+          invalidateCurrentWorkspace(
+            revocation.reviewItem.projectRefId,
+            revocation.reviewItem.reviewItemId,
+          ),
+          queryClient.invalidateQueries({ queryKey: reviewKeys.projects }),
+        );
       },
     }),
     downloadFinalizedOriginal: useMutation({

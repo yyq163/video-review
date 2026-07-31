@@ -3,10 +3,10 @@ import type {
   EntryMode,
   ExecutionContext,
   FinalizationRecord,
+  FinalizationRevocation,
   IssueId,
   PackageResult,
   Project,
-  ProjectDetail,
   ProjectRefId,
   ReviewAnnotationShape,
   ReviewIssue,
@@ -27,13 +27,58 @@ export interface ReviewItemWithMetadata extends ReviewItem {
   readonly itemCode: string;
 }
 
-export type ReviewProjectDetail = Omit<ProjectDetail, 'items'> & {
-  items: ReviewItemWithMetadata[];
-};
+export interface ReviewProjectSummaryItem extends ReviewItemWithMetadata {
+  readonly lockVersion: number;
+  readonly currentVersion: {
+    id: VersionId;
+    versionNo: number;
+    versionLabel: string;
+    durationMs: number;
+    fileSize: number;
+    playbackStatus: 'pending' | 'ready' | 'failed';
+    playbackUrl: string | null;
+    thumbnailStatus: 'pending' | 'ready' | 'failed';
+    thumbnailUrl: string | null;
+  };
+  readonly unresolvedCurrentVersionCount: number;
+  readonly finalization: {
+    id: FinalizationRecord['finalizationId'];
+    status: 'active' | 'revoked';
+    revokedAt: string | null;
+  } | null;
+  readonly revocationCleanupStatus: 'none' | 'pending' | 'failed' | 'complete';
+  readonly bulkDelete: {
+    eligible: boolean;
+    locked: boolean;
+    reason: string | null;
+  };
+}
+
+export interface ReviewProjectSummary {
+  readonly project: Project;
+  readonly items: ReviewProjectSummaryItem[];
+}
 
 export interface ReviewQueryPort {
   listProjects(options?: QueryOptions): Promise<Project[]>;
-  getProjectDetail(projectRefId: ProjectRefId, options?: QueryOptions): Promise<ReviewProjectDetail>;
+  getProjectSummary(projectRefId: ProjectRefId, options?: QueryOptions): Promise<ReviewProjectSummary>;
+  getVersionIssues(
+    params: {
+      projectRefId: ProjectRefId;
+      reviewItemId: ReviewItemId;
+      versionId: VersionId;
+    },
+    options?: QueryOptions,
+  ): Promise<ReviewIssue[]>;
+  getIssueDetail(
+    params: {
+      projectRefId: ProjectRefId;
+      reviewItemId: ReviewItemId;
+      versionId: VersionId;
+      issueId: IssueId;
+    },
+    options?: QueryOptions,
+  ): Promise<ReviewIssue>;
   getWorkspace(
     params: {
       projectRefId: ProjectRefId;
@@ -172,14 +217,6 @@ export interface ReviewCommandPort {
     },
     context: ExecutionContext,
   ): Promise<ReviewIssue>;
-  requestChanges(
-    input: {
-      projectRefId: ProjectRefId;
-      reviewItemId: ReviewItemId;
-      versionId: VersionId;
-    },
-    context: ExecutionContext,
-  ): Promise<ReviewVersion>;
   finalizeCurrentVersion(
     input: {
       projectRefId: ProjectRefId;
@@ -189,6 +226,14 @@ export interface ReviewCommandPort {
     },
     context: ExecutionContext,
   ): Promise<FinalizationRecord>;
+  revokeFinalization(
+    input: {
+      projectRefId: ProjectRefId;
+      reviewItemId: ReviewItemId;
+      confirmed: true;
+    },
+    context: ExecutionContext,
+  ): Promise<FinalizationRevocation>;
 }
 
 export interface FileStoragePort {

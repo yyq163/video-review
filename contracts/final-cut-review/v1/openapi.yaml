@@ -76,6 +76,21 @@ paths:
                 $ref: "#/components/schemas/EnvelopeProject"
         <<: *standardNon200Responses
 
+  /final-cut-review/projects/{project_ref_id}/summary:
+    get:
+      operationId: get_project_summary
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+      responses:
+        "200":
+          description: Project card summary envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeProjectSummary"
+        <<: *standardNon200Responses
+
   /final-cut-review/projects/{project_ref_id}/items:
     get:
       operationId: list_items
@@ -263,6 +278,24 @@ paths:
                 type: string
                 format: binary
             application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        <<: *standardNon200Responses
+
+  /final-cut-review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/thumbnail:
+    get:
+      operationId: get_review_version_thumbnail
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/VersionId"
+      responses:
+        "200":
+          description: Protected current-version first-frame thumbnail.
+          content:
+            image/jpeg:
               schema:
                 type: string
                 format: binary
@@ -806,32 +839,6 @@ paths:
                 $ref: "#/components/schemas/EnvelopeReviewIssue"
         <<: *standardNon200Responses
 
-  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/request-changes:
-    post:
-      operationId: review_request_changes
-      tags: [commands]
-      x-command-type: RequestChanges
-      parameters:
-        - $ref: "#/components/parameters/ProjectRefId"
-        - $ref: "#/components/parameters/ReviewItemId"
-        - $ref: "#/components/parameters/VersionId"
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RequestChangesCommandEnvelope"
-      responses:
-        "200":
-          description: Changes requested item envelope.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EnvelopeReviewItem"
-        <<: *standardNon200Responses
-
   /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/finalize:
     post:
       operationId: review_finalize_version
@@ -856,6 +863,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EnvelopeFinalization"
+        <<: *standardNon200Responses
+
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/finalization/revoke:
+    post:
+      operationId: review_revoke_finalization
+      tags: [commands]
+      x-command-type: RevokeFinalization
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeFinalizationCommandEnvelope"
+      responses:
+        "200":
+          description: Revoked finalization and package cleanup status envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeFinalizationRevocation"
         <<: *standardNon200Responses
 
   /final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages:
@@ -1399,6 +1431,20 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/FinalizationDTO"
+    EnvelopeFinalizationRevocation:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/FinalizationRevocationDTO"
+    EnvelopeProjectSummary:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectSummaryDTO"
     EnvelopePackageSnapshot:
       allOf:
         - $ref: "#/components/schemas/EnvelopeAny"
@@ -1468,8 +1514,8 @@ components:
         - ResolveReviewIssue
         - ReopenReviewIssue
         - SoftDeleteReviewIssue
-        - RequestChanges
         - FinalizeVersion
+        - RevokeFinalization
         - PrepareFinalizedPackage
 
     CreateProjectCommandEnvelope:
@@ -1584,13 +1630,6 @@ components:
           properties:
             command_type: {type: string, const: SoftDeleteReviewIssue}
             payload: {$ref: "#/components/schemas/IssueAncestryPayload"}
-    RequestChangesCommandEnvelope:
-      allOf:
-        - $ref: "#/components/schemas/CommandEnvelopeBase"
-        - type: object
-          properties:
-            command_type: {type: string, const: RequestChanges}
-            payload: {$ref: "#/components/schemas/RequestChangesPayload"}
     FinalizeVersionCommandEnvelope:
       allOf:
         - $ref: "#/components/schemas/CommandEnvelopeBase"
@@ -1598,6 +1637,13 @@ components:
           properties:
             command_type: {type: string, const: FinalizeVersion}
             payload: {$ref: "#/components/schemas/FinalizeVersionPayload"}
+    RevokeFinalizationCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: RevokeFinalization}
+            payload: {$ref: "#/components/schemas/RevokeFinalizationPayload"}
     PrepareFinalizedPackageCommandEnvelope:
       allOf:
         - $ref: "#/components/schemas/CommandEnvelopeBase"
@@ -1726,15 +1772,6 @@ components:
         review_item_id: {type: string, minLength: 1}
         version_id: {type: string, minLength: 1}
         issue_id: {type: string, minLength: 1}
-    RequestChangesPayload:
-      type: object
-      required: [project_ref_id, review_item_id, version_id, summary]
-      additionalProperties: false
-      properties:
-        project_ref_id: {type: string, minLength: 1}
-        review_item_id: {type: string, minLength: 1}
-        version_id: {type: string, minLength: 1}
-        summary: {type: string, minLength: 1, maxLength: 4000}
     FinalizeVersionPayload:
       type: object
       required: [project_ref_id, review_item_id, version_id, confirmed]
@@ -1743,6 +1780,14 @@ components:
         project_ref_id: {type: string, minLength: 1}
         review_item_id: {type: string, minLength: 1}
         version_id: {type: string, minLength: 1}
+        confirmed: {type: boolean, const: true}
+    RevokeFinalizationPayload:
+      type: object
+      required: [project_ref_id, review_item_id, confirmed]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
         confirmed: {type: boolean, const: true}
     PrepareFinalizedPackagePayload:
       type: object
@@ -2005,8 +2050,101 @@ components:
         version_id: {type: string}
         version_no: {type: integer}
         original_media: {$ref: "#/components/schemas/OriginalMediaSnapshotDTO"}
-        status: {type: string, enum: [active]}
+        status: {type: string, enum: [active, revoked]}
         finalized_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+    FinalizationRevocationDTO:
+      type: object
+      required: [finalization, review_item, cleanup_status, invalidated_package_ids]
+      additionalProperties: false
+      properties:
+        finalization: {$ref: "#/components/schemas/FinalizationDTO"}
+        review_item: {$ref: "#/components/schemas/ReviewItemDTO"}
+        cleanup_status: {type: string, enum: [pending, failed, complete]}
+        invalidated_package_ids:
+          type: array
+          items: {type: string}
+    ProjectSummaryCurrentVersionDTO:
+      type: object
+      required: [id, version_no, version_label, duration_ms, file_size, playback_status, playback_url, thumbnail_status, thumbnail_url]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        version_no: {type: integer, minimum: 1}
+        version_label: {type: string}
+        duration_ms: {type: integer, minimum: 1}
+        file_size: {type: integer, minimum: 1}
+        playback_status: {type: string, enum: [pending, ready, failed]}
+        playback_url:
+          anyOf:
+            - type: string
+            - type: "null"
+        thumbnail_status: {type: string, enum: [pending, ready, failed]}
+        thumbnail_url:
+          anyOf:
+            - type: string
+            - type: "null"
+    ProjectSummaryFinalizationDTO:
+      type: object
+      required: [id, version_id, version_no, status, finalized_at, revoked_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        version_id: {type: string}
+        version_no: {type: integer, minimum: 1}
+        status: {type: string, enum: [active, revoked]}
+        finalized_at: {type: string, format: date-time}
+        revoked_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+    ProjectSummaryBulkDeleteDTO:
+      type: object
+      required: [eligible, locked, reason]
+      additionalProperties: false
+      properties:
+        eligible: {type: boolean}
+        locked: {type: boolean}
+        reason:
+          anyOf:
+            - type: string
+            - type: "null"
+    ProjectSummaryItemDTO:
+      type: object
+      required: [id, project_ref_id, item_code, episode_no, title, workflow_state, lock_version, current_version_id, current_version, unresolved_current_version_count, finalization, revocation_cleanup_status, bulk_delete]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        project_ref_id: {type: string}
+        item_code: {type: string}
+        episode_no:
+          anyOf:
+            - type: integer
+              minimum: 1
+            - type: "null"
+        title: {type: string}
+        workflow_state: {type: string, enum: [pending_review, in_review, changes_requested, finalized]}
+        lock_version: {type: integer, minimum: 1}
+        current_version_id: {type: string}
+        current_version: {$ref: "#/components/schemas/ProjectSummaryCurrentVersionDTO"}
+        unresolved_current_version_count: {type: integer, minimum: 0}
+        finalization:
+          anyOf:
+            - $ref: "#/components/schemas/ProjectSummaryFinalizationDTO"
+            - type: "null"
+        revocation_cleanup_status: {type: string, enum: [none, pending, failed, complete]}
+        bulk_delete: {$ref: "#/components/schemas/ProjectSummaryBulkDeleteDTO"}
+    ProjectSummaryDTO:
+      type: object
+      required: [project, items]
+      additionalProperties: false
+      properties:
+        project: {$ref: "#/components/schemas/ProjectDTO"}
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectSummaryItemDTO"
     PackageSnapshotDTO:
       type: object
       required: [id, project_ref_id, status, package_filename, expires_at, file_count, total_bytes, items, created_at, updated_at]
@@ -2014,7 +2152,7 @@ components:
       properties:
         id: {type: string}
         project_ref_id: {type: string}
-        status: {type: string, enum: [preparing, ready, failed, expired]}
+        status: {type: string, enum: [preparing, ready, failed, expired, invalidated]}
         package_filename: {type: string}
         expires_at: {type: string, format: date-time}
         file_count: {type: integer}
@@ -2097,9 +2235,9 @@ components:
         - review.issue.reopen
         - review.issue.delete
         - review.session.start
-        - review.session.request_changes
         - review.finalization.read
         - review.finalization.create
+        - review.finalization.revoke
         - review.download.finalized_original
         - review.package.create
         - review.package.read
@@ -2145,9 +2283,9 @@ components:
       $ref: "#/components/schemas/EventEmptyPayload"
     ReviewIssueDeletedEventPayload:
       $ref: "#/components/schemas/EventEmptyPayload"
-    ReviewChangesRequestedEventPayload:
-      $ref: "#/components/schemas/EventEmptyPayload"
     ReviewVersionFinalizedEventPayload:
+      $ref: "#/components/schemas/EventEmptyPayload"
+    ReviewFinalizationRevokedEventPayload:
       $ref: "#/components/schemas/EventEmptyPayload"
     ReviewFinalizedOriginalDownloadRequestedEventPayload:
       $ref: "#/components/schemas/EventEmptyPayload"
@@ -2179,8 +2317,8 @@ components:
         - $ref: "#/components/schemas/ReviewIssueResolvedEventPayload"
         - $ref: "#/components/schemas/ReviewIssueReopenedEventPayload"
         - $ref: "#/components/schemas/ReviewIssueDeletedEventPayload"
-        - $ref: "#/components/schemas/ReviewChangesRequestedEventPayload"
         - $ref: "#/components/schemas/ReviewVersionFinalizedEventPayload"
+        - $ref: "#/components/schemas/ReviewFinalizationRevokedEventPayload"
         - $ref: "#/components/schemas/ReviewFinalizedOriginalDownloadRequestedEventPayload"
         - $ref: "#/components/schemas/ReviewPackageRequestedEventPayload"
         - $ref: "#/components/schemas/ReviewPackageReadyEventPayload"
@@ -2231,8 +2369,8 @@ components:
         - review.issue.resolved
         - review.issue.reopened
         - review.issue.deleted
-        - review.changes_requested
         - review.version.finalized
+        - review.finalization.revoked
         - review.finalized_original.download_requested
         - review.package.requested
         - review.package.ready

@@ -1009,10 +1009,16 @@ def test_managed_directory_cleanup_uses_scanned_root_after_path_replacement(
             yield pinned
 
     class EmptySession:
+        def scalars(self, _statement: object) -> list[object]:
+            return []
+
         def get(self, _model: object, _record_id: str) -> None:
             return None
 
         def scalar(self, _statement: object) -> None:
+            return None
+
+        def commit(self) -> None:
             return None
 
     monkeypatch.setattr(maintenance, "_pin_regular_file_beneath", swap_before_pin)
@@ -1057,6 +1063,81 @@ def test_orphan_file_cleanup_preserves_upload_session_file_references(tmp_path: 
         kind="file",
     ) == (0, 0)
     assert target.read_bytes() == b"active-finalization"
+
+
+def test_orphan_media_derivative_is_eventually_removed(tmp_path: Path) -> None:
+    import backend.app.maintenance_cleanup as maintenance
+
+    root = tmp_path / "files"
+    root.mkdir()
+    media_id = f"media_{uuid.uuid4().hex}"
+    target = root / media_id
+    target.write_bytes(b"deterministic-uncommitted-derivative")
+    stale = datetime.now(timezone.utc) - timedelta(days=2)
+    os.utime(target, (stale.timestamp(), stale.timestamp()))
+
+    class EmptySession:
+        def scalars(self, _statement: object) -> list[object]:
+            return []
+
+        def get(self, _model: object, _record_id: str) -> None:
+            return None
+
+        def scalar(self, _statement: object) -> None:
+            return None
+
+    session = cast(Session, EmptySession())
+    assert maintenance._cleanup_orphan_managed_files(
+        session,
+        root,
+        datetime.now(timezone.utc),
+        kind="file",
+    ) == (1, 0)
+    assert not target.exists()
+
+
+def test_orphan_media_derivative_cleanup_locks_and_preserves_active_task(
+    tmp_path: Path,
+) -> None:
+    import backend.app.maintenance_cleanup as maintenance
+
+    root = tmp_path / "files"
+    root.mkdir()
+    task_id = f"mdt_{uuid.uuid4().hex}"
+    media_id = maintenance._derivative_output_file_id(task_id, "thumbnail")
+    target = root / media_id
+    target.write_bytes(b"recoverable-active-derivative")
+    stale = datetime.now(timezone.utc) - timedelta(days=2)
+    os.utime(target, (stale.timestamp(), stale.timestamp()))
+    lock_checked = False
+    committed = False
+
+    class ActiveTaskSession:
+        def scalars(self, statement: object) -> list[object]:
+            nonlocal lock_checked
+            lock_checked = getattr(statement, "_for_update_arg", None) is not None
+            return [SimpleNamespace(id=task_id, kind="thumbnail")]
+
+        def get(self, _model: object, _record_id: str) -> None:
+            raise AssertionError("an active derivative must be protected before reference lookup")
+
+        def scalar(self, _statement: object) -> None:
+            return None
+
+        def commit(self) -> None:
+            nonlocal committed
+            committed = True
+
+    session = cast(Session, ActiveTaskSession())
+    assert maintenance._cleanup_orphan_managed_files(
+        session,
+        root,
+        datetime.now(timezone.utc),
+        kind="file",
+    ) == (0, 0)
+    assert lock_checked is True
+    assert committed is True
+    assert target.read_bytes() == b"recoverable-active-derivative"
 
 
 def test_package_unlink_failure_does_not_starve_pending_deletes(

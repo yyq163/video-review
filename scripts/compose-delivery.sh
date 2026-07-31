@@ -301,7 +301,7 @@ validate_compose_secret_files() {
         fi
     done
 
-    secret_file_names='COMPOSE_POSTGRES_ADMIN_PASSWORD_FILE COMPOSE_POSTGRES_OWNER_PASSWORD_FILE COMPOSE_POSTGRES_APP_PASSWORD_FILE COMPOSE_WRITE_GUARD_CODE_FILE COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE'
+    secret_file_names='COMPOSE_POSTGRES_ADMIN_PASSWORD_FILE COMPOSE_POSTGRES_OWNER_PASSWORD_FILE COMPOSE_POSTGRES_APP_PASSWORD_FILE COMPOSE_WRITE_GUARD_CODE_FILE COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE COMPOSE_EDGE_HANDOFF_SECRET_FILE'
     resolved_secret_files=
     resolved_secret_count=0
     for variable_name in $secret_file_names; do
@@ -315,11 +315,11 @@ $secret_file"
     done
 
     # A reduced Compose file used by tooling may define no secrets. The real
-    # project Compose file makes all five variables mandatory during expansion.
+    # project Compose file makes all six variables mandatory during expansion.
     if [ "$resolved_secret_count" -eq 0 ]; then
         return
     fi
-    if [ "$resolved_secret_count" -ne 5 ]; then
+    if [ "$resolved_secret_count" -ne 6 ]; then
         printf '%s\n' 'all Compose secret files must be configured together' >&2
         exit 2
     fi
@@ -344,6 +344,7 @@ snapshot_names = {
     "COMPOSE_POSTGRES_APP_PASSWORD_FILE": "secret-postgres-app",
     "COMPOSE_WRITE_GUARD_CODE_FILE": "secret-write-guard-code",
     "COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE": "secret-write-guard-session",
+    "COMPOSE_EDGE_HANDOFF_SECRET_FILE": "secret-edge-handoff",
 }
 directory_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
 project_fd = os.open(project_root, directory_flags)

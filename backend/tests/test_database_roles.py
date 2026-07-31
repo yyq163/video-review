@@ -120,6 +120,7 @@ def test_compose_isolates_database_role_credentials_and_migration_lifecycle() ->
         "postgres_app_password": {"file": "${COMPOSE_POSTGRES_APP_PASSWORD_FILE:?COMPOSE_POSTGRES_APP_PASSWORD_FILE is required}"},
         "write_guard_code": {"file": "${COMPOSE_WRITE_GUARD_CODE_FILE:?COMPOSE_WRITE_GUARD_CODE_FILE is required}"},
         "write_guard_session_secret": {"file": "${COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE:?COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE is required}"},
+        "edge_handoff_secret": {"file": "${COMPOSE_EDGE_HANDOFF_SECRET_FILE:?COMPOSE_EDGE_HANDOFF_SECRET_FILE is required}"},
     }
     assert services["migrate"]["restart"] == "no"
     assert "/var/lib/fj-runtime-state" in services["migrate"]["tmpfs"]

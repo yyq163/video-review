@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -21,7 +22,9 @@ from backend.app.modules.final_cut_review.infra.repositories import PACKAGE_BUIL
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     FileObjectModel,
     FinalCutPackageSnapshotModel,
+    FinalizationPackageInvalidationModel,
     FinalizationRecordModel,
+    MediaDerivativeTaskModel,
     ReviewVersionModel,
     UploadSessionModel,
     utcnow,
@@ -43,6 +46,7 @@ from backend.app.upload_parts import (
 
 MAX_TOMBSTONE_BYTES = 16_384
 FILE_ID_RE = re.compile(r"^file_[0-9a-f]{32}$")
+DERIVATIVE_FILE_ID_RE = re.compile(r"^media_[0-9a-f]{32}$")
 PACKAGE_FILE_RE = re.compile(r"^(pkg_[0-9a-f]{32})\.zip$")
 UPLOAD_CLEANUP_BATCH_SIZE = 100
 UPLOAD_CLEANUP_RETRY_SECONDS = 300
@@ -53,6 +57,13 @@ MAX_UPLOAD_PARTS_PER_SESSION = 256
 
 _directory_scan_lock = threading.Lock()
 _directory_scan_states: dict[tuple[str, str], tuple[tuple[int, int], Iterator[os.DirEntry[str]]]] = {}
+
+
+def _derivative_output_file_id(task_id: str, kind: str) -> str:
+    digest = hashlib.sha256(
+        f"media-derivative-v1\0{task_id}\0{kind}".encode()
+    ).hexdigest()
+    return f"media_{digest[:32]}"
 
 
 def _open_directory_scan(directory_fd: int) -> Iterator[os.DirEntry[str]]:
@@ -425,9 +436,32 @@ def _cleanup_orphan_managed_files(
     try:
         with pin_managed_root(root) as (resolved_root, root_fd):
             entries = _directory_scan_batch(root_fd, resolved_root, f"orphan-managed-{kind}")
+            active_derivative_ids: set[str] = set()
+            if kind == "file" and any(
+                DERIVATIVE_FILE_ID_RE.fullmatch(entry.name)
+                for entry in entries
+            ):
+                active_derivative_ids = {
+                    _derivative_output_file_id(task.id, task.kind)
+                    for task in session.scalars(
+                        select(MediaDerivativeTaskModel)
+                        .where(
+                            MediaDerivativeTaskModel.status.in_(
+                                ("queued", "running")
+                            )
+                        )
+                        .order_by(MediaDerivativeTaskModel.id)
+                        .with_for_update()
+                    )
+                }
             for entry in entries:
                 if kind == "file":
-                    record_id = entry.name if FILE_ID_RE.fullmatch(entry.name) else None
+                    record_id = (
+                        entry.name
+                        if FILE_ID_RE.fullmatch(entry.name)
+                        or DERIVATIVE_FILE_ID_RE.fullmatch(entry.name)
+                        else None
+                    )
                 else:
                     match = PACKAGE_FILE_RE.fullmatch(entry.name)
                     record_id = match.group(1) if match else None
@@ -438,6 +472,8 @@ def _cleanup_orphan_managed_files(
                         if pinned is None or not pinned.exists or pinned.mtime_ns is None or pinned.mtime_ns >= cutoff_ns:
                             continue
                         if kind == "file":
+                            if record_id in active_derivative_ids:
+                                continue
                             referenced = session.get(FileObjectModel, record_id) is not None
                             if not referenced:
                                 referenced = (
@@ -462,6 +498,8 @@ def _cleanup_orphan_managed_files(
                             removed += 1
                 except OSError:
                     failed += 1
+            if active_derivative_ids:
+                session.commit()
     except (OSError, ValueError):
         return removed, failed + 1
     return removed, failed
@@ -650,6 +688,19 @@ def _cleanup_claimed_expired_packages(
         except (OSError, ValueError):
             failed += 1
             session.rollback()
+            invalidations = list(
+                session.scalars(
+                    select(FinalizationPackageInvalidationModel)
+                    .where(FinalizationPackageInvalidationModel.package_id == package_id)
+                    .with_for_update()
+                )
+            )
+            for invalidation in invalidations:
+                invalidation.cleanup_status = "failed"
+                invalidation.cleanup_attempts += 1
+                invalidation.last_error_code = "PACKAGE_DELETE_RETRY_PENDING"
+                invalidation.updated_at = utcnow()
+            session.commit()
             continue
         if was_removed:
             removed += 1
@@ -661,6 +712,18 @@ def _cleanup_claimed_expired_packages(
         package.storage_bytes = 0
         package.storage_reclaimed_at = utcnow()
         package.updated_at = package.storage_reclaimed_at
+        invalidations = list(
+            session.scalars(
+                select(FinalizationPackageInvalidationModel)
+                .where(FinalizationPackageInvalidationModel.package_id == package_id)
+                .with_for_update()
+            )
+        )
+        for invalidation in invalidations:
+            invalidation.cleanup_status = "complete"
+            invalidation.cleanup_attempts += 1
+            invalidation.last_error_code = None
+            invalidation.updated_at = package.updated_at
         session.commit()
     return removed, failed
 

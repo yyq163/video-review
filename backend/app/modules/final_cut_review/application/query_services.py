@@ -17,6 +17,9 @@ class FinalCutReviewQueryService:
         self.repository._assert_project_visible(project)
         return self.repository.project_dto(project)
 
+    def get_project_summary(self, project_ref_id: str) -> dict[str, Any]:
+        return self.repository.get_project_summary(project_ref_id)
+
     def list_items(self, project_ref_id: str) -> list[dict[str, Any]]:
         return self.repository.list_items(project_ref_id)
 

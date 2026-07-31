@@ -1,0 +1,11 @@
+{
+	# Caddy remains the outer TLS and browser-facing boundary.
+	# Inject FCR_EDGE_HANDOFF_SECRET from the same one-line secret source used
+	# by Compose. Never place the secret literal in this file or a command line.
+}
+
+review.example.invalid {
+	reverse_proxy 127.0.0.1:8000 {
+		header_up X-FCR-Edge-Handoff {$FCR_EDGE_HANDOFF_SECRET}
+	}
+}

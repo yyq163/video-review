@@ -816,6 +816,163 @@ def test_alembic_upgrade_and_downgrade_are_executable(tmp_path: Path, monkeypatc
     alembic_command.downgrade(cfg, "base")
 
 
+def test_repair_runtime_upgrade_preserves_legacy_current_version_assets_without_backfill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.repositories import (
+        SqlAlchemyReviewRepository,
+    )
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FileObjectModel,
+        MediaDerivativeTaskModel,
+    )
+    from backend.app.settings import get_database_settings
+
+    root = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "legacy-current-version-assets.db"
+    _set_migration_env(db_path, tmp_path, monkeypatch)
+    cfg = _alembic_config(root)
+    alembic_command.upgrade(cfg, "20260714_0019")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    LegacySession = sessionmaker(bind=engine)
+    project_id = "prj_legacy_derivative_compat"
+    item_id = "item_legacy_derivative_compat"
+    version_id = "ver_legacy_derivative_compat"
+    playback_id = "file_11111111111111111111111111111111"
+    thumbnail_id = "file_22222222222222222222222222222222"
+    try:
+        with LegacySession() as session:
+            project = ProjectRefModel(
+                id=project_id,
+                project_code="LEGACY-COMPAT",
+                project_name="Legacy compatibility",
+            )
+            item = ReviewItemModel(
+                id=item_id,
+                project_ref_id=project_id,
+                item_code="LEGACY-001",
+                title="Legacy item",
+            )
+            playback = FileObjectModel(
+                id=playback_id,
+                original_filename="legacy.mp4",
+                mime_type="video/mp4",
+                file_size=16,
+                sha256="1" * 64,
+                storage_path=str(tmp_path / "storage" / "files" / playback_id),
+                owner_principal_id="legacy-owner",
+                owner_principal_kind="system",
+                duration_ms=1000,
+                width=1920,
+                height=1080,
+                fps_num=25,
+                fps_den=1,
+                media_probe_version="legacy-probe-v1",
+            )
+            thumbnail = FileObjectModel(
+                id=thumbnail_id,
+                original_filename="legacy.jpg",
+                mime_type="image/jpeg",
+                file_size=8,
+                sha256="2" * 64,
+                storage_path=str(tmp_path / "storage" / "files" / thumbnail_id),
+                owner_principal_id="legacy-owner",
+                owner_principal_kind="system",
+                duration_ms=1000,
+                width=640,
+                height=360,
+                fps_num=25,
+                fps_den=1,
+                media_probe_version="legacy-probe-v1",
+            )
+            session.add_all([project, item, playback, thumbnail])
+            session.flush()
+            version = ReviewVersionModel(
+                id=version_id,
+                project_ref_id=project_id,
+                review_item_id=item_id,
+                version_no=1,
+                version_label="V1",
+                is_current=True,
+                original_file_id=playback_id,
+                original_filename="legacy.mp4",
+                mime_type="video/mp4",
+                file_size=16,
+                sha256="1" * 64,
+                duration_ms=1000,
+                width=1920,
+                height=1080,
+                fps_num=25,
+                fps_den=1,
+                media_probe_version="legacy-probe-v1",
+                playback_asset_id=playback_id,
+                thumbnail_asset_id=thumbnail_id,
+            )
+            session.add(version)
+            session.flush()
+            item.current_version_id = version_id
+            session.commit()
+    finally:
+        engine.dispose()
+
+    alembic_command.upgrade(cfg, "head")
+    engine = create_engine(f"sqlite:///{db_path}")
+    UpgradedSession = sessionmaker(bind=engine)
+    try:
+        with UpgradedSession() as session:
+            assert session.scalar(
+                select(MediaDerivativeTaskModel).where(
+                    MediaDerivativeTaskModel.version_id == version_id
+                )
+            ) is None
+            summary = SqlAlchemyReviewRepository(
+                session,
+                get_database_settings(),
+            ).get_project_summary(project_id)
+        card = summary["items"][0]
+        assert card["current_version_id"] == version_id
+        assert card["current_version"]["playback_status"] == "ready"
+        assert card["current_version"]["playback_url"].endswith("/stream")
+        assert card["current_version"]["thumbnail_status"] == "ready"
+        assert card["current_version"]["thumbnail_url"].endswith("/thumbnail")
+    finally:
+        engine.dispose()
+
+
+def test_repair_runtime_downgrade_restores_previous_finalization_constraints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "repair-runtime-downgrade.db"
+    _set_migration_env(db_path, tmp_path, monkeypatch)
+    cfg = _alembic_config(root)
+    alembic_command.upgrade(cfg, "head")
+    alembic_command.downgrade(cfg, "20260714_0019")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        inspector = inspect(engine)
+        finalization_checks = {
+            constraint["name"]: " ".join(constraint["sqltext"].split())
+            for constraint in inspector.get_check_constraints("finalizations")
+        }
+        assert finalization_checks["ck_finalization_active_only"] == "status = 'active'"
+        assert "ck_finalization_status" not in finalization_checks
+        assert "ck_finalizations_revoked_at" not in finalization_checks
+        assert "revoked_at" not in {
+            column["name"] for column in inspector.get_columns("finalizations")
+        }
+        assert "media_derivative_tasks" not in inspector.get_table_names()
+        assert "finalization_package_invalidations" not in inspector.get_table_names()
+    finally:
+        engine.dispose()
+
+    alembic_command.upgrade(cfg, "head")
+
+
 def test_upload_quota_migration_backfills_peak_reservation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -907,14 +1064,28 @@ def test_sqlalchemy_metadata_declares_migration_check_constraints() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = (root / "backend/alembic/versions/20260619_0001_initial_final_cut_review.py").read_text()
     migration_check_names = set(re.findall(r'name="(ck_[^"]+)"', migration))
+    repair_migration = (
+        root / "backend/alembic/versions/20260731_0020_repair_list_runtime.py"
+    ).read_text()
+    superseded_check_names = {
+        name
+        for name in migration_check_names
+        if re.search(
+            rf'_replace_check\(\s*"[^"]+"\s*,\s*\([^)]*["\']{re.escape(name)}["\']',
+            repair_migration,
+            re.DOTALL,
+        )
+    }
     metadata_check_names = {
         constraint.name
         for table in Base.metadata.tables.values()
         for constraint in table.constraints
         if isinstance(constraint, CheckConstraint) and constraint.name is not None
     }
+    missing_check_names = migration_check_names - metadata_check_names
 
-    assert sorted(migration_check_names - metadata_check_names) == []
+    assert missing_check_names & superseded_check_names == {"ck_finalization_active_only"}
+    assert sorted(missing_check_names - superseded_check_names) == []
 
 
 def _expect_db_rejects(fn: Any) -> None:

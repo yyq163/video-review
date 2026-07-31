@@ -201,9 +201,13 @@ export function ReviewWorkspaceContent({
           </div>
           <CapabilityGate entryMode={props.entryMode} capability="review.version.compare">
             <VersionComparePanel
+              entryMode={props.entryMode}
+              projectRefId={props.projectRefId}
+              reviewItemId={props.reviewItemId}
               versions={data.versions}
               currentVersionId={data.item.currentVersionId}
-              issues={controller.compareIssues}
+              workspaceVersionId={data.currentVersion.versionId}
+              workspaceIssues={controller.currentIssues}
             />
           </CapabilityGate>
         </div>

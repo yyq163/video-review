@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { EntryMode, IssueStatus, ReviewAnnotationShape, ReviewIssue, ReviewWorkspace, UploadProgress } from '../contracts/types';
-import { useProjectDetail, useReviewMutations } from '../entry/use-review-queries';
+import { useIssueDetail, useProjectSummary, useReviewMutations } from '../entry/use-review-queries';
 import { actionError } from '../components/shared';
 import type { ReviewPlayerHandle } from '../components/ReviewPlayer';
 import { dedupeReviewItemsByEpisode } from '../core/episode-dedupe';
@@ -29,7 +29,7 @@ export function useReviewWorkspaceController(
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedIssueId = searchParams.get('issue') ?? undefined;
   const mutations = useReviewMutations(props.entryMode);
-  const projectDetail = useProjectDetail(props.entryMode, props.projectRefId);
+  const projectSummary = useProjectSummary(props.entryMode, props.projectRefId);
   const [annotationToolbarHost, setAnnotationToolbarHost] = useState<HTMLDivElement | null>(null);
   const [timeMs, setTimeMs] = useState(0);
   const [draftShapes, setDraftShapes] = useState<ReviewAnnotationShape[]>([]);
@@ -45,6 +45,19 @@ export function useReviewWorkspaceController(
   );
   const [appendVersionConfirmationPending, setAppendVersionConfirmationPending] = useState(false);
   const data = props.data;
+  const selectedIssueSummary = data.currentIssues.find(
+    (issue) => issue.issueId === selectedIssueId,
+  );
+  const selectedIssueDetail = useIssueDetail(
+    props.entryMode,
+    {
+      projectRefId: props.projectRefId,
+      reviewItemId: props.reviewItemId,
+      versionId: selectedIssueSummary?.versionId ?? data.currentVersion.versionId,
+      issueId: selectedIssueId,
+    },
+    Boolean(selectedIssueSummary),
+  );
 
   const pending = useMemo(
     () =>
@@ -95,10 +108,16 @@ export function useReviewWorkspaceController(
       optimisticIssue.versionId !== data.currentVersion.versionId
     ) {
       return sortedIssuesForPlayback(
-        data.currentIssues.map((issue) => ({
-          ...issue,
-          status: optimisticIssueStatuses[issue.issueId] ?? issue.status,
-        })),
+        data.currentIssues.map((issue) => {
+          const loadedIssue =
+            selectedIssueDetail.data?.issueId === issue.issueId
+              ? selectedIssueDetail.data
+              : issue;
+          return {
+            ...loadedIssue,
+            status: optimisticIssueStatuses[issue.issueId] ?? loadedIssue.status,
+          };
+        }),
       );
     }
     const currentCopy = data.currentIssues.filter((issue) => issue.issueId !== optimisticIssue.issueId);
@@ -115,6 +134,7 @@ export function useReviewWorkspaceController(
     optimisticIssueStatuses,
     props.projectRefId,
     props.reviewItemId,
+    selectedIssueDetail.data,
   ]);
   const currentInput = useMemo(
     () => ({ projectRefId: props.projectRefId, reviewItemId: props.reviewItemId, versionId: data.currentVersion.versionId }),
@@ -122,13 +142,8 @@ export function useReviewWorkspaceController(
   );
   const selectedIssue = currentIssues.find((issue) => issue.issueId === selectedIssueId) ?? null;
   const selectedAnnotationSet = selectedIssue?.currentAnnotationSet ?? null;
-  const compareIssues = useMemo(() => {
-    const byId = new Map<string, ReviewIssue>();
-    for (const issue of [...data.historicalIssues, ...currentIssues]) byId.set(issue.issueId, issue);
-    return [...byId.values()];
-  }, [currentIssues, data.historicalIssues]);
   const episodeItems = useMemo(() => {
-    const projectItems = projectDetail.data?.items ?? [];
+    const projectItems = projectSummary.data?.items ?? [];
     const itemsWithFreshWorkspaceItem = [
       ...projectItems.filter((item) => item.reviewItemId !== data.item.reviewItemId),
       data.item,
@@ -137,34 +152,38 @@ export function useReviewWorkspaceController(
       itemsWithFreshWorkspaceItem,
       {
         currentItemId: data.item.reviewItemId,
-        versionsByItem: projectDetail.data?.versionsByItem,
       },
     );
-  }, [data.item, projectDetail.data]);
+  }, [data.item, projectSummary.data?.items]);
   const episodeUnresolvedCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const item of episodeItems) {
-      const currentVersionIssues =
-        item.reviewItemId === data.item.reviewItemId
-          ? data.currentVersion.versionId === item.currentVersionId
-            ? currentIssues
-            : [...data.currentIssues, ...data.historicalIssues].filter(
-                (issue) => issue.versionId === item.currentVersionId,
-              )
-          : projectDetail.data?.issuesByVersion[item.currentVersionId] ?? [];
-      counts[item.reviewItemId] = currentVersionIssues.filter(
-        (issue) => issue.status === 'unresolved' && !issue.deletedAt,
-      ).length;
+      if (item.reviewItemId === data.item.reviewItemId) {
+        counts[item.reviewItemId] =
+          data.currentVersion.versionId === item.currentVersionId
+            ? currentIssues.filter(
+                (issue) => issue.status === 'unresolved' && !issue.deletedAt,
+              ).length
+            : data.item.unresolvedCurrentVersionCount ??
+              projectSummary.data?.items.find(
+                  (candidate) => candidate.reviewItemId === item.reviewItemId,
+                )?.unresolvedCurrentVersionCount ??
+              0;
+      } else {
+        counts[item.reviewItemId] =
+          projectSummary.data?.items.find(
+            (candidate) => candidate.reviewItemId === item.reviewItemId,
+          )?.unresolvedCurrentVersionCount ?? 0;
+      }
     }
     return counts;
   }, [
     currentIssues,
-    data.currentIssues,
     data.currentVersion.versionId,
-    data.historicalIssues,
     data.item.reviewItemId,
+    data.item.unresolvedCurrentVersionCount,
     episodeItems,
-    projectDetail.data,
+    projectSummary.data?.items,
   ]);
   const episodeCurrentVersionMetadata = useMemo(() => {
     const labels: Record<string, string> = {};
@@ -173,14 +192,23 @@ export function useReviewWorkspaceController(
       const versions =
         item.reviewItemId === data.item.reviewItemId
           ? data.versions
-          : projectDetail.data?.versionsByItem[item.reviewItemId] ?? [];
+          : [];
       const currentVersion = versions.find((version) => version.versionId === item.currentVersionId);
-      labels[item.reviewItemId] = currentVersion?.label || '-';
+      const summaryItem = projectSummary.data?.items.find(
+        (candidate) => candidate.reviewItemId === item.reviewItemId,
+      );
+      labels[item.reviewItemId] =
+        currentVersion?.label ||
+        summaryItem?.currentVersion.versionLabel ||
+        '-';
       fileNames[item.reviewItemId] =
-        currentVersion?.originalMedia.originalFilename || currentVersion?.fileName || '-';
+        currentVersion?.originalMedia.originalFilename ||
+        currentVersion?.fileName ||
+        summaryItem?.currentVersion.versionLabel ||
+        '-';
     }
     return { labels, fileNames };
-  }, [data.item.reviewItemId, data.versions, episodeItems, projectDetail.data]);
+  }, [data.item.reviewItemId, data.versions, episodeItems, projectSummary.data?.items]);
   const showToast = useCallback((message: string) => setToast(message), []);
   const showActionError = useCallback((caught: unknown) => showToast(actionError(caught)), [showToast]);
   const playback = useReviewWorkspacePlayback({
@@ -189,7 +217,7 @@ export function useReviewWorkspaceController(
     currentVersionId: data.currentVersion.versionId,
     currentItemVersionId: data.item.currentVersionId,
     currentIssues,
-    historicalIssues: data.historicalIssues,
+    historicalIssues: [],
     selectedIssueId,
     searchParams,
     setSearchParams,
@@ -294,7 +322,6 @@ export function useReviewWorkspaceController(
     currentIssues,
     selectedIssueId,
     selectedAnnotationSet,
-    compareIssues,
     episodeItems,
     episodeUnresolvedCounts,
     episodeCurrentVersionLabels: episodeCurrentVersionMetadata.labels,

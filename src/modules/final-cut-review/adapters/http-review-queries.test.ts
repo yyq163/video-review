@@ -149,6 +149,87 @@ describe('HttpReviewQueries issue revisions', () => {
     expect(issue.body).toBe(issueDto.current_revision.content);
   });
 
+  it('keeps a version issue list lightweight until one issue detail is requested', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname.endsWith('/versions/version_1/issues')) {
+        return new Response(JSON.stringify({
+          data: [issueDto],
+          meta: { total_count: 1, page: 1, page_size: 200 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (pathname.endsWith('/issues/issue_1')) {
+        return new Response(JSON.stringify({
+          data: issueDto,
+          meta: { request_id: 'issue-detail' },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (pathname.endsWith('/issues/issue_1/messages')) {
+        return new Response(JSON.stringify({
+          data: [],
+          meta: { total_count: 0, page: 1, page_size: 200 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (pathname.endsWith('/issues/issue_1/revisions')) {
+        return new Response(JSON.stringify({
+          data: [currentRevision],
+          meta: { total_count: 1, page: 1, page_size: 200 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected URL ${String(input)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const queries = new HttpReviewQueries(reviewTransport());
+
+    const summaries = await queries.issuesForVersion(
+      'project_1',
+      'item_1',
+      'version_1',
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(summaries[0]).toMatchObject({
+      issueId: 'issue_1',
+      replies: [],
+    });
+    expect(summaries[0]?.revisions).toHaveLength(1);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('/messages'),
+        expect.stringContaining('/revisions'),
+      ]),
+    );
+
+    const detail = await queries.issueWithMessages(
+      'project_1',
+      'item_1',
+      'version_1',
+      'issue_1',
+    );
+
+    expect(detail.issueId).toBe('issue_1');
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls.slice(1).map(([input]) => new URL(String(input)).pathname)).toEqual(
+      expect.arrayContaining([
+        '/api/v1/final-cut-review/projects/project_1/items/item_1/versions/version_1/issues/issue_1',
+        '/api/v1/final-cut-review/projects/project_1/items/item_1/versions/version_1/issues/issue_1/messages',
+        '/api/v1/final-cut-review/projects/project_1/items/item_1/versions/version_1/issues/issue_1/revisions',
+      ]),
+    );
+  });
+
   it('aggregates every page instead of silently truncating long HTTP lists', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));

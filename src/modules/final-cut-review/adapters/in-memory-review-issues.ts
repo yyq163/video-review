@@ -30,6 +30,26 @@ interface IssueMutationInput {
 export class InMemoryReviewIssues {
   constructor(private readonly store: InMemoryReviewStore) {}
 
+  private syncCurrentIssueWorkflow(
+    projectRefId: ProjectRefId,
+    reviewItemId: ReviewItemId,
+    versionId: VersionId,
+    timestamp: string,
+  ): void {
+    const item = this.store.getItem(projectRefId, reviewItemId);
+    const version = this.store.getVersion(projectRefId, reviewItemId, versionId);
+    const hasUnresolved = this.store
+      .getIssuesForVersion(projectRefId, reviewItemId, versionId)
+      .some((issue) => issue.status === 'unresolved');
+    const status = hasUnresolved ? 'changes_requested' : 'in_review';
+    this.store.items.set(item.reviewItemId, { ...item, status, updatedAt: timestamp });
+    this.store.versions.set(version.versionId, {
+      ...version,
+      status,
+      requestedChangesAt: hasUnresolved ? timestamp : null,
+    });
+  }
+
   readonly createIssue = async (
     input: IssueMutationInput & { severity: 'normal' | 'blocking' },
   ): Promise<ReviewIssue> => {
@@ -101,6 +121,7 @@ export class InMemoryReviewIssues {
       updatedAt: timestamp,
     };
     this.store.issues.set(issue.issueId, issue);
+    this.syncCurrentIssueWorkflow(input.projectRefId, input.reviewItemId, input.versionId, timestamp);
     this.store.emitChange();
     return cloneIssue(issue);
   };
@@ -213,13 +234,15 @@ export class InMemoryReviewIssues {
       '当前版本意见已只读',
       'INVALID_STATUS_TRANSITION',
     );
+    const timestamp = nowIso();
     const next: ReviewIssue = {
       ...issue,
       status: input.status,
       lockVersion: issue.lockVersion + 1,
-      updatedAt: nowIso(),
+      updatedAt: timestamp,
     };
     this.store.issues.set(next.issueId, next);
+    this.syncCurrentIssueWorkflow(input.projectRefId, input.reviewItemId, input.versionId, timestamp);
     this.store.emitChange();
     return cloneIssue(next);
   };
@@ -244,13 +267,15 @@ export class InMemoryReviewIssues {
       'INVALID_STATUS_TRANSITION',
     );
     invariant(!issue.deletedAt, '意见已删除', 'RESOURCE_STATE_CONFLICT');
+    const timestamp = nowIso();
     const next: ReviewIssue = {
       ...issue,
-      deletedAt: nowIso(),
+      deletedAt: timestamp,
       lockVersion: issue.lockVersion + 1,
-      updatedAt: nowIso(),
+      updatedAt: timestamp,
     };
     this.store.issues.set(next.issueId, next);
+    this.syncCurrentIssueWorkflow(input.projectRefId, input.reviewItemId, input.versionId, timestamp);
     this.store.emitChange();
     return cloneIssue(next);
   };

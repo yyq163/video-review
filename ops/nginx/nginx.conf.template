@@ -1,0 +1,82 @@
+worker_processes auto;
+error_log /dev/stderr warn;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 2048;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format bounded '$request_id $request_method $status $body_bytes_sent $request_time';
+    access_log /dev/stdout bounded;
+
+    server_tokens off;
+    sendfile on;
+    tcp_nopush on;
+    keepalive_timeout 30s;
+    client_max_body_size 6g;
+    map_hash_bucket_size 256;
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+
+    map $http_x_fcr_edge_handoff $edge_handoff_valid {
+        default 0;
+        "${FCR_EDGE_HANDOFF_SECRET}" 1;
+    }
+
+    upstream fcr_backend {
+        server backend:8000;
+        keepalive 32;
+    }
+
+    server {
+        listen 8080;
+        server_name _;
+
+        location = /nginx-health {
+            access_log off;
+            default_type text/plain;
+            return 200 "ok\n";
+        }
+
+        location = /internal/metrics {
+            return 404;
+        }
+
+        location ~ "^/_protected_media/(?<opaque_file_id>(?:file|media)_[0-9a-f]{32})$" {
+            internal;
+            alias /data/storage/files/$opaque_file_id;
+            disable_symlinks on from=/data/storage/files;
+            add_header Accept-Ranges bytes always;
+        }
+
+        location /_protected_media/ {
+            return 404;
+        }
+
+        location / {
+            if ($edge_handoff_valid = 0) {
+                return 403;
+            }
+
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+            proxy_set_header X-FCR-Edge-Handoff "";
+            proxy_set_header X-Write-Guard-Verified "true";
+            proxy_request_buffering off;
+            proxy_buffering off;
+            proxy_max_temp_file_size 0;
+            proxy_pass http://fcr_backend;
+        }
+    }
+}

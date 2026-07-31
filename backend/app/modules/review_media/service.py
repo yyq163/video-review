@@ -40,6 +40,7 @@ from backend.app.safe_files import (
     unlink_regular_file_if_identity,
 )
 from backend.app.settings import Settings
+from backend.app.telemetry_metrics import observe_upload_rejection
 from backend.app.upload_parts import new_upload_part_path, validated_upload_part_path
 
 
@@ -70,6 +71,7 @@ class MediaProbeResult:
     height: int
     fps_num: int
     fps_den: int
+    av_streams: tuple[tuple[str, str, int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,18 +179,49 @@ def parse_media_probe_output(output: bytes) -> MediaProbeResult:
         raise _media_probe_rejected()
     streams = payload.get("streams")
     format_data = payload.get("format")
-    if not isinstance(streams, list) or len(streams) != 1 or not isinstance(streams[0], dict) or not isinstance(format_data, dict):
+    if not isinstance(streams, list) or not isinstance(format_data, dict):
         raise _media_probe_rejected()
-    stream = streams[0]
-    if stream.get("codec_type") != "video":
+    if not all(isinstance(stream, dict) for stream in streams):
         raise _media_probe_rejected()
+    video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+    if len(video_streams) != 1:
+        raise _media_probe_rejected()
+    stream = video_streams[0]
     frame_rate = _positive_frame_rate(stream.get("avg_frame_rate"), stream.get("r_frame_rate"))
+    av_streams: list[tuple[str, str, int, int]] = []
+    for candidate in streams:
+        codec_type = candidate.get("codec_type")
+        if codec_type not in {"video", "audio"}:
+            continue
+        codec_name = candidate.get("codec_name")
+        if not isinstance(codec_name, str) or not codec_name or len(codec_name) > 64:
+            codec_name = "unknown"
+        channels = candidate.get("channels", 0)
+        sample_rate = candidate.get("sample_rate", 0)
+        try:
+            normalized_channels = int(channels or 0)
+            normalized_sample_rate = int(sample_rate or 0)
+        except (TypeError, ValueError):
+            raise _media_probe_rejected() from None
+        if normalized_channels < 0 or normalized_channels > 64:
+            raise _media_probe_rejected()
+        if normalized_sample_rate < 0 or normalized_sample_rate > 768_000:
+            raise _media_probe_rejected()
+        av_streams.append(
+            (
+                codec_type,
+                codec_name,
+                normalized_channels if codec_type == "audio" else 0,
+                normalized_sample_rate if codec_type == "audio" else 0,
+            )
+        )
     return MediaProbeResult(
         duration_ms=_positive_duration_ms(format_data.get("duration"), stream.get("duration")),
         width=_positive_int(stream.get("width")),
         height=_positive_int(stream.get("height")),
         fps_num=frame_rate.numerator,
         fps_den=frame_rate.denominator,
+        av_streams=tuple(av_streams),
     )
 
 
@@ -231,10 +264,8 @@ def probe_media(descriptor: int, settings: Settings) -> MediaProbeResult:
         "error",
         "-protocol_whitelist",
         "file",
-        "-select_streams",
-        "v",
         "-show_entries",
-        "format=duration:stream=codec_type,width,height,duration,avg_frame_rate,r_frame_rate",
+        "format=duration:stream=codec_type,codec_name,width,height,duration,avg_frame_rate,r_frame_rate,channels,sample_rate",
         "-of",
         "json",
         probe_path,
@@ -361,6 +392,7 @@ class LocalMediaService:
         if not any(suffix in rule["extensions"] and payload["mime_type"] in rule["mimes"] for rule in MEDIA_SIGNATURES.values()):
             raise ReviewError("FILE_TYPE_NOT_ALLOWED", "文件扩展名与 MIME 不匹配")
         if payload["file_size"] > self.settings.max_upload_bytes:
+            observe_upload_rejection("file_too_large")
             raise ReviewError("FILE_TOO_LARGE", "文件过大")
         reservation_bytes = payload["file_size"] * UPLOAD_PEAK_RESERVATION_MULTIPLIER
         self._reserve_upload_quota(reservation_bytes)
@@ -417,16 +449,21 @@ class LocalMediaService:
             )
         ).one()
         if int(global_count) >= self.settings.max_active_upload_sessions_global:
+            observe_upload_rejection("session_global")
             raise ReviewError("RESOURCE_STATE_CONFLICT", "全局上传会话配额已满")
         if int(principal_count) >= self.settings.max_active_upload_sessions_per_principal:
+            observe_upload_rejection("session_principal")
             raise ReviewError("RESOURCE_STATE_CONFLICT", "当前主体上传会话配额已满")
         if int(global_bytes) + reservation_bytes > self.settings.max_reserved_upload_bytes_global:
+            observe_upload_rejection("reservation_global")
             raise ReviewError("RESOURCE_STATE_CONFLICT", "全局上传预留空间配额不足")
         if int(principal_bytes) + reservation_bytes > self.settings.max_reserved_upload_bytes_per_principal:
+            observe_upload_rejection("reservation_principal")
             raise ReviewError("RESOURCE_STATE_CONFLICT", "当前主体上传预留空间配额不足")
         try:
             free_bytes = shutil.disk_usage(self.storage_root).free
         except OSError as exc:
+            observe_upload_rejection("storage_unavailable")
             raise ReviewError("STORAGE_UNAVAILABLE", "无法检查上传存储可用空间") from exc
         package_reserved_bytes = (
             pending_package_storage_reservation_bytes(self.session)
@@ -440,6 +477,7 @@ class LocalMediaService:
             - reservation_bytes
         )
         if conservatively_available < self.settings.upload_storage_low_watermark_bytes:
+            observe_upload_rejection("storage_low_watermark")
             raise ReviewError("STORAGE_UNAVAILABLE", "上传存储已达到低水位保护线")
 
     def _max_part_write_bytes(self, upload: UploadSessionModel, part_no: int) -> int:

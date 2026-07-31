@@ -186,8 +186,8 @@ AddReviewMessage
 ResolveReviewIssue
 ReopenReviewIssue
 SoftDeleteReviewIssue
-RequestChanges
 FinalizeVersion
+RevokeFinalization
 PrepareFinalizedPackage
 ```
 
@@ -202,8 +202,8 @@ Required idempotency keys:
 - Complete upload.
 - Upload version.
 - Create issue.
-- Request changes.
 - Finalize.
+- Revoke finalization.
 - Create package snapshot.
 
 Same key plus same body returns the original result. Same key plus different body returns `IDEMPOTENCY_CONFLICT`. PostgreSQL reservation uses one `INSERT ... ON CONFLICT DO NOTHING RETURNING` race: a losing identical request waits for the winning transaction, re-reads the committed record in a new statement snapshot, validates principal, command type, and request hash, then replays the completed response rather than reporting a false conflict.
@@ -362,7 +362,6 @@ review.issue.updated
 review.issue.message_added
 review.issue.resolved
 review.issue.reopened
-review.changes_requested
 review.version.finalized
 review.finalized_original.download_requested
 review.package.requested

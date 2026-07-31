@@ -6,6 +6,16 @@ services:
       context: .
       dockerfile: ops/postgres/Dockerfile
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - compute_query_id=on
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - pg_stat_statements.track_utility=off
     environment:
       POSTGRES_DB: ${POSTGRES_ADMIN_DB:-postgres}
       POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
@@ -34,6 +44,8 @@ services:
       - /run/postgresql
     security_opt:
       - no-new-privileges:true
+    networks:
+      - app-internal
 
   migrate:
     image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
@@ -85,6 +97,8 @@ services:
       - DAC_READ_SEARCH
       - SETGID
       - SETUID
+    networks:
+      - app-internal
 
   backend:
     image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
@@ -95,7 +109,7 @@ services:
     command:
       - sh
       - -c
-      - python -c 'from backend.app.main import database_readiness; database_readiness()' && exec uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1
+      - python -c 'from backend.app.main import database_readiness; database_readiness()' && exec uvicorn backend.app.observability:app --host 0.0.0.0 --port 8000 --workers 1
     deploy:
       replicas: 1
     environment:
@@ -140,8 +154,10 @@ services:
       WRITE_GUARD_MODE: ${WRITE_GUARD_MODE:-reverse_proxy}
       WRITE_GUARD_CODE_FILE: /run/secrets/write_guard_code
       REVERSE_PROXY_WRITE_HEADER: ${REVERSE_PROXY_WRITE_HEADER:-x-write-guard-verified}
-      REVERSE_PROXY_TRUSTED_HOSTS: ${REVERSE_PROXY_TRUSTED_HOSTS:?REVERSE_PROXY_TRUSTED_HOSTS is required for reverse_proxy write guard mode}
+      REVERSE_PROXY_TRUSTED_HOSTS: ${NGINX_INTERNAL_IP:-172.29.0.10}
       BROWSER_ALLOWED_ORIGINS: ${BROWSER_ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5175,http://localhost:5175}
+      PROTECTED_MEDIA_DIRECT_STREAM_ENABLED: "0"
+      MANAGEMENT_NETWORK_CIDR: ${MANAGEMENT_NETWORK_SUBNET:-172.30.0.0/24}
       WRITE_GUARD_SESSION_SECRET_FILE: /run/secrets/write_guard_session_secret
       LOG_LEVEL: INFO
     secrets:
@@ -153,8 +169,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    ports:
-      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD", "gosu", "app", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/runtimez', timeout=3).read()"]
       interval: 10s
@@ -176,6 +192,11 @@ services:
     volumes:
       - fj-final-cut-review-data:/data
       - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+    networks:
+      app-internal:
+        ipv4_address: ${BACKEND_INTERNAL_IP:-172.29.0.11}
+      management:
+        ipv4_address: ${BACKEND_MANAGEMENT_IP:-172.30.0.11}
 
   maintenance:
     image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
@@ -244,6 +265,8 @@ services:
     volumes:
       - fj-final-cut-review-data:/data
       - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+    networks:
+      - app-internal
 
   package-worker:
     image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
@@ -278,8 +301,11 @@ services:
       PACKAGE_WORKER_HEALTH_MAX_AGE_SECONDS: ${PACKAGE_WORKER_HEALTH_MAX_AGE_SECONDS:-90}
       DATA_OWNERSHIP_LOCK_TIMEOUT_SECONDS: ${DATA_OWNERSHIP_LOCK_TIMEOUT_SECONDS:-120}
       DATA_OWNERSHIP_LOCK_STALE_SECONDS: ${DATA_OWNERSHIP_LOCK_STALE_SECONDS:-30}
+      WORKER_METRICS_BIND_HOST: ${PACKAGE_WORKER_MANAGEMENT_IP:-172.30.0.12}
     secrets:
       - postgres_app_password
+    expose:
+      - "9101"
     depends_on:
       backend:
         condition: service_healthy
@@ -314,6 +340,190 @@ services:
     volumes:
       - fj-final-cut-review-data:/data
       - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+    networks:
+      app-internal: {}
+      management:
+        ipv4_address: ${PACKAGE_WORKER_MANAGEMENT_IP:-172.30.0.12}
+
+  media-worker:
+    image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - backend.app.media_derivatives
+      - run
+      - --interval-seconds
+      - ${MEDIA_WORKER_INTERVAL_SECONDS:-2}
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_APP_DB:-final_cut_review}
+      DATABASE_USER: ${POSTGRES_APP_USER:-final_cut_review_app}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_app_password
+      DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
+      STORAGE_ROOT: /data/storage
+      PACKAGE_ROOT: /data/packages
+      MEDIA_PROBE_COMMAND: ffprobe
+      MEDIA_PROBE_TIMEOUT_SECONDS: ${MEDIA_PROBE_TIMEOUT_SECONDS:-10}
+      MEDIA_TRANSFORM_COMMAND: ffmpeg
+      MEDIA_TRANSFORM_TIMEOUT_SECONDS: ${MEDIA_TRANSFORM_TIMEOUT_SECONDS:-1800}
+      MEDIA_TRANSFORM_OUTPUT_LIMIT_BYTES: ${MEDIA_TRANSFORM_OUTPUT_LIMIT_BYTES:-262144}
+      MEDIA_WORKER_MAX_ATTEMPTS: ${MEDIA_WORKER_MAX_ATTEMPTS:-3}
+      MEDIA_WORKER_RETRY_DELAY_SECONDS: ${MEDIA_WORKER_RETRY_DELAY_SECONDS:-30}
+      MEDIA_WORKER_LEASE_SECONDS: ${MEDIA_WORKER_LEASE_SECONDS:-3600}
+      MEDIA_WORKER_CONCURRENCY: ${MEDIA_WORKER_CONCURRENCY:-1}
+      MEDIA_THUMBNAIL_WIDTH: ${MEDIA_THUMBNAIL_WIDTH:-320}
+      MEDIA_WORKER_HEALTH_MAX_AGE_SECONDS: ${MEDIA_WORKER_HEALTH_MAX_AGE_SECONDS:-90}
+      WORKER_METRICS_BIND_HOST: ${MEDIA_WORKER_MANAGEMENT_IP:-172.30.0.13}
+    secrets:
+      - postgres_app_password
+    expose:
+      - "9102"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - gosu
+        - app
+        - python
+        - -c
+        - >-
+          import os,time; from pathlib import Path;
+          p=Path('/tmp/fj-media-worker-heartbeat'); s=Path('/tmp/fj-media-worker-status');
+          allowed={'ok','running','degraded'}; limit=int(os.environ['MEDIA_WORKER_HEALTH_MAX_AGE_SECONDS']);
+          raise SystemExit(0 if p.is_file() and s.is_file() and s.read_text().strip() in allowed and time.time()-p.stat().st_mtime <= limit else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETGID
+      - SETUID
+    volumes:
+      - fj-final-cut-review-data:/data
+      - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+    networks:
+      app-internal: {}
+      management:
+        ipv4_address: ${MEDIA_WORKER_MANAGEMENT_IP:-172.30.0.13}
+
+  nginx:
+    image: nginx:1.31.3-alpine3.24@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
+    restart: unless-stopped
+    user: "10001:10001"
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        edge_secret="$$(cat /run/secrets/edge_handoff_secret)"
+        case "$${edge_secret}" in
+          ""|*[!A-Za-z0-9_-]*) echo "invalid edge handoff secret" >&2; exit 1 ;;
+        esac
+        test "$${#edge_secret}" -ge 32
+        test "$${#edge_secret}" -le 128
+        export FCR_EDGE_HANDOFF_SECRET="$${edge_secret}"
+        envsubst '$${FCR_EDGE_HANDOFF_SECRET}' < /etc/nginx/templates/nginx.conf.template > /tmp/nginx.conf
+        unset edge_secret FCR_EDGE_HANDOFF_SECRET
+        exec nginx -c /tmp/nginx.conf -g 'daemon off;'
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    secrets:
+      - edge_handoff_secret
+    volumes:
+      - ./ops/nginx/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+      - fj-final-cut-review-data:/data:ro
+    networks:
+      app-internal:
+        ipv4_address: ${NGINX_INTERNAL_IP:-172.29.0.10}
+
+  prometheus:
+    image: prom/prometheus:v3.13.0@sha256:c6b27ea434f8389bfe233fbc7be381cf50587c286e871bc842008f5a1b1908a7
+    profiles:
+      - observability
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-15d}
+      - --web.listen-address=0.0.0.0:9090
+    expose:
+      - "9090"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - fj-final-cut-review-prometheus:/prometheus
+    networks:
+      management:
+        ipv4_address: ${PROMETHEUS_MANAGEMENT_IP:-172.30.0.20}
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.57.0@sha256:e75bdb03b74b0b6995f208f166fead2e6e555dde73e44200113bb26f41b1981d
+    profiles:
+      - observability-host-approved
+    restart: unless-stopped
+    privileged: false
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --disable_metrics=advtcp,cpu_topology,hugetlb,memory_numa,percpu,process,referenced_memory,resctrl,sched,tcp,udp
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    devices:
+      - ${CADVISOR_KMSG_DEVICE:-/dev/kmsg}:/dev/kmsg:r
+    networks:
+      management:
+        ipv4_address: ${CADVISOR_MANAGEMENT_IP:-172.30.0.21}
 
 volumes:
   fj-final-cut-review-postgres:
@@ -322,6 +532,20 @@ volumes:
     name: ${DATA_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-data}
   fj-final-cut-review-runtime-state:
     name: ${RUNTIME_STATE_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-runtime-state}
+  fj-final-cut-review-prometheus:
+    name: ${PROMETHEUS_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-prometheus}
+
+networks:
+  app-internal:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${APP_INTERNAL_SUBNET:-172.29.0.0/24}
+  management:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${MANAGEMENT_NETWORK_SUBNET:-172.30.0.0/24}
 
 secrets:
   postgres_admin_password:
@@ -334,3 +558,5 @@ secrets:
     file: ${COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE:?COMPOSE_WRITE_GUARD_SESSION_SECRET_FILE is required}
   write_guard_code:
     file: ${COMPOSE_WRITE_GUARD_CODE_FILE:?COMPOSE_WRITE_GUARD_CODE_FILE is required}
+  edge_handoff_secret:
+    file: ${COMPOSE_EDGE_HANDOFF_SECRET_FILE:?COMPOSE_EDGE_HANDOFF_SECRET_FILE is required}

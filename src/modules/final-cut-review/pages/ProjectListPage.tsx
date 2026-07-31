@@ -1,24 +1,21 @@
 import { useMemo, useState } from 'react';
-import { useQueries } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import type { EntryMode, ProjectDetail } from '../contracts/types';
+import type { EntryMode, Project } from '../contracts/types';
 import { entryLinksFor } from '../entry/entry-links';
-import { reviewKeys, useProjects, useReviewMutations } from '../entry/use-review-queries';
-import { useReviewApi } from '../entry/runtime';
+import { useProjects, useReviewMutations } from '../entry/use-review-queries';
 import { AppShell, CapabilityGate, IconText, actionError } from '../components/shared';
 import type { ProjectFormValues } from '../components/ProjectForms';
 import { ProjectListContent } from './project-list-content';
 import type { CompletionFilter, LifecycleFilter, UpdatedSort } from './project-list-controls';
 
-function projectCompletion(detail: ProjectDetail | undefined): Exclude<CompletionFilter, 'all'> | 'unknown' {
-  if (!detail) return 'unknown';
-  if (detail.items.length === 0) return 'empty';
-  return detail.items.every((item) => item.status === 'finalized') ? 'completed' : 'unfinished';
+function projectCompletion(project: Project): Exclude<CompletionFilter, 'all'> {
+  return project.completionStatus === 'in_progress'
+    ? 'unfinished'
+    : project.completionStatus;
 }
 
 export function ProjectListPage(props: { entryMode: EntryMode }) {
   const navigate = useNavigate();
-  const api = useReviewApi(props.entryMode);
   const projects = useProjects(props.entryMode);
   const mutations = useReviewMutations(props.entryMode);
   const [creating, setCreating] = useState(false);
@@ -30,22 +27,6 @@ export function ProjectListPage(props: { entryMode: EntryMode }) {
   const [updatedSort, setUpdatedSort] = useState<UpdatedSort>('updated-desc');
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
-  const projectDetails = useQueries({
-    queries: (projects.data ?? []).map((project) => ({
-      queryKey: reviewKeys.project(project.projectRefId),
-      queryFn: ({ signal }: { signal?: AbortSignal }) => api.getProjectDetail(project.projectRefId, { signal }),
-      enabled: Boolean(projects.data),
-      retry: false,
-    })),
-  });
-  const detailsByProject = useMemo(() => {
-    const details = new Map<string, ProjectDetail>();
-    for (const detailQuery of projectDetails) {
-      if (detailQuery.data) details.set(detailQuery.data.project.projectRefId, detailQuery.data);
-    }
-    return details;
-  }, [projectDetails]);
-
   const submitProject = async (values: ProjectFormValues) => {
     setError(null);
     setProjectActionError(null);
@@ -103,7 +84,7 @@ export function ProjectListPage(props: { entryMode: EntryMode }) {
       .filter((project) => lifecycleFilter === 'all' || project.status === lifecycleFilter)
       .filter((project) => {
         if (completionFilter === 'all') return true;
-        return projectCompletion(detailsByProject.get(project.projectRefId)) === completionFilter;
+        return projectCompletion(project) === completionFilter;
       })
       .sort((left, right) => {
         const leftTime = Date.parse(left.updatedAt);
@@ -111,7 +92,7 @@ export function ProjectListPage(props: { entryMode: EntryMode }) {
         const diff = (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
         return updatedSort === 'updated-asc' ? diff : -diff;
       });
-  }, [completionFilter, detailsByProject, lifecycleFilter, projects.data, query, updatedSort]);
+  }, [completionFilter, lifecycleFilter, projects.data, query, updatedSort]);
   const totalPages = Math.max(1, Math.ceil(filteredProjects.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const visibleProjects = filteredProjects.slice((safePage - 1) * pageSize, safePage * pageSize);

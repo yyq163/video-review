@@ -12,6 +12,7 @@ import pytest
 from alembic import command as alembic_command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 # Test collection imports backend modules that create a SQLAlchemy engine at
 # module import time. Keep that import explicit and test-scoped instead of
@@ -66,6 +67,7 @@ def _fresh_client(
     monkeypatch.setenv("UPLOAD_STORAGE_LOW_WATERMARK_BYTES", "0")
     monkeypatch.setenv("MEDIA_PROBE_COMMAND", str(fake_media_probe))
     monkeypatch.setenv("MEDIA_PROBE_TIMEOUT_SECONDS", "5")
+    monkeypatch.setenv("PROTECTED_MEDIA_DIRECT_STREAM_ENABLED", "true")
     monkeypatch.setenv("WRITE_GUARD_MODE", "none")
     monkeypatch.setenv("WRITE_GUARD_SESSION_SECRET", TEST_SIGNING_SECRET)
     monkeypatch.setenv("BROWSER_ALLOWED_ORIGINS", TEST_BROWSER_ORIGIN)
@@ -187,7 +189,27 @@ def create_item(client: TestClient, project_ref_id: str, file_id: str, item_code
     body = command("CreateReviewItem", {"project_ref_id": project_ref_id, "item_code": item_code, "title": f"Cut {item_code}", "original_file_id": file_id})
     response = client.post(f"/api/v1/final-cut-review/edit/projects/{project_ref_id}/items", json=body, headers={"Idempotency-Key": body["command_id"]})
     assert response.status_code == 201, response.text
-    return api_data(response)
+    item = api_data(response)
+    # Most API contract tests exercise review behavior with the legacy tiny
+    # pseudo-media fixture. Mark that fixture as a ready legacy playback asset;
+    # dedicated media-worker tests cover the real asynchronous derivative path.
+    db_mod: Any = importlib.import_module("backend.app.modules.final_cut_review.infra.database")
+    models_mod: Any = importlib.import_module("backend.app.modules.final_cut_review.infra.sqlalchemy_models")
+    with db_mod.SessionLocal() as session:
+        version = session.get(models_mod.ReviewVersionModel, item["current_version_id"])
+        assert version is not None
+        version.playback_asset_id = version.original_file_id
+        playback_task = session.scalar(
+            select(models_mod.MediaDerivativeTaskModel).where(
+                models_mod.MediaDerivativeTaskModel.version_id == version.id,
+                models_mod.MediaDerivativeTaskModel.kind == "playback_faststart",
+            )
+        )
+        assert playback_task is not None
+        playback_task.status = "ready"
+        playback_task.output_file_id = version.original_file_id
+        session.commit()
+    return item
 
 
 def create_project_item(client: TestClient, code: str = "P001") -> tuple[dict[str, Any], dict[str, Any]]:

@@ -4,7 +4,9 @@ import type { MockReviewContext } from './mock-review-context';
 type ProjectApi = Pick<
   ReviewApiPort,
   | 'listProjects'
-  | 'getProjectDetail'
+  | 'getProjectSummary'
+  | 'getVersionIssues'
+  | 'getIssueDetail'
   | 'getWorkspace'
   | 'createProject'
   | 'updateProject'
@@ -22,10 +24,22 @@ export class MockReviewProjects implements ProjectApi {
     return this.context.repository.listProjects();
   };
 
-  readonly getProjectDetail: ReviewApiPort['getProjectDetail'] = async (projectRefId, options) => {
+  readonly getProjectSummary: ReviewApiPort['getProjectSummary'] = async (projectRefId, options) => {
     await this.context.ready();
     this.context.throwIfAborted(options?.signal);
-    return this.context.repository.getProjectDetail(projectRefId);
+    return this.context.repository.getProjectSummary(projectRefId);
+  };
+
+  readonly getVersionIssues: ReviewApiPort['getVersionIssues'] = async (input, options) => {
+    await this.context.ready();
+    this.context.throwIfAborted(options?.signal);
+    return this.context.repository.getVersionIssues(input);
+  };
+
+  readonly getIssueDetail: ReviewApiPort['getIssueDetail'] = async (input, options) => {
+    await this.context.ready();
+    this.context.throwIfAborted(options?.signal);
+    return this.context.repository.getIssueDetail(input);
   };
 
   readonly getWorkspace: ReviewApiPort['getWorkspace'] = async (input, options) => {

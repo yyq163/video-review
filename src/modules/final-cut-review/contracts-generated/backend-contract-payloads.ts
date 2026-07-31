@@ -8,6 +8,12 @@ export interface FinalizeVersionPayload {
   confirmed: true;
 }
 
+export interface RevokeFinalizationPayload {
+  project_ref_id: string;
+  review_item_id: string;
+  confirmed: true;
+}
+
 export interface StartReviewPayload {
   project_ref_id: string;
   review_item_id: string;
@@ -59,13 +65,6 @@ export interface SoftDeleteReviewIssuePayload {
   review_item_id: string;
   version_id: string;
   issue_id: string;
-}
-
-export interface RequestChangesPayload {
-  project_ref_id: string;
-  review_item_id: string;
-  version_id: string;
-  summary: string;
 }
 
 export interface PrepareFinalizedPackagePayload {
@@ -165,9 +164,9 @@ export type ReviewIssueReopenedPayload = Record<string, never>;
 
 export type ReviewIssueDeletedPayload = Record<string, never>;
 
-export type ReviewChangesRequestedPayload = Record<string, never>;
-
 export type ReviewVersionFinalizedPayload = Record<string, never>;
+
+export type ReviewFinalizationRevokedPayload = Record<string, never>;
 
 export type ReviewFinalizedOriginalDownloadRequestedPayload = Record<string, never>;
 
@@ -179,7 +178,7 @@ export interface ReviewPackageFailedPayload {
   error_code: string;
 }
 
-export type DomainEventPayload = ReviewProjectCreatedPayload | ReviewProjectUpdatedPayload | ReviewProjectArchivedPayload | ReviewProjectRestoredPayload | ReviewProjectDeletedPayload | ReviewItemCreatedPayload | ReviewItemUpdatedPayload | ReviewItemDeletedPayload | ReviewVersionUploadedPayload | ReviewSessionStartedPayload | ReviewIssueCreatedPayload | ReviewIssueUpdatedPayload | ReviewIssueMessageAddedPayload | ReviewIssueResolvedPayload | ReviewIssueReopenedPayload | ReviewIssueDeletedPayload | ReviewChangesRequestedPayload | ReviewVersionFinalizedPayload | ReviewFinalizedOriginalDownloadRequestedPayload | ReviewPackageRequestedPayload | ReviewPackageReadyPayload | ReviewPackageFailedPayload;
+export type DomainEventPayload = ReviewProjectCreatedPayload | ReviewProjectUpdatedPayload | ReviewProjectArchivedPayload | ReviewProjectRestoredPayload | ReviewProjectDeletedPayload | ReviewItemCreatedPayload | ReviewItemUpdatedPayload | ReviewItemDeletedPayload | ReviewVersionUploadedPayload | ReviewSessionStartedPayload | ReviewIssueCreatedPayload | ReviewIssueUpdatedPayload | ReviewIssueMessageAddedPayload | ReviewIssueResolvedPayload | ReviewIssueReopenedPayload | ReviewIssueDeletedPayload | ReviewVersionFinalizedPayload | ReviewFinalizationRevokedPayload | ReviewFinalizedOriginalDownloadRequestedPayload | ReviewPackageRequestedPayload | ReviewPackageReadyPayload | ReviewPackageFailedPayload;
 
 export interface DomainEventEnvelope {
   event_id: string;

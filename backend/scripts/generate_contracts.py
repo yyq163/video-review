@@ -37,6 +37,9 @@ OPERATION_SUCCESS_RESPONSES: dict[str, str] = {
     "review_prepare_package": "202",
 }
 BINARY_MEDIA_RESPONSES: dict[str, dict[str, set[str]]] = {
+    "get_review_version_thumbnail": {
+        "200": {"image/jpeg"},
+    },
     "stream_review_version": {
         "200": {"video/mp4", "video/quicktime", "application/octet-stream"},
         "206": {"video/mp4", "video/quicktime", "application/octet-stream"},
@@ -71,8 +74,8 @@ EVENT_PAYLOAD_SCHEMA_NAMES: dict[str, str] = {
     "review.issue.resolved": "ReviewIssueResolvedEventPayload",
     "review.issue.reopened": "ReviewIssueReopenedEventPayload",
     "review.issue.deleted": "ReviewIssueDeletedEventPayload",
-    "review.changes_requested": "ReviewChangesRequestedEventPayload",
     "review.version.finalized": "ReviewVersionFinalizedEventPayload",
+    "review.finalization.revoked": "ReviewFinalizationRevokedEventPayload",
     "review.finalized_original.download_requested": "ReviewFinalizedOriginalDownloadRequestedEventPayload",
     "review.package.requested": "ReviewPackageRequestedEventPayload",
     "review.package.ready": "ReviewPackageReadyEventPayload",
@@ -700,8 +703,64 @@ class FinalizationDTO(ContractModel):
     version_id: str
     version_no: int
     original_media: OriginalMediaSnapshotDTO
-    status: Literal["active"]
+    status: Literal["active", "revoked"]
     finalized_at: str
+    revoked_at: str | None = None
+
+
+class FinalizationRevocationDTO(ContractModel):
+    finalization: FinalizationDTO
+    review_item: ReviewItemDTO
+    cleanup_status: Literal["pending", "failed", "complete"]
+    invalidated_package_ids: list[str]
+
+
+class ProjectSummaryCurrentVersionDTO(ContractModel):
+    id: str
+    version_no: int
+    version_label: str
+    duration_ms: int
+    file_size: int
+    playback_status: Literal["pending", "ready", "failed"]
+    playback_url: str | None = None
+    thumbnail_status: Literal["pending", "ready", "failed"]
+    thumbnail_url: str | None = None
+
+
+class ProjectSummaryFinalizationDTO(ContractModel):
+    id: str
+    version_id: str
+    version_no: int
+    status: Literal["active", "revoked"]
+    finalized_at: str
+    revoked_at: str | None = None
+
+
+class ProjectSummaryBulkDeleteDTO(ContractModel):
+    eligible: bool
+    locked: bool
+    reason: str | None = None
+
+
+class ProjectSummaryItemDTO(ContractModel):
+    id: str
+    project_ref_id: str
+    item_code: str
+    episode_no: int | None = None
+    title: str
+    workflow_state: Literal["pending_review", "in_review", "changes_requested", "finalized"]
+    lock_version: int
+    current_version_id: str
+    current_version: ProjectSummaryCurrentVersionDTO
+    unresolved_current_version_count: int
+    finalization: ProjectSummaryFinalizationDTO | None = None
+    revocation_cleanup_status: Literal["none", "pending", "failed", "complete"]
+    bulk_delete: ProjectSummaryBulkDeleteDTO
+
+
+class ProjectSummaryDTO(ContractModel):
+    project: ProjectDTO
+    items: list[ProjectSummaryItemDTO]
 
 
 class PackageSnapshotItemDTO(ContractModel):
@@ -717,7 +776,7 @@ class PackageSnapshotItemDTO(ContractModel):
 class PackageSnapshotDTO(ContractModel):
     id: str
     project_ref_id: str
-    status: Literal["preparing", "ready", "failed", "expired"]
+    status: Literal["preparing", "ready", "failed", "expired", "invalidated"]
     package_filename: str
     expires_at: str
     file_count: int
@@ -1069,8 +1128,16 @@ export interface FinalizationDTO {{
   version_id: string;
   version_no: number;
   original_media: OriginalMediaSnapshotDTO;
-  status: "active";
+  status: "active" | "revoked";
   finalized_at: string;
+  revoked_at?: string | null;
+}}
+
+export interface FinalizationRevocationDTO {{
+  finalization: FinalizationDTO;
+  review_item: ReviewItemDTO;
+  cleanup_status: "pending" | "failed" | "complete";
+  invalidated_package_ids: string[];
 }}
 
 export interface PackageSnapshotItem {{
@@ -1086,7 +1153,7 @@ export interface PackageSnapshotItem {{
 export interface PackageSnapshotDTO {{
   id: string;
   project_ref_id: string;
-  status: "preparing" | "ready" | "failed" | "expired";
+  status: "preparing" | "ready" | "failed" | "expired" | "invalidated";
   package_filename: string;
   expires_at: string;
   file_count: number;

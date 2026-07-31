@@ -160,13 +160,18 @@ review.issue.reopen
 review.issue.delete
 review.finalization.read
 review.finalization.create
+review.finalization.revoke
 review.download.finalized_original
 review.package.create
 review.package.read
 review.package.download
 ```
 
-`review.session.start` and `review.session.request_changes` remain recognized only as legacy wire capabilities/command shapes. They are not granted to either current entry profile. `StartReview` and `RequestChanges` routes may remain present for rolling compatibility, but current principals receive `403 ENTRY_CAPABILITY_DENIED` and no current UI exposes them.
+`review.session.start` remains recognized only as a legacy wire capability/command
+shape. It is not granted to either current entry profile. The `RequestChanges`
+capability, command, route, handler, and generated contract were removed: the
+current version's unresolved, non-deleted issue count now drives the
+`in_review`/`changes_requested` transition transactionally.
 
 No general-purpose physical delete capability exists in V1. `review.item.delete` is the sole, edit-entry-only physical-delete exception for a duplicate item before review starts; it deletes the item row, its single unreviewed version, upload sessions, any file object not referenced by another version/finalization, and the referenced storage-root blob after the database transaction commits. Audit events keep aggregate ids but must not retain foreign keys to deleted rows. `review.project.delete` is a review-entry soft delete command: it sets `deleted_at`, hides the project from normal list/detail/workspace/media/package query surfaces, keeps descendants and media for audit, and rejects all later write commands. `review.issue.delete` is a review-entry issue soft delete.
 
@@ -203,12 +208,13 @@ AddReviewMessage
 ResolveReviewIssue
 ReopenReviewIssue
 SoftDeleteReviewIssue
-RequestChanges
 FinalizeVersion
+RevokeFinalization
 PrepareFinalizedPackage
 ```
 
-`StartReview` and `RequestChanges` in the command registry are compatibility-only. The first `CreateReviewIssue` performs the start transition in the same transaction.
+`StartReview` in the command registry is compatibility-only. The first
+`CreateReviewIssue` performs the start transition in the same transaction.
 
 `SoftDeleteProject.payload` 必须同时包含 `project_ref_id` 与常量 `confirmed: true`。浏览器二次确认只负责取得
 用户意图，不能代替服务端合同门禁；缺失或 `false` 必须在命令执行前返回 `422 VALIDATION_ERROR`。
@@ -222,6 +228,8 @@ Representative payload requirements:
 - The HTTP frontend applies the same mounted-page operation identity to V2/V3 append: one `File` + project + item + version metadata tuple keeps its completed upload and one stable `UploadReviewVersion` command ID. A lost command response is retried with that command ID and cannot allocate another version; changing any tuple field starts a distinct operation.
 - `CreateReviewIssue`: `projectRefId`, `reviewItemId`, `versionId`, `content`, `timestampMs`, `frameNumber`, optional annotation.
 - `FinalizeVersion`: `projectRefId`, `reviewItemId`, `versionId`, `confirmed: true`.
+- `RevokeFinalization`: `projectRefId`, `reviewItemId`, `confirmed: true`. The
+  route also requires `If-Match` and a principal-bound idempotency key.
 
 ## Query Contracts
 
@@ -298,7 +306,12 @@ POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-origin
 GET   /api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}/download
 ```
 
-Legacy `/start` and `/request-changes` route shapes remain registered only for rolling compatibility and capability-deny current entry profiles. Review-side resolve is likewise not a current capability; only the edit resolve facade and review reopen facade are authorized.
+Legacy `/start` remains registered only for rolling compatibility and is
+capability-denied to current entry profiles. `/request-changes` is not
+registered: current-version issue creation, resolution, deletion, and reopening
+drive the `in_review`/`changes_requested` state automatically. Review-side
+resolve is likewise not a current capability; only the edit resolve facade and
+review reopen facade are authorized.
 
 The frontend first prepares a package and renders `preparing`, `ready`,
 `downloading`, or `failed` state. It must not download automatically when the
@@ -535,7 +548,6 @@ review.issue.updated
 review.issue.message_added
 review.issue.resolved
 review.issue.reopened
-review.changes_requested
 review.version.finalized
 review.finalized_original.download_requested
 review.package.requested

@@ -128,6 +128,19 @@ def test_probe_result_without_exactly_one_video_stream_is_rejected() -> None:
     assert exc_info.value.code == "FILE_TYPE_NOT_ALLOWED"
 
 
+def test_probe_result_records_complete_audio_video_stream_inventory() -> None:
+    result = parse_media_probe_output(
+        b'{"streams":['
+        b'{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"25/1"},'
+        b'{"codec_type":"audio","codec_name":"aac","channels":2,"sample_rate":"48000"}'
+        b'],"format":{"duration":"10"}}'
+    )
+    assert result.av_streams == (
+        ("video", "h264", 0, 0),
+        ("audio", "aac", 2, 48000),
+    )
+
+
 def test_unknown_brand_with_no_video_track_remains_fail_closed(
     client: TestClient,
     tmp_path: Path,

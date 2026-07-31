@@ -15,7 +15,7 @@ export function ReviewWorkspaceIssuePanel({
       version={data.currentVersion}
       versions={data.versions}
       issues={controller.currentIssues}
-      historicalIssues={data.historicalIssues}
+      historicalIssues={[]}
       selectedIssueId={controller.selectedIssueId}
       isCurrentVersion={controller.isSelectedCurrent}
       pending={controller.pending}

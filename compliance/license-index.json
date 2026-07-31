@@ -1,0 +1,1963 @@
+{
+  "licenses": [
+    {
+      "bundled_file": "compliance/license-texts/1d0e6c88b109130755ed46ea261745192813ad175eff727c2ee77bbb220104c8.txt",
+      "component": "locked:container:cadvisor",
+      "sha256": "1d0e6c88b109130755ed46ea261745192813ad175eff727c2ee77bbb220104c8",
+      "source": "compliance/upstream-license-texts/cAdvisor-Apache-2.0-LICENSE.txt",
+      "upstream_source": "https://raw.githubusercontent.com/google/cadvisor/4098bb73867d45b7ced21695e073d047025403b8/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "locked:container:prometheus",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "upstream_source": "https://raw.githubusercontent.com/prometheus/prometheus/40af9c2cdc0eda00f3622e867a27f6359f7295f3/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/ac9e304462a58a4d71b6488423d4447e614c8b31d517fe24345016522c102a78.txt",
+      "component": "locked:container:prometheus",
+      "sha256": "ac9e304462a58a4d71b6488423d4447e614c8b31d517fe24345016522c102a78",
+      "source": "compliance/upstream-license-texts/Prometheus-NOTICE.txt",
+      "upstream_source": "https://raw.githubusercontent.com/prometheus/prometheus/40af9c2cdc0eda00f3622e867a27f6359f7295f3/NOTICE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/35ea9c3419b261faf1be448c4f47d9255281bf6b36b5ffea55052227d4ba54de.txt",
+      "component": "python:alembic",
+      "sha256": "35ea9c3419b261faf1be448c4f47d9255281bf6b36b5ffea55052227d4ba54de",
+      "source": "backend/.venv/lib/python3.13/site-packages/alembic-1.17.2.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fff170779a6acbf65abdb405c087f1cee1786691e4a96a4034517e4a504a0cdf.txt",
+      "component": "python:annotated-doc",
+      "sha256": "fff170779a6acbf65abdb405c087f1cee1786691e4a96a4034517e4a504a0cdf",
+      "source": "backend/.venv/lib/python3.13/site-packages/annotated_doc-0.0.5.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fe1049884b1a0d9342901e88e07f32925d24b3121d9972b6a6805fb9824b095d.txt",
+      "component": "python:annotated-types",
+      "sha256": "fe1049884b1a0d9342901e88e07f32925d24b3121d9972b6a6805fb9824b095d",
+      "source": "backend/.venv/lib/python3.13/site-packages/annotated_types-0.8.0.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5361ac9dc58f2ef5fd2e9b09c68297c17f04950909bbc8023bdb82eacf22c2b0.txt",
+      "component": "python:anyio",
+      "sha256": "5361ac9dc58f2ef5fd2e9b09c68297c17f04950909bbc8023bdb82eacf22c2b0",
+      "source": "backend/.venv/lib/python3.13/site-packages/anyio-4.14.2.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d.txt",
+      "component": "python:click",
+      "sha256": "9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d",
+      "source": "backend/.venv/lib/python3.13/site-packages/click-8.4.2.dist-info/licenses/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4ec89ffc81485b97fec584b2d4a961032eeffe834453894fd9c1274906cc744e.txt",
+      "component": "python:fastapi",
+      "sha256": "4ec89ffc81485b97fec584b2d4a961032eeffe834453894fd9c1274906cc744e",
+      "source": "backend/.venv/lib/python3.13/site-packages/fastapi-0.139.0.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/37db5bb85926db28a427a25867f10b1232003aea1be69ccb851138adb8e6f361.txt",
+      "component": "python:h11",
+      "sha256": "37db5bb85926db28a427a25867f10b1232003aea1be69ccb851138adb8e6f361",
+      "source": "backend/.venv/lib/python3.13/site-packages/h11-0.16.0.dist-info/licenses/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/f4573e7cb7676745fb5b8d36fa548aa93e391cfb6872ddacd65130c45ea6a92d.txt",
+      "component": "python:httptools",
+      "sha256": "f4573e7cb7676745fb5b8d36fa548aa93e391cfb6872ddacd65130c45ea6a92d",
+      "source": "backend/.venv/lib/python3.13/site-packages/httptools-0.8.0.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/79e6ba8b687cb54786207342b9b6fcee0ac10218453ed9009b84d949b2233cc0.txt",
+      "component": "python:httptools",
+      "sha256": "79e6ba8b687cb54786207342b9b6fcee0ac10218453ed9009b84d949b2233cc0",
+      "source": "backend/.venv/lib/python3.13/site-packages/httptools-0.8.0.dist-info/licenses/vendor/http-parser/LICENSE-MIT"
+    },
+    {
+      "bundled_file": "compliance/license-texts/628168d68bb5a8a17e0bbefb3bd74e326e1edc20583d76f52f457c82c921867d.txt",
+      "component": "python:httptools",
+      "sha256": "628168d68bb5a8a17e0bbefb3bd74e326e1edc20583d76f52f457c82c921867d",
+      "source": "backend/.venv/lib/python3.13/site-packages/httptools-0.8.0.dist-info/licenses/vendor/llhttp/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04.txt",
+      "component": "python:idna",
+      "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04",
+      "source": "backend/.venv/lib/python3.13/site-packages/idna-3.18.dist-info/licenses/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/63af09891b6be8ad1a4252ed43af0f4efba7fc948e228367bed7f3c5ae0b09d7.txt",
+      "component": "python:itsdangerous",
+      "sha256": "63af09891b6be8ad1a4252ed43af0f4efba7fc948e228367bed7f3c5ae0b09d7",
+      "source": "backend/.venv/lib/python3.13/site-packages/itsdangerous-2.2.0.dist-info/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/68d7064e53e3ffa8e9f420a9e604bd2e2059d9c330492fa6ebd4eb3d48111689.txt",
+      "component": "python:mako",
+      "sha256": "68d7064e53e3ffa8e9f420a9e604bd2e2059d9c330492fa6ebd4eb3d48111689",
+      "source": "backend/.venv/lib/python3.13/site-packages/mako-1.3.12.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea.txt",
+      "component": "python:markupsafe",
+      "sha256": "489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea",
+      "source": "backend/.venv/lib/python3.13/site-packages/markupsafe-3.0.3.dist-info/licenses/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "python:prometheus-client",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "backend/.venv/lib/python3.13/site-packages/prometheus_client-0.25.0.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4efa1874aeaa60f365f5797e617f1ff933e15e508eaf751e9848ed4413d7a7ae.txt",
+      "component": "python:prometheus-client",
+      "sha256": "4efa1874aeaa60f365f5797e617f1ff933e15e508eaf751e9848ed4413d7a7ae",
+      "source": "backend/.venv/lib/python3.13/site-packages/prometheus_client-0.25.0.dist-info/licenses/NOTICE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118.txt",
+      "component": "python:psycopg",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "source": "backend/.venv/lib/python3.13/site-packages/psycopg-3.3.2.dist-info/licenses/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118.txt",
+      "component": "python:psycopg-binary",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "source": "backend/.venv/lib/python3.13/site-packages/psycopg_binary-3.3.2.dist-info/licenses/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3.txt",
+      "component": "python:pydantic",
+      "sha256": "a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3",
+      "source": "backend/.venv/lib/python3.13/site-packages/pydantic-2.12.5.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a.txt",
+      "component": "python:pydantic-core",
+      "sha256": "2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a",
+      "source": "backend/.venv/lib/python3.13/site-packages/pydantic_core-2.41.5.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/eb355a753e020346d33d83bf9769135b89fc610568ac531a01c295bcee7fd998.txt",
+      "component": "python:pydantic-settings",
+      "sha256": "eb355a753e020346d33d83bf9769135b89fc610568ac531a01c295bcee7fd998",
+      "source": "backend/.venv/lib/python3.13/site-packages/pydantic_settings-2.14.2.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/80619b7049f08c81683ad0e01f08f257a840652dd71ee83146d36658c7d2c2b9.txt",
+      "component": "python:python-dotenv",
+      "sha256": "80619b7049f08c81683ad0e01f08f257a840652dd71ee83146d36658c7d2c2b9",
+      "source": "backend/.venv/lib/python3.13/site-packages/python_dotenv-1.2.2.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4.txt",
+      "component": "python:pyyaml",
+      "sha256": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4",
+      "source": "backend/.venv/lib/python3.13/site-packages/pyyaml-6.0.3.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9821720b58d4a565b61321007a8ad43ab6991a3959e66cd5db4dd9eae69c7dfc.txt",
+      "component": "python:sqlalchemy",
+      "sha256": "9821720b58d4a565b61321007a8ad43ab6991a3959e66cd5db4dd9eae69c7dfc",
+      "source": "backend/.venv/lib/python3.13/site-packages/sqlalchemy-2.0.45.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/dcb95677a02240243187e964f941847d19b17821cf99e5afae684fab328c19bf.txt",
+      "component": "python:starlette",
+      "sha256": "dcb95677a02240243187e964f941847d19b17821cf99e5afae684fab328c19bf",
+      "source": "backend/.venv/lib/python3.13/site-packages/starlette-1.3.1.dist-info/licenses/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf.txt",
+      "component": "python:typing-extensions",
+      "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf",
+      "source": "backend/.venv/lib/python3.13/site-packages/typing_extensions-4.16.0.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/804b59b25f2c31bd278f9202a19ae49a3945aa2664387e2d0a128c7cacc61ec3.txt",
+      "component": "python:typing-inspection",
+      "sha256": "804b59b25f2c31bd278f9202a19ae49a3945aa2664387e2d0a128c7cacc61ec3",
+      "source": "backend/.venv/lib/python3.13/site-packages/typing_inspection-0.4.2.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/efe1acf3e62fb99c288b0ec73e5a773b7268ef4320fe757ea994214e4b63c371.txt",
+      "component": "python:uvicorn",
+      "sha256": "efe1acf3e62fb99c288b0ec73e5a773b7268ef4320fe757ea994214e4b63c371",
+      "source": "backend/.venv/lib/python3.13/site-packages/uvicorn-0.38.0.dist-info/licenses/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/377025287798f9dcd819e1f826fa5fc5e2f382528691ab0528c5cf8c8c282c27.txt",
+      "component": "python:uvloop",
+      "sha256": "377025287798f9dcd819e1f826fa5fc5e2f382528691ab0528c5cf8c8c282c27",
+      "source": "backend/.venv/lib/python3.13/site-packages/uvloop-0.22.1.dist-info/licenses/LICENSE-APACHE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/6dd4c399f26de043d77a2ad7e31db4cb5bf08ea8368b0a42d6e158635cc8ab62.txt",
+      "component": "python:uvloop",
+      "sha256": "6dd4c399f26de043d77a2ad7e31db4cb5bf08ea8368b0a42d6e158635cc8ab62",
+      "source": "backend/.venv/lib/python3.13/site-packages/uvloop-0.22.1.dist-info/licenses/LICENSE-MIT"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4fd78355b67ce2677ede9fb6f63a250f377bb7e22088136a5f4699adb4bc069f.txt",
+      "component": "python:watchfiles",
+      "sha256": "4fd78355b67ce2677ede9fb6f63a250f377bb7e22088136a5f4699adb4bc069f",
+      "source": "backend/.venv/lib/python3.13/site-packages/watchfiles-1.2.0.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3d6a0c050d8bec52fabad502e45fb25bd02bcadbd70dea34d447b6a0ff4e6da8.txt",
+      "component": "python:websockets",
+      "sha256": "3d6a0c050d8bec52fabad502e45fb25bd02bcadbd70dea34d447b6a0ff4e6da8",
+      "source": "backend/.venv/lib/python3.13/site-packages/websockets-17.0.dist-info/licenses/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/e539937c489c4928ad7461669ec017f4d916fb3565fc26f5b8a0ce816d2ed23c.txt",
+      "component": "npm:node_modules/@acemir/cssom",
+      "sha256": "e539937c489c4928ad7461669ec017f4d916fb3565fc26f5b8a0ce816d2ed23c",
+      "source": "node_modules/@acemir/cssom/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/326ff3850062286003ff4cbdaa8f61764e128f9a6532431bccf97e4e2bd75059.txt",
+      "component": "npm:node_modules/@adobe/css-tools",
+      "sha256": "326ff3850062286003ff4cbdaa8f61764e128f9a6532431bccf97e4e2bd75059",
+      "source": "node_modules/@adobe/css-tools/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/bd4539377980dd797fc6a51d90e664e52b2b2625b2158f01d4c68b5fe107eacb.txt",
+      "component": "npm:node_modules/@asamuzakjp/css-color",
+      "sha256": "bd4539377980dd797fc6a51d90e664e52b2b2625b2158f01d4c68b5fe107eacb",
+      "source": "node_modules/@asamuzakjp/css-color/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004.txt",
+      "component": "npm:node_modules/@asamuzakjp/css-color/node_modules/lru-cache",
+      "sha256": "8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004",
+      "source": "node_modules/@asamuzakjp/css-color/node_modules/lru-cache/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/7cdf9db3b91cc77b9ec947ad0c7126140f00e34528b67c3a58e9fc1a98055e14.txt",
+      "component": "npm:node_modules/@asamuzakjp/dom-selector",
+      "sha256": "7cdf9db3b91cc77b9ec947ad0c7126140f00e34528b67c3a58e9fc1a98055e14",
+      "source": "node_modules/@asamuzakjp/dom-selector/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004.txt",
+      "component": "npm:node_modules/@asamuzakjp/dom-selector/node_modules/lru-cache",
+      "sha256": "8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004",
+      "source": "node_modules/@asamuzakjp/dom-selector/node_modules/lru-cache/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9b0ffd74f2cde7528141cc314ece705490d11054805da4a01ee6149498951b8f.txt",
+      "component": "npm:node_modules/@asamuzakjp/nwsapi",
+      "sha256": "9b0ffd74f2cde7528141cc314ece705490d11054805da4a01ee6149498951b8f",
+      "source": "node_modules/@asamuzakjp/nwsapi/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/code-frame",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/code-frame/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/compat-data",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/compat-data/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/core",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/core/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/generator",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/generator/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/helper-compilation-targets",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/helper-compilation-targets/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/helper-globals",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/helper-globals/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/helper-module-imports",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/helper-module-imports/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/helper-module-transforms",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/helper-module-transforms/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/helper-plugin-utils",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/helper-plugin-utils/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/helper-string-parser",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/helper-string-parser/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/helper-validator-identifier",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/helper-validator-identifier/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/helper-validator-option",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/helper-validator-option/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4be9d87b56a306293223b490c0d0b245e9e94f39884147bf051a6c7b825aeb30.txt",
+      "component": "npm:node_modules/@babel/helpers",
+      "sha256": "4be9d87b56a306293223b490c0d0b245e9e94f39884147bf051a6c7b825aeb30",
+      "source": "node_modules/@babel/helpers/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2e97627cb278aa7556fb9e8817368302301a595b6c7582512b8d74c57b773652.txt",
+      "component": "npm:node_modules/@babel/parser",
+      "sha256": "2e97627cb278aa7556fb9e8817368302301a595b6c7582512b8d74c57b773652",
+      "source": "node_modules/@babel/parser/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/plugin-transform-react-jsx-self",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/plugin-transform-react-jsx-self/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/plugin-transform-react-jsx-source",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/plugin-transform-react-jsx-source/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/runtime",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/runtime/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/template",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/template/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/traverse",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/traverse/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76.txt",
+      "component": "npm:node_modules/@babel/types",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "source": "node_modules/@babel/types/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/947e32047a166cd05f04e45938d172b412c07cbee0b9735afd14bae30e02c2f6.txt",
+      "component": "npm:node_modules/@csstools/color-helpers",
+      "sha256": "947e32047a166cd05f04e45938d172b412c07cbee0b9735afd14bae30e02c2f6",
+      "source": "node_modules/@csstools/color-helpers/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d00d032f517721b45c56c70c46bf904ebb71ad313df4d4db7722266b38069665.txt",
+      "component": "npm:node_modules/@csstools/css-calc",
+      "sha256": "d00d032f517721b45c56c70c46bf904ebb71ad313df4d4db7722266b38069665",
+      "source": "node_modules/@csstools/css-calc/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d00d032f517721b45c56c70c46bf904ebb71ad313df4d4db7722266b38069665.txt",
+      "component": "npm:node_modules/@csstools/css-color-parser",
+      "sha256": "d00d032f517721b45c56c70c46bf904ebb71ad313df4d4db7722266b38069665",
+      "source": "node_modules/@csstools/css-color-parser/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d00d032f517721b45c56c70c46bf904ebb71ad313df4d4db7722266b38069665.txt",
+      "component": "npm:node_modules/@csstools/css-parser-algorithms",
+      "sha256": "d00d032f517721b45c56c70c46bf904ebb71ad313df4d4db7722266b38069665",
+      "source": "node_modules/@csstools/css-parser-algorithms/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/947e32047a166cd05f04e45938d172b412c07cbee0b9735afd14bae30e02c2f6.txt",
+      "component": "npm:node_modules/@csstools/css-syntax-patches-for-csstree",
+      "sha256": "947e32047a166cd05f04e45938d172b412c07cbee0b9735afd14bae30e02c2f6",
+      "source": "node_modules/@csstools/css-syntax-patches-for-csstree/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d00d032f517721b45c56c70c46bf904ebb71ad313df4d4db7722266b38069665.txt",
+      "component": "npm:node_modules/@csstools/css-tokenizer",
+      "sha256": "d00d032f517721b45c56c70c46bf904ebb71ad313df4d4db7722266b38069665",
+      "source": "node_modules/@csstools/css-tokenizer/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fcf6eabf68ca96988a6b506b4fdc6cc32535d80eb2e11c79724af5ac6f50262b.txt",
+      "component": "npm:node_modules/@eslint-community/eslint-utils",
+      "sha256": "fcf6eabf68ca96988a6b506b4fdc6cc32535d80eb2e11c79724af5ac6f50262b",
+      "source": "node_modules/@eslint-community/eslint-utils/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d8bf34ff6d190640a01e7704ad78253fc181bc128949d71273fbbaa12f33c0b4.txt",
+      "component": "npm:node_modules/@eslint-community/eslint-utils/node_modules/eslint-visitor-keys",
+      "sha256": "d8bf34ff6d190640a01e7704ad78253fc181bc128949d71273fbbaa12f33c0b4",
+      "source": "node_modules/@eslint-community/eslint-utils/node_modules/eslint-visitor-keys/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fcf6eabf68ca96988a6b506b4fdc6cc32535d80eb2e11c79724af5ac6f50262b.txt",
+      "component": "npm:node_modules/@eslint-community/regexpp",
+      "sha256": "fcf6eabf68ca96988a6b506b4fdc6cc32535d80eb2e11c79724af5ac6f50262b",
+      "source": "node_modules/@eslint-community/regexpp/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@eslint/config-array",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@eslint/config-array/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@eslint/config-helpers",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@eslint/config-helpers/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@eslint/core",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@eslint/core/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3b6be04f862a077a4b97929dbf247299360824d9365f8603c263769303ace18c.txt",
+      "component": "npm:node_modules/@eslint/eslintrc",
+      "sha256": "3b6be04f862a077a4b97929dbf247299360824d9365f8603c263769303ace18c",
+      "source": "node_modules/@eslint/eslintrc/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/@eslint/eslintrc/node_modules/globals",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/@eslint/eslintrc/node_modules/globals/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3b6be04f862a077a4b97929dbf247299360824d9365f8603c263769303ace18c.txt",
+      "component": "npm:node_modules/@eslint/js",
+      "sha256": "3b6be04f862a077a4b97929dbf247299360824d9365f8603c263769303ace18c",
+      "source": "node_modules/@eslint/js/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@eslint/object-schema",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@eslint/object-schema/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@eslint/plugin-kit",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@eslint/plugin-kit/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/dbffd380d59504ba19fcf87ff5a1a33c37edf66d5b09966b0ad5368ab87bc2af.txt",
+      "component": "npm:node_modules/@exodus/bytes",
+      "sha256": "dbffd380d59504ba19fcf87ff5a1a33c37edf66d5b09966b0ad5368ab87bc2af",
+      "source": "node_modules/@exodus/bytes/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/e8eeb472f0a5889c2c51625b86a3f9b8630680adb9f49a125352e2e426392780.txt",
+      "component": "npm:node_modules/@hookform/resolvers",
+      "sha256": "e8eeb472f0a5889c2c51625b86a3f9b8630680adb9f49a125352e2e426392780",
+      "source": "node_modules/@hookform/resolvers/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@humanfs/core",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@humanfs/core/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@humanfs/node",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@humanfs/node/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@humanwhocodes/module-importer",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@humanwhocodes/module-importer/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/@humanwhocodes/retry",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/@humanwhocodes/retry/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c.txt",
+      "component": "npm:node_modules/@jridgewell/gen-mapping",
+      "sha256": "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c",
+      "source": "node_modules/@jridgewell/gen-mapping/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c.txt",
+      "component": "npm:node_modules/@jridgewell/remapping",
+      "sha256": "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c",
+      "source": "node_modules/@jridgewell/remapping/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/b8778b155bfde5a28b023a558753c0fa058a52bb9de35c343c250be1bbcdedab.txt",
+      "component": "npm:node_modules/@jridgewell/resolve-uri",
+      "sha256": "b8778b155bfde5a28b023a558753c0fa058a52bb9de35c343c250be1bbcdedab",
+      "source": "node_modules/@jridgewell/resolve-uri/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c.txt",
+      "component": "npm:node_modules/@jridgewell/sourcemap-codec",
+      "sha256": "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c",
+      "source": "node_modules/@jridgewell/sourcemap-codec/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c.txt",
+      "component": "npm:node_modules/@jridgewell/trace-mapping",
+      "sha256": "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c",
+      "source": "node_modules/@jridgewell/trace-mapping/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb.txt",
+      "component": "npm:node_modules/@playwright/test",
+      "sha256": "45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
+      "source": "node_modules/@playwright/test/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d.txt",
+      "component": "npm:node_modules/@playwright/test",
+      "sha256": "6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d",
+      "source": "node_modules/@playwright/test/NOTICE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734.txt",
+      "component": "npm:node_modules/@rolldown/pluginutils",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "node_modules/@rolldown/pluginutils/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/653b779005a3a4d64a7288c940f7b9a0e8f0b1e0375f6aa6af9473caf131e564.txt",
+      "component": "npm:node_modules/@standard-schema/spec",
+      "sha256": "653b779005a3a4d64a7288c940f7b9a0e8f0b1e0375f6aa6af9473caf131e564",
+      "source": "node_modules/@standard-schema/spec/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9cf2166507311f427e083ef7671da566949391cb745789abcff8bd43ac26d1f1.txt",
+      "component": "npm:node_modules/@standard-schema/utils",
+      "sha256": "9cf2166507311f427e083ef7671da566949391cb745789abcff8bd43ac26d1f1",
+      "source": "node_modules/@standard-schema/utils/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt",
+      "component": "npm:node_modules/@tanstack/query-core",
+      "sha256": "a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7",
+      "source": "node_modules/@tanstack/query-core/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt",
+      "component": "npm:node_modules/@tanstack/react-query",
+      "sha256": "a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7",
+      "source": "node_modules/@tanstack/react-query/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/bf8fd38056b7606deccfcadb4d8ca1c210082d8ef5513426d2650daedc30bed3.txt",
+      "component": "npm:node_modules/@testing-library/dom",
+      "sha256": "bf8fd38056b7606deccfcadb4d8ca1c210082d8ef5513426d2650daedc30bed3",
+      "source": "node_modules/@testing-library/dom/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/bf8fd38056b7606deccfcadb4d8ca1c210082d8ef5513426d2650daedc30bed3.txt",
+      "component": "npm:node_modules/@testing-library/jest-dom",
+      "sha256": "bf8fd38056b7606deccfcadb4d8ca1c210082d8ef5513426d2650daedc30bed3",
+      "source": "node_modules/@testing-library/jest-dom/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/0ffe67fe630169de46df2d29dc18f5857b4c98f0f95b0cd9e3c21fef51f9a9b8.txt",
+      "component": "npm:node_modules/@testing-library/jest-dom/node_modules/dom-accessibility-api",
+      "sha256": "0ffe67fe630169de46df2d29dc18f5857b4c98f0f95b0cd9e3c21fef51f9a9b8",
+      "source": "node_modules/@testing-library/jest-dom/node_modules/dom-accessibility-api/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9680978280d509520d2a7b51e93ffbf7d9ec2b9de4411a6989daba5b659048e0.txt",
+      "component": "npm:node_modules/@testing-library/react",
+      "sha256": "9680978280d509520d2a7b51e93ffbf7d9ec2b9de4411a6989daba5b659048e0",
+      "source": "node_modules/@testing-library/react/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/b5a4028c49c48f820831421de69c8ea83d621a062914bf16739fd0703c7c9fba.txt",
+      "component": "npm:node_modules/@testing-library/user-event",
+      "sha256": "b5a4028c49c48f820831421de69c8ea83d621a062914bf16739fd0703c7c9fba",
+      "source": "node_modules/@testing-library/user-event/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/aria-query",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/aria-query/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/babel__core",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/babel__core/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/babel__generator",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/babel__generator/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/babel__template",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/babel__template/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/babel__traverse",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/babel__traverse/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/chai",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/chai/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/deep-eql",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/deep-eql/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/estree",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/estree/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/json-schema",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/json-schema/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/node",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/node/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/react",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/react/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+      "component": "npm:node_modules/@types/react-dom",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "node_modules/@types/react-dom/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0.txt",
+      "component": "npm:node_modules/@typescript-eslint/eslint-plugin",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0",
+      "source": "node_modules/@typescript-eslint/eslint-plugin/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9c94db23dc4b1e9aaee5d195668b916afc71efed54af226b66cf0ccc4389c1c0.txt",
+      "component": "npm:node_modules/@typescript-eslint/eslint-plugin/node_modules/ignore",
+      "sha256": "9c94db23dc4b1e9aaee5d195668b916afc71efed54af226b66cf0ccc4389c1c0",
+      "source": "node_modules/@typescript-eslint/eslint-plugin/node_modules/ignore/LICENSE-MIT"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0.txt",
+      "component": "npm:node_modules/@typescript-eslint/parser",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0",
+      "source": "node_modules/@typescript-eslint/parser/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/053a75a14b7508a897466b65e12797201a06b0e9b5066d1223da72cac99601b5.txt",
+      "component": "npm:node_modules/@typescript-eslint/project-service",
+      "sha256": "053a75a14b7508a897466b65e12797201a06b0e9b5066d1223da72cac99601b5",
+      "source": "node_modules/@typescript-eslint/project-service/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0.txt",
+      "component": "npm:node_modules/@typescript-eslint/scope-manager",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0",
+      "source": "node_modules/@typescript-eslint/scope-manager/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/053a75a14b7508a897466b65e12797201a06b0e9b5066d1223da72cac99601b5.txt",
+      "component": "npm:node_modules/@typescript-eslint/tsconfig-utils",
+      "sha256": "053a75a14b7508a897466b65e12797201a06b0e9b5066d1223da72cac99601b5",
+      "source": "node_modules/@typescript-eslint/tsconfig-utils/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/f3c51ace7f159b21566d72535e84ff354505ae7ffdca835dac81fcdafbf9e879.txt",
+      "component": "npm:node_modules/@typescript-eslint/type-utils",
+      "sha256": "f3c51ace7f159b21566d72535e84ff354505ae7ffdca835dac81fcdafbf9e879",
+      "source": "node_modules/@typescript-eslint/type-utils/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0.txt",
+      "component": "npm:node_modules/@typescript-eslint/types",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0",
+      "source": "node_modules/@typescript-eslint/types/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0.txt",
+      "component": "npm:node_modules/@typescript-eslint/typescript-estree",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0",
+      "source": "node_modules/@typescript-eslint/typescript-estree/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d408f38ffa3355c5faec517153295338892eb0f1ea43f57874bb23c6075979b5.txt",
+      "component": "npm:node_modules/@typescript-eslint/typescript-estree/node_modules/balanced-match",
+      "sha256": "d408f38ffa3355c5faec517153295338892eb0f1ea43f57874bb23c6075979b5",
+      "source": "node_modules/@typescript-eslint/typescript-estree/node_modules/balanced-match/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9c63a23124d68cd30cd316a94a1a0bca34f032786df6df69fc4b5f136bac8d2e.txt",
+      "component": "npm:node_modules/@typescript-eslint/typescript-estree/node_modules/brace-expansion",
+      "sha256": "9c63a23124d68cd30cd316a94a1a0bca34f032786df6df69fc4b5f136bac8d2e",
+      "source": "node_modules/@typescript-eslint/typescript-estree/node_modules/brace-expansion/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2c7c5d22ed5a8ee968c64757710979afcd77438c48b4a265b94e615babd8a901.txt",
+      "component": "npm:node_modules/@typescript-eslint/typescript-estree/node_modules/minimatch",
+      "sha256": "2c7c5d22ed5a8ee968c64757710979afcd77438c48b4a265b94e615babd8a901",
+      "source": "node_modules/@typescript-eslint/typescript-estree/node_modules/minimatch/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt",
+      "component": "npm:node_modules/@typescript-eslint/typescript-estree/node_modules/semver",
+      "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+      "source": "node_modules/@typescript-eslint/typescript-estree/node_modules/semver/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0.txt",
+      "component": "npm:node_modules/@typescript-eslint/utils",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0",
+      "source": "node_modules/@typescript-eslint/utils/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0.txt",
+      "component": "npm:node_modules/@typescript-eslint/visitor-keys",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0",
+      "source": "node_modules/@typescript-eslint/visitor-keys/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d8bf34ff6d190640a01e7704ad78253fc181bc128949d71273fbbaa12f33c0b4.txt",
+      "component": "npm:node_modules/@typescript-eslint/visitor-keys/node_modules/eslint-visitor-keys",
+      "sha256": "d8bf34ff6d190640a01e7704ad78253fc181bc128949d71273fbbaa12f33c0b4",
+      "source": "node_modules/@typescript-eslint/visitor-keys/node_modules/eslint-visitor-keys/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/29b68325fe026047d13e187b44c33b2acacf7dc647dec4583702e59f235e13b5.txt",
+      "component": "npm:node_modules/@vitejs/plugin-react",
+      "sha256": "29b68325fe026047d13e187b44c33b2acacf7dc647dec4583702e59f235e13b5",
+      "source": "node_modules/@vitejs/plugin-react/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551.txt",
+      "component": "npm:node_modules/@vitest/expect",
+      "sha256": "04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551",
+      "source": "node_modules/@vitest/expect/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551.txt",
+      "component": "npm:node_modules/@vitest/mocker",
+      "sha256": "04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551",
+      "source": "node_modules/@vitest/mocker/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551.txt",
+      "component": "npm:node_modules/@vitest/pretty-format",
+      "sha256": "04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551",
+      "source": "node_modules/@vitest/pretty-format/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551.txt",
+      "component": "npm:node_modules/@vitest/runner",
+      "sha256": "04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551",
+      "source": "node_modules/@vitest/runner/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551.txt",
+      "component": "npm:node_modules/@vitest/snapshot",
+      "sha256": "04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551",
+      "source": "node_modules/@vitest/snapshot/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551.txt",
+      "component": "npm:node_modules/@vitest/spy",
+      "sha256": "04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551",
+      "source": "node_modules/@vitest/spy/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551.txt",
+      "component": "npm:node_modules/@vitest/utils",
+      "sha256": "04575fc5bfae19a9b63100f8691f901a2e15a399011ac02db435a9ef27295551",
+      "source": "node_modules/@vitest/utils/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7.txt",
+      "component": "npm:node_modules/acorn",
+      "sha256": "76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7",
+      "source": "node_modules/acorn/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/cfa72b62b9ae173078823a3796b25c027a9071046a263beddf966df67018ce06.txt",
+      "component": "npm:node_modules/acorn-jsx",
+      "sha256": "cfa72b62b9ae173078823a3796b25c027a9071046a263beddf966df67018ce06",
+      "source": "node_modules/acorn-jsx/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/8d8c55319c7729d57be811c747452636688d54f19701ee0752b6b15ad3771d9a.txt",
+      "component": "npm:node_modules/agent-base",
+      "sha256": "8d8c55319c7729d57be811c747452636688d54f19701ee0752b6b15ad3771d9a",
+      "source": "node_modules/agent-base/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/e85e131fa4ed25538ff1f4962ced1fb6f68b079bd9164a790597a0f30b8fd030.txt",
+      "component": "npm:node_modules/ajv",
+      "sha256": "e85e131fa4ed25538ff1f4962ced1fb6f68b079bd9164a790597a0f30b8fd030",
+      "source": "node_modules/ajv/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/ansi-regex",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/ansi-regex/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/ansi-styles",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/ansi-styles/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/de4d1f2d2ad5ad0cfd1657a106476b31cb5db5ef9d1ff842b237c0c81f0c8a23.txt",
+      "component": "npm:node_modules/argparse",
+      "sha256": "de4d1f2d2ad5ad0cfd1657a106476b31cb5db5ef9d1ff842b237c0c81f0c8a23",
+      "source": "node_modules/argparse/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c8df456c7ccba74b959087dff494d4ac2a12dfb0400c08b46b2494a08a000567.txt",
+      "component": "npm:node_modules/aria-query",
+      "sha256": "c8df456c7ccba74b959087dff494d4ac2a12dfb0400c08b46b2494a08a000567",
+      "source": "node_modules/aria-query/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2130216d5ab4c02134f8247f32999feda0abe1eaf028218baeac445c19ce4cea.txt",
+      "component": "npm:node_modules/assertion-error",
+      "sha256": "2130216d5ab4c02134f8247f32999feda0abe1eaf028218baeac445c19ce4cea",
+      "source": "node_modules/assertion-error/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a1bd5deadb6a06dd74efa852c1b8b23f63b67f2214fbe9c8bd591da51da69268.txt",
+      "component": "npm:node_modules/balanced-match",
+      "sha256": "a1bd5deadb6a06dd74efa852c1b8b23f63b67f2214fbe9c8bd591da51da69268",
+      "source": "node_modules/balanced-match/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "component": "npm:node_modules/baseline-browser-mapping",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source": "node_modules/baseline-browser-mapping/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/49d4d143fed599deb502a0fe6e02f49832f87e9a3a4cd0502e469596d50faa6d.txt",
+      "component": "npm:node_modules/bidi-js",
+      "sha256": "49d4d143fed599deb502a0fe6e02f49832f87e9a3a4cd0502e469596d50faa6d",
+      "source": "node_modules/bidi-js/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/68f12f6e2c33688699249c01d8f9623c534da20aa71989c57b061b7bc1676d14.txt",
+      "component": "npm:node_modules/brace-expansion",
+      "sha256": "68f12f6e2c33688699249c01d8f9623c534da20aa71989c57b061b7bc1676d14",
+      "source": "node_modules/brace-expansion/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/21c2679a63d7699c0e644409e2f17d0adbc7a965003feb06b3ff4b833d21f722.txt",
+      "component": "npm:node_modules/browserslist",
+      "sha256": "21c2679a63d7699c0e644409e2f17d0adbc7a965003feb06b3ff4b833d21f722",
+      "source": "node_modules/browserslist/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/callsites",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/callsites/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fd3a263fe19ed8faa9068b43abaebafc02c77897b0c6fc09abc04bb592e5f16e.txt",
+      "component": "npm:node_modules/caniuse-lite",
+      "sha256": "fd3a263fe19ed8faa9068b43abaebafc02c77897b0c6fc09abc04bb592e5f16e",
+      "source": "node_modules/caniuse-lite/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/b181da80336ff9dd1043fc8be1a764d7382363433319aa872e4d2cb5ce2a3066.txt",
+      "component": "npm:node_modules/chai",
+      "sha256": "b181da80336ff9dd1043fc8be1a764d7382363433319aa872e4d2cb5ce2a3066",
+      "source": "node_modules/chai/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/chalk",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/chalk/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/693866fc419c6f61c8570438ec00659d156ec2b4d4a4d04091711f5f11a365d4.txt",
+      "component": "npm:node_modules/color-convert",
+      "sha256": "693866fc419c6f61c8570438ec00659d156ec2b4d4a4d04091711f5f11a365d4",
+      "source": "node_modules/color-convert/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c064f7a3e353bc1bc977f3c897941c75ef763f44f41677e0a15370ca0853d6e2.txt",
+      "component": "npm:node_modules/color-name",
+      "sha256": "c064f7a3e353bc1bc977f3c897941c75ef763f44f41677e0a15370ca0853d6e2",
+      "source": "node_modules/color-name/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/435a6722c786b0a56fbe7387028f1d9d3f3a2d0fb615bb8fee118727c3f59b7b.txt",
+      "component": "npm:node_modules/concat-map",
+      "sha256": "435a6722c786b0a56fbe7387028f1d9d3f3a2d0fb615bb8fee118727c3f59b7b",
+      "source": "node_modules/concat-map/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/1fa6ee8bb95a81ae3d73a5bd074a3ac380ffec13697051063ca1a601921b91db.txt",
+      "component": "npm:node_modules/convert-source-map",
+      "sha256": "1fa6ee8bb95a81ae3d73a5bd074a3ac380ffec13697051063ca1a601921b91db",
+      "source": "node_modules/convert-source-map/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c02110eedc16c7114f1a9bdc026c65626ce1d9c7e27fd51a8e0feee8a48a6858.txt",
+      "component": "npm:node_modules/cookie",
+      "sha256": "c02110eedc16c7114f1a9bdc026c65626ce1d9c7e27fd51a8e0feee8a48a6858",
+      "source": "node_modules/cookie/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/33b734d60042d0fe0c92dd1fc1e874193a1c899ec3e276a2eb935d2d0bf5b710.txt",
+      "component": "npm:node_modules/core-util-is",
+      "sha256": "33b734d60042d0fe0c92dd1fc1e874193a1c899ec3e276a2eb935d2d0bf5b710",
+      "source": "node_modules/core-util-is/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/aaa78451b6fecd1b9c4594c796c133c0e90cad100372ff8bc6de615e9ef9adf1.txt",
+      "component": "npm:node_modules/cross-spawn",
+      "sha256": "aaa78451b6fecd1b9c4594c796c133c0e90cad100372ff8bc6de615e9ef9adf1",
+      "source": "node_modules/cross-spawn/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/719a251ceca49c057ea90a1152af6546b767ec88e6d573bb6324454267b32c22.txt",
+      "component": "npm:node_modules/css-tree",
+      "sha256": "719a251ceca49c057ea90a1152af6546b767ec88e6d573bb6324454267b32c22",
+      "source": "node_modules/css-tree/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a.txt",
+      "component": "npm:node_modules/css.escape",
+      "sha256": "483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a",
+      "source": "node_modules/css.escape/LICENSE-MIT.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/768faff9f6908c78d848b18770b2a93e3361d6e2ee35edf45c6a5ddf1f7cb185.txt",
+      "component": "npm:node_modules/cssstyle",
+      "sha256": "768faff9f6908c78d848b18770b2a93e3361d6e2ee35edf45c6a5ddf1f7cb185",
+      "source": "node_modules/cssstyle/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004.txt",
+      "component": "npm:node_modules/cssstyle/node_modules/lru-cache",
+      "sha256": "8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004",
+      "source": "node_modules/cssstyle/node_modules/lru-cache/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/11d55bd4541c75ee7879547ac49089c489163dae49551389713c3d026cab383e.txt",
+      "component": "npm:node_modules/csstype",
+      "sha256": "11d55bd4541c75ee7879547ac49089c489163dae49551389713c3d026cab383e",
+      "source": "node_modules/csstype/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/528eec83cb836a0adda9f8fc3d6a2a70a710d6cc0be9a155f92212c8df28acfa.txt",
+      "component": "npm:node_modules/data-urls",
+      "sha256": "528eec83cb836a0adda9f8fc3d6a2a70a710d6cc0be9a155f92212c8df28acfa",
+      "source": "node_modules/data-urls/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/528eec83cb836a0adda9f8fc3d6a2a70a710d6cc0be9a155f92212c8df28acfa.txt",
+      "component": "npm:node_modules/data-urls/node_modules/whatwg-mimetype",
+      "sha256": "528eec83cb836a0adda9f8fc3d6a2a70a710d6cc0be9a155f92212c8df28acfa",
+      "source": "node_modules/data-urls/node_modules/whatwg-mimetype/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3a61c6c96caf5c1d9b623fb9b04c822b783dfcb78aa7e49c76a3f643e6ed7f95.txt",
+      "component": "npm:node_modules/debug",
+      "sha256": "3a61c6c96caf5c1d9b623fb9b04c822b783dfcb78aa7e49c76a3f643e6ed7f95",
+      "source": "node_modules/debug/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3108b546bcff5d346923a82f48b2d252ca722f9088076db6d145f6b67757ad6c.txt",
+      "component": "npm:node_modules/decimal.js",
+      "sha256": "3108b546bcff5d346923a82f48b2d252ca722f9088076db6d145f6b67757ad6c",
+      "source": "node_modules/decimal.js/LICENCE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/f2042f3634c4136d06b5139c9c6aefb81a3a462b514548bc1845953233dfba98.txt",
+      "component": "npm:node_modules/deep-is",
+      "sha256": "f2042f3634c4136d06b5139c9c6aefb81a3a462b514548bc1845953233dfba98",
+      "source": "node_modules/deep-is/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/306fa513e39b23a6e8747520de761809d206b99800ef41907b530226574c59ae.txt",
+      "component": "npm:node_modules/dequal",
+      "sha256": "306fa513e39b23a6e8747520de761809d206b99800ef41907b530226574c59ae",
+      "source": "node_modules/dequal/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/0ffe67fe630169de46df2d29dc18f5857b4c98f0f95b0cd9e3c21fef51f9a9b8.txt",
+      "component": "npm:node_modules/dom-accessibility-api",
+      "sha256": "0ffe67fe630169de46df2d29dc18f5857b4c98f0f95b0cd9e3c21fef51f9a9b8",
+      "source": "node_modules/dom-accessibility-api/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/25ba5c59dad3e0dd8f9540beaa0f0a86a10e3aec35af5fdc8e88c5f6a5c0d8c6.txt",
+      "component": "npm:node_modules/electron-to-chromium",
+      "sha256": "25ba5c59dad3e0dd8f9540beaa0f0a86a10e3aec35af5fdc8e88c5f6a5c0d8c6",
+      "source": "node_modules/electron-to-chromium/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/cb992345949ccd6e8394b2cd6c465f7b897c864f845937dbf64e8997f389e164.txt",
+      "component": "npm:node_modules/entities",
+      "sha256": "cb992345949ccd6e8394b2cd6c465f7b897c864f845937dbf64e8997f389e164",
+      "source": "node_modules/entities/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fecc38b5e10d889686b3862e7ade17e8b3e5c94b24b7256b05a354d8524b3274.txt",
+      "component": "npm:node_modules/es-module-lexer",
+      "sha256": "fecc38b5e10d889686b3862e7ade17e8b3e5c94b24b7256b05a354d8524b3274",
+      "source": "node_modules/es-module-lexer/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/b40ec5baec7bb34fa5b1c09521fa3cd52d5fad7adafed74932a2010d3612a681.txt",
+      "component": "npm:node_modules/esbuild",
+      "sha256": "b40ec5baec7bb34fa5b1c09521fa3cd52d5fad7adafed74932a2010d3612a681",
+      "source": "node_modules/esbuild/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9a9edad7baae52622bddf3c15b2ef8a33d2c89f2d25408ad13e8a7481c6b0c97.txt",
+      "component": "npm:node_modules/escalade",
+      "sha256": "9a9edad7baae52622bddf3c15b2ef8a33d2c89f2d25408ad13e8a7481c6b0c97",
+      "source": "node_modules/escalade/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/escape-string-regexp",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/escape-string-regexp/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3b6be04f862a077a4b97929dbf247299360824d9365f8603c263769303ace18c.txt",
+      "component": "npm:node_modules/eslint",
+      "sha256": "3b6be04f862a077a4b97929dbf247299360824d9365f8603c263769303ace18c",
+      "source": "node_modules/eslint/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt",
+      "component": "npm:node_modules/eslint-plugin-react-hooks",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": "node_modules/eslint-plugin-react-hooks/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fba570176c68f716676e04cad6c39fb56b763e44fc11be22fe6863ff19092a9b.txt",
+      "component": "npm:node_modules/eslint-plugin-react-refresh",
+      "sha256": "fba570176c68f716676e04cad6c39fb56b763e44fc11be22fe6863ff19092a9b",
+      "source": "node_modules/eslint-plugin-react-refresh/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d3a724e2ed749f172ff70b62a1d0631b7d4b0ea273782365a3464d4e2d6b6dbd.txt",
+      "component": "npm:node_modules/eslint-scope",
+      "sha256": "d3a724e2ed749f172ff70b62a1d0631b7d4b0ea273782365a3464d4e2d6b6dbd",
+      "source": "node_modules/eslint-scope/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d8bf34ff6d190640a01e7704ad78253fc181bc128949d71273fbbaa12f33c0b4.txt",
+      "component": "npm:node_modules/eslint-visitor-keys",
+      "sha256": "d8bf34ff6d190640a01e7704ad78253fc181bc128949d71273fbbaa12f33c0b4",
+      "source": "node_modules/eslint-visitor-keys/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/26c95937762a3dc17a3934a0a2773c70259ba4bf28dab713c225e4af8eb9d349.txt",
+      "component": "npm:node_modules/espree",
+      "sha256": "26c95937762a3dc17a3934a0a2773c70259ba4bf28dab713c225e4af8eb9d349",
+      "source": "node_modules/espree/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/ac68116ae73740de4190892f334992e449a124600924ec761e64319d3aac9e6e.txt",
+      "component": "npm:node_modules/esquery",
+      "sha256": "ac68116ae73740de4190892f334992e449a124600924ec761e64319d3aac9e6e",
+      "source": "node_modules/esquery/license.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/0e74697a68cebdcd61502c30fe80ab7f9e341d995dcd452023654d57133534b1.txt",
+      "component": "npm:node_modules/estraverse",
+      "sha256": "0e74697a68cebdcd61502c30fe80ab7f9e341d995dcd452023654d57133534b1",
+      "source": "node_modules/estraverse/LICENSE.BSD"
+    },
+    {
+      "bundled_file": "compliance/license-texts/8a6dcbabe7179f9c8489c08a7d874d0f1e093ae7449e03756ccf87cb9d0e296e.txt",
+      "component": "npm:node_modules/estree-walker",
+      "sha256": "8a6dcbabe7179f9c8489c08a7d874d0f1e093ae7449e03756ccf87cb9d0e296e",
+      "source": "node_modules/estree-walker/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/0e74697a68cebdcd61502c30fe80ab7f9e341d995dcd452023654d57133534b1.txt",
+      "component": "npm:node_modules/esutils",
+      "sha256": "0e74697a68cebdcd61502c30fe80ab7f9e341d995dcd452023654d57133534b1",
+      "source": "node_modules/esutils/LICENSE.BSD"
+    },
+    {
+      "bundled_file": "compliance/license-texts/7c6cc83c84eaa249a85bf12fe3eedd831bb50c696e8890b5248223ae68c7b408.txt",
+      "component": "npm:node_modules/expect-type",
+      "sha256": "7c6cc83c84eaa249a85bf12fe3eedd831bb50c696e8890b5248223ae68c7b408",
+      "source": "node_modules/expect-type/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/7bf9b2de73a6b356761c948d0e9eeb4be6c1270bd04c79cd489c1e400ffdfc1a.txt",
+      "component": "npm:node_modules/fast-deep-equal",
+      "sha256": "7bf9b2de73a6b356761c948d0e9eeb4be6c1270bd04c79cd489c1e400ffdfc1a",
+      "source": "node_modules/fast-deep-equal/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a833d366242c298cf1b10263516572fb8dcbe68eb5072cdcac2b4546e2b4eb36.txt",
+      "component": "npm:node_modules/fast-json-stable-stringify",
+      "sha256": "a833d366242c298cf1b10263516572fb8dcbe68eb5072cdcac2b4546e2b4eb36",
+      "source": "node_modules/fast-json-stable-stringify/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/942a98cb8846a6354266193f173c1354615827fbb7d67f68399599dff12c4d6a.txt",
+      "component": "npm:node_modules/fast-levenshtein",
+      "sha256": "942a98cb8846a6354266193f173c1354615827fbb7d67f68399599dff12c4d6a",
+      "source": "node_modules/fast-levenshtein/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9a39f2aadab11a3697edd668ff2d8ad885b649737b7ab4d3bf12b34e5ada0c86.txt",
+      "component": "npm:node_modules/fdir",
+      "sha256": "9a39f2aadab11a3697edd668ff2d8ad885b649737b7ab4d3bf12b34e5ada0c86",
+      "source": "node_modules/fdir/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a0e2f73971f663b49d3c66cc6749fc88de0f475680ccf5b980a9cbcc0c52490f.txt",
+      "component": "npm:node_modules/file-entry-cache",
+      "sha256": "a0e2f73971f663b49d3c66cc6749fc88de0f475680ccf5b980a9cbcc0c52490f",
+      "source": "node_modules/file-entry-cache/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/find-up",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/find-up/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a6a23fb76d91d98669f5ed6eb58213df594ab2d56c9e981ae021b194e3d662a7.txt",
+      "component": "npm:node_modules/flat-cache",
+      "sha256": "a6a23fb76d91d98669f5ed6eb58213df594ab2d56c9e981ae021b194e3d662a7",
+      "source": "node_modules/flat-cache/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/148718606d34f467fd08a2176bb4c1ab275f999576f779368503d8d3e3642861.txt",
+      "component": "npm:node_modules/flatted",
+      "sha256": "148718606d34f467fd08a2176bb4c1ab275f999576f779368503d8d3e3642861",
+      "source": "node_modules/flatted/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2a8a5d6197bb97a018b8a190dd3ed853d750ca87c8e80c17aad41d6c6ff448e1.txt",
+      "component": "npm:node_modules/fsevents",
+      "sha256": "2a8a5d6197bb97a018b8a190dd3ed853d750ca87c8e80c17aad41d6c6ff448e1",
+      "source": "node_modules/fsevents/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/e3a956681ee067f971ac413994171b3d90ca801ec6324e76c9c55366cfe31cb0.txt",
+      "component": "npm:node_modules/gensync",
+      "sha256": "e3a956681ee067f971ac413994171b3d90ca801ec6324e76c9c55366cfe31cb0",
+      "source": "node_modules/gensync/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fc68eb8f1c8e1d6b8be50f3c177927e24791cae7dc251e6253a012f37926a30c.txt",
+      "component": "npm:node_modules/glob-parent",
+      "sha256": "fc68eb8f1c8e1d6b8be50f3c177927e24791cae7dc251e6253a012f37926a30c",
+      "source": "node_modules/glob-parent/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/globals",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/globals/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/has-flag",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/has-flag/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt",
+      "component": "npm:node_modules/hermes-estree",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": "node_modules/hermes-estree/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt",
+      "component": "npm:node_modules/hermes-parser",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": "node_modules/hermes-parser/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/528eec83cb836a0adda9f8fc3d6a2a70a710d6cc0be9a155f92212c8df28acfa.txt",
+      "component": "npm:node_modules/html-encoding-sniffer",
+      "sha256": "528eec83cb836a0adda9f8fc3d6a2a70a710d6cc0be9a155f92212c8df28acfa",
+      "source": "node_modules/html-encoding-sniffer/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/71368fd0f5b4129191e9afcd1e1ef2dc89a9090d3e4d80bbab92dafd032b3bef.txt",
+      "component": "npm:node_modules/http-proxy-agent",
+      "sha256": "71368fd0f5b4129191e9afcd1e1ef2dc89a9090d3e4d80bbab92dafd032b3bef",
+      "source": "node_modules/http-proxy-agent/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/8d8c55319c7729d57be811c747452636688d54f19701ee0752b6b15ad3771d9a.txt",
+      "component": "npm:node_modules/https-proxy-agent",
+      "sha256": "8d8c55319c7729d57be811c747452636688d54f19701ee0752b6b15ad3771d9a",
+      "source": "node_modules/https-proxy-agent/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9c94db23dc4b1e9aaee5d195668b916afc71efed54af226b66cf0ccc4389c1c0.txt",
+      "component": "npm:node_modules/ignore",
+      "sha256": "9c94db23dc4b1e9aaee5d195668b916afc71efed54af226b66cf0ccc4389c1c0",
+      "source": "node_modules/ignore/LICENSE-MIT"
+    },
+    {
+      "bundled_file": "compliance/license-texts/809e66de579fb7d92503848bbe6d1f348f4f6521a71e5d294fe7cc0c87a3b4ff.txt",
+      "component": "npm:node_modules/immediate",
+      "sha256": "809e66de579fb7d92503848bbe6d1f348f4f6521a71e5d294fe7cc0c87a3b4ff",
+      "source": "node_modules/immediate/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/import-fresh",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/import-fresh/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/indent-string",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/indent-string/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5ffe28e7ade7d8f10d85d5337a73fd793dac5c462fb9a28fbf8c5046c7fbca3b.txt",
+      "component": "npm:node_modules/inherits",
+      "sha256": "5ffe28e7ade7d8f10d85d5337a73fd793dac5c462fb9a28fbf8c5046c7fbca3b",
+      "source": "node_modules/inherits/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/73b5283588baa142c5baaef5f56d3e8fdea7a30b214e8c5737e87640f882453a.txt",
+      "component": "npm:node_modules/is-extglob",
+      "sha256": "73b5283588baa142c5baaef5f56d3e8fdea7a30b214e8c5737e87640f882453a",
+      "source": "node_modules/is-extglob/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4cd903859549d4b20b571041f96dfae1136ed079c476126268f9d7cc1b611150.txt",
+      "component": "npm:node_modules/is-glob",
+      "sha256": "4cd903859549d4b20b571041f96dfae1136ed079c476126268f9d7cc1b611150",
+      "source": "node_modules/is-glob/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a.txt",
+      "component": "npm:node_modules/is-potential-custom-element-name",
+      "sha256": "483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a",
+      "source": "node_modules/is-potential-custom-element-name/LICENSE-MIT.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt",
+      "component": "npm:node_modules/isexe",
+      "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+      "source": "node_modules/isexe/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2213d91c606205c71eb051a199478cdc2adde945893404d7f1421436dd6d5cc1.txt",
+      "component": "npm:node_modules/js-tokens",
+      "sha256": "2213d91c606205c71eb051a199478cdc2adde945893404d7f1421436dd6d5cc1",
+      "source": "node_modules/js-tokens/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a07bc24468b9654ce76a547d47a2db282d07733b715db4c73a98bd63961f9550.txt",
+      "component": "npm:node_modules/js-yaml",
+      "sha256": "a07bc24468b9654ce76a547d47a2db282d07733b715db4c73a98bd63961f9550",
+      "source": "node_modules/js-yaml/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/242d37e7cab25cbafc36cc973ee88f9345fddf066afe4f72b7ac3d9ad4e24cce.txt",
+      "component": "npm:node_modules/jsdom",
+      "sha256": "242d37e7cab25cbafc36cc973ee88f9345fddf066afe4f72b7ac3d9ad4e24cce",
+      "source": "node_modules/jsdom/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a.txt",
+      "component": "npm:node_modules/jsesc",
+      "sha256": "483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a",
+      "source": "node_modules/jsesc/LICENSE-MIT.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/715f1f0f2eb7688e53e4e958acdc7fc9e365ae3eaf26efc2604b93cc65fdc3f5.txt",
+      "component": "npm:node_modules/json-buffer",
+      "sha256": "715f1f0f2eb7688e53e4e958acdc7fc9e365ae3eaf26efc2604b93cc65fdc3f5",
+      "source": "node_modules/json-buffer/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/7bf9b2de73a6b356761c948d0e9eeb4be6c1270bd04c79cd489c1e400ffdfc1a.txt",
+      "component": "npm:node_modules/json-schema-traverse",
+      "sha256": "7bf9b2de73a6b356761c948d0e9eeb4be6c1270bd04c79cd489c1e400ffdfc1a",
+      "source": "node_modules/json-schema-traverse/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/435a6722c786b0a56fbe7387028f1d9d3f3a2d0fb615bb8fee118727c3f59b7b.txt",
+      "component": "npm:node_modules/json-stable-stringify-without-jsonify",
+      "sha256": "435a6722c786b0a56fbe7387028f1d9d3f3a2d0fb615bb8fee118727c3f59b7b",
+      "source": "node_modules/json-stable-stringify-without-jsonify/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/53e59feb13058722d977c699eb0407c7bce2f93c949b681bbd2ff31698535927.txt",
+      "component": "npm:node_modules/json5",
+      "sha256": "53e59feb13058722d977c699eb0407c7bce2f93c949b681bbd2ff31698535927",
+      "source": "node_modules/json5/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/566c953c6090b1218ca6217dd7359d45dde46581968586dc607d59a78af6a9c4.txt",
+      "component": "npm:node_modules/jszip",
+      "sha256": "566c953c6090b1218ca6217dd7359d45dde46581968586dc607d59a78af6a9c4",
+      "source": "node_modules/jszip/LICENSE.markdown"
+    },
+    {
+      "bundled_file": "compliance/license-texts/b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c.txt",
+      "component": "npm:node_modules/levn",
+      "sha256": "b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c",
+      "source": "node_modules/levn/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c81b0caa98593408b03125efa25efe622341ed87ae55561968828cd887d64a4.txt",
+      "component": "npm:node_modules/lie",
+      "sha256": "5c81b0caa98593408b03125efa25efe622341ed87ae55561968828cd887d64a4",
+      "source": "node_modules/lie/license.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/locate-path",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/locate-path/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/f71e8ed126b46346494aad5486874cd8f0aafe95092ed67d2e3cb6110f939abc.txt",
+      "component": "npm:node_modules/lodash.merge",
+      "sha256": "f71e8ed126b46346494aad5486874cd8f0aafe95092ed67d2e3cb6110f939abc",
+      "source": "node_modules/lodash.merge/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt",
+      "component": "npm:node_modules/lru-cache",
+      "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+      "source": "node_modules/lru-cache/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3c57143f22dac950efebf84002e360bba5458c7b90fe583b0667aaaef1a7256e.txt",
+      "component": "npm:node_modules/lucide-react",
+      "sha256": "3c57143f22dac950efebf84002e360bba5458c7b90fe583b0667aaaef1a7256e",
+      "source": "node_modules/lucide-react/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/433fc9dfe659dbfb1e91eed8351f13651e97bfa3ac6d03394c3d63f61d4bbc80.txt",
+      "component": "npm:node_modules/lz-string",
+      "sha256": "433fc9dfe659dbfb1e91eed8351f13651e97bfa3ac6d03394c3d63f61d4bbc80",
+      "source": "node_modules/lz-string/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/1cbe51b907662f6cb1492b16c359384a595180bf0e4d101603ed525e75c4e484.txt",
+      "component": "npm:node_modules/magic-string",
+      "sha256": "1cbe51b907662f6cb1492b16c359384a595180bf0e4d101603ed525e75c4e484",
+      "source": "node_modules/magic-string/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673.txt",
+      "component": "npm:node_modules/mdn-data",
+      "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673",
+      "source": "node_modules/mdn-data/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9638fa87f845af6cecc56fab498c1f74f4a98522d3b53377bedcbdb44b5a8dcc.txt",
+      "component": "npm:node_modules/min-indent",
+      "sha256": "9638fa87f845af6cecc56fab498c1f74f4a98522d3b53377bedcbdb44b5a8dcc",
+      "source": "node_modules/min-indent/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt",
+      "component": "npm:node_modules/minimatch",
+      "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+      "source": "node_modules/minimatch/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/1662fae9b5314d11cf51284e2dcd1f006a354f7343f08712a730fcff9a359801.txt",
+      "component": "npm:node_modules/ms",
+      "sha256": "1662fae9b5314d11cf51284e2dcd1f006a354f7343f08712a730fcff9a359801",
+      "source": "node_modules/ms/license.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/da4db1480d9beea3483a2eda5c53b22238d0827d57da162b48f122e04d2d9987.txt",
+      "component": "npm:node_modules/nanoid",
+      "sha256": "da4db1480d9beea3483a2eda5c53b22238d0827d57da162b48f122e04d2d9987",
+      "source": "node_modules/nanoid/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3706296ed611888111ceccc1dff4712844dea4bde0b185c82d718c3b69895abe.txt",
+      "component": "npm:node_modules/node-releases",
+      "sha256": "3706296ed611888111ceccc1dff4712844dea4bde0b185c82d718c3b69895abe",
+      "source": "node_modules/node-releases/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/ee48679d379ca6b4493d5e231094d85f818dd9be40b1a4f234fb7ff657ee35d9.txt",
+      "component": "npm:node_modules/obug",
+      "sha256": "ee48679d379ca6b4493d5e231094d85f818dd9be40b1a4f234fb7ff657ee35d9",
+      "source": "node_modules/obug/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c.txt",
+      "component": "npm:node_modules/optionator",
+      "sha256": "b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c",
+      "source": "node_modules/optionator/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/p-limit",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/p-limit/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/p-locate",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/p-locate/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539.txt",
+      "component": "npm:node_modules/pako",
+      "sha256": "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539",
+      "source": "node_modules/pako/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/parent-module",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/parent-module/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/8c535800331e1e4439835555b3f9edc7fe9dee2fab0d8bbbd5a982e8b8343d4d.txt",
+      "component": "npm:node_modules/parse5",
+      "sha256": "8c535800331e1e4439835555b3f9edc7fe9dee2fab0d8bbbd5a982e8b8343d4d",
+      "source": "node_modules/parse5/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/path-exists",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/path-exists/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/path-key",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/path-key/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/52e92576851154bad7737e90cc72818936f43665cb0e3f7428ed8edc8cc5709b.txt",
+      "component": "npm:node_modules/pathe",
+      "sha256": "52e92576851154bad7737e90cc72818936f43665cb0e3f7428ed8edc8cc5709b",
+      "source": "node_modules/pathe/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/6582629e2979466878f6014313dcc2f3756c9616148682227ce3063dde310750.txt",
+      "component": "npm:node_modules/picocolors",
+      "sha256": "6582629e2979466878f6014313dcc2f3756c9616148682227ce3063dde310750",
+      "source": "node_modules/picocolors/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9.txt",
+      "component": "npm:node_modules/picomatch",
+      "sha256": "d0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9",
+      "source": "node_modules/picomatch/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb.txt",
+      "component": "npm:node_modules/playwright",
+      "sha256": "45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
+      "source": "node_modules/playwright/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d.txt",
+      "component": "npm:node_modules/playwright",
+      "sha256": "6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d",
+      "source": "node_modules/playwright/NOTICE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb.txt",
+      "component": "npm:node_modules/playwright-core",
+      "sha256": "45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
+      "source": "node_modules/playwright-core/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d.txt",
+      "component": "npm:node_modules/playwright-core",
+      "sha256": "6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d",
+      "source": "node_modules/playwright-core/NOTICE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5be1f3465bba68a626777f984878814aaf35e7ef8e9fd314d469bcf887050fb8.txt",
+      "component": "npm:node_modules/postcss",
+      "sha256": "5be1f3465bba68a626777f984878814aaf35e7ef8e9fd314d469bcf887050fb8",
+      "source": "node_modules/postcss/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c.txt",
+      "component": "npm:node_modules/prelude-ls",
+      "sha256": "b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c",
+      "source": "node_modules/prelude-ls/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85.txt",
+      "component": "npm:node_modules/pretty-format",
+      "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
+      "source": "node_modules/pretty-format/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/pretty-format/node_modules/ansi-styles",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/pretty-format/node_modules/ansi-styles/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/ecdccbcf39024f624ded480c01c0b25458e1eca8f26ecf040933865ce56d9a4f.txt",
+      "component": "npm:node_modules/process-nextick-args",
+      "sha256": "ecdccbcf39024f624ded480c01c0b25458e1eca8f26ecf040933865ce56d9a4f",
+      "source": "node_modules/process-nextick-args/license.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a.txt",
+      "component": "npm:node_modules/punycode",
+      "sha256": "483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a",
+      "source": "node_modules/punycode/LICENSE-MIT.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt",
+      "component": "npm:node_modules/react",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": "node_modules/react/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt",
+      "component": "npm:node_modules/react-dom",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": "node_modules/react-dom/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/e8eeb472f0a5889c2c51625b86a3f9b8630680adb9f49a125352e2e426392780.txt",
+      "component": "npm:node_modules/react-hook-form",
+      "sha256": "e8eeb472f0a5889c2c51625b86a3f9b8630680adb9f49a125352e2e426392780",
+      "source": "node_modules/react-hook-form/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85.txt",
+      "component": "npm:node_modules/react-is",
+      "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
+      "source": "node_modules/react-is/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt",
+      "component": "npm:node_modules/react-refresh",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": "node_modules/react-refresh/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/77c9ee6a9c5d5782fb0c50b50d101189116314c14f7df0a1b0d385fc96a7ba49.txt",
+      "component": "npm:node_modules/react-router",
+      "sha256": "77c9ee6a9c5d5782fb0c50b50d101189116314c14f7df0a1b0d385fc96a7ba49",
+      "source": "node_modules/react-router/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/77c9ee6a9c5d5782fb0c50b50d101189116314c14f7df0a1b0d385fc96a7ba49.txt",
+      "component": "npm:node_modules/react-router-dom",
+      "sha256": "77c9ee6a9c5d5782fb0c50b50d101189116314c14f7df0a1b0d385fc96a7ba49",
+      "source": "node_modules/react-router-dom/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/ec62dc96da0099b87f4511736c87309335527fb7031639493e06c95728dc8c54.txt",
+      "component": "npm:node_modules/readable-stream",
+      "sha256": "ec62dc96da0099b87f4511736c87309335527fb7031639493e06c95728dc8c54",
+      "source": "node_modules/readable-stream/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/redent",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/redent/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/6ee0feb1f6ef996ff5a68600f8cf98909cf412d39ef3cdceaefd87d636fa1b7f.txt",
+      "component": "npm:node_modules/require-from-string",
+      "sha256": "6ee0feb1f6ef996ff5a68600f8cf98909cf412d39ef3cdceaefd87d636fa1b7f",
+      "source": "node_modules/require-from-string/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/resolve-from",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/resolve-from/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/fa1bd040c5bdeefe65b3821cebf474f2733ce65df13089bd151dda1778e62fe8.txt",
+      "component": "npm:node_modules/rollup",
+      "sha256": "fa1bd040c5bdeefe65b3821cebf474f2733ce65df13089bd151dda1778e62fe8",
+      "source": "node_modules/rollup/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c7cc929b57080f4b9d0c6cf57669f0463fc5b39906344dfc8d3bc43426b30eac.txt",
+      "component": "npm:node_modules/safe-buffer",
+      "sha256": "c7cc929b57080f4b9d0c6cf57669f0463fc5b39906344dfc8d3bc43426b30eac",
+      "source": "node_modules/safe-buffer/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt",
+      "component": "npm:node_modules/scheduler",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": "node_modules/scheduler/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt",
+      "component": "npm:node_modules/semver",
+      "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+      "source": "node_modules/semver/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c5c6c5183a789d122f267c405f685037efb87e27fcde28ab1dd7378a2d2f5962.txt",
+      "component": "npm:node_modules/set-cookie-parser",
+      "sha256": "c5c6c5183a789d122f267c405f685037efb87e27fcde28ab1dd7378a2d2f5962",
+      "source": "node_modules/set-cookie-parser/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c4b4ad3a5746f1f5249a6dd90396ec519264e1bb02e01e48a6522c48a3a97cb4.txt",
+      "component": "npm:node_modules/setimmediate",
+      "sha256": "c4b4ad3a5746f1f5249a6dd90396ec519264e1bb02e01e48a6522c48a3a97cb4",
+      "source": "node_modules/setimmediate/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/69dee148a2cc470554dfa7142e830662062394d0fe67cddd379aba90dc60d6b3.txt",
+      "component": "npm:node_modules/shebang-command",
+      "sha256": "69dee148a2cc470554dfa7142e830662062394d0fe67cddd379aba90dc60d6b3",
+      "source": "node_modules/shebang-command/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/shebang-regex",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/shebang-regex/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3bdddf0b9b08aaa2fe4365b803fc958ed32c0597ca0bd727be8d9fcb8b248d18.txt",
+      "component": "npm:node_modules/siginfo",
+      "sha256": "3bdddf0b9b08aaa2fe4365b803fc958ed32c0597ca0bd727be8d9fcb8b248d18",
+      "source": "node_modules/siginfo/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/6cb0631f71c7749763fd3dd1d5bee52dd1070ec17f2edc1710079ad070bd2fbd.txt",
+      "component": "npm:node_modules/source-map-js",
+      "sha256": "6cb0631f71c7749763fd3dd1d5bee52dd1070ec17f2edc1710079ad070bd2fbd",
+      "source": "node_modules/source-map-js/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a6f36438e46fb911859f3b9c4cad045ba64e1af3d8f4512c60258fa2d7552d28.txt",
+      "component": "npm:node_modules/std-env",
+      "sha256": "a6f36438e46fb911859f3b9c4cad045ba64e1af3d8f4512c60258fa2d7552d28",
+      "source": "node_modules/std-env/LICENCE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/11f2aafb37d06b3ee5bdaf06e9811141d0da05263c316f3d627f45c20d43261b.txt",
+      "component": "npm:node_modules/string_decoder",
+      "sha256": "11f2aafb37d06b3ee5bdaf06e9811141d0da05263c316f3d627f45c20d43261b",
+      "source": "node_modules/string_decoder/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/strip-indent",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/strip-indent/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/strip-json-comments",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/strip-json-comments/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
+      "component": "npm:node_modules/supports-color",
+      "sha256": "48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0",
+      "source": "node_modules/supports-color/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/9ea1eccdabe469767a9edb9249a840b2461cf91b2434bf8a3e2fc1f414311cb1.txt",
+      "component": "npm:node_modules/symbol-tree",
+      "sha256": "9ea1eccdabe469767a9edb9249a840b2461cf91b2434bf8a3e2fc1f414311cb1",
+      "source": "node_modules/symbol-tree/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/cebc084d54e6dd99e53292ddb4bc1cdb63d9bfcd9ce438fe3aa6eb106d79e2ea.txt",
+      "component": "npm:node_modules/tinybench",
+      "sha256": "cebc084d54e6dd99e53292ddb4bc1cdb63d9bfcd9ce438fe3aa6eb106d79e2ea",
+      "source": "node_modules/tinybench/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/f95f668fe64081ddb4153b322e34fdd719b991285ed08177d5ad7133b7988d92.txt",
+      "component": "npm:node_modules/tinyexec",
+      "sha256": "f95f668fe64081ddb4153b322e34fdd719b991285ed08177d5ad7133b7988d92",
+      "source": "node_modules/tinyexec/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/22c68811e174cbbfb3813d4135918df4f540959c14d872e601d9abe83d3cde8f.txt",
+      "component": "npm:node_modules/tinyglobby",
+      "sha256": "22c68811e174cbbfb3813d4135918df4f540959c14d872e601d9abe83d3cde8f",
+      "source": "node_modules/tinyglobby/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/cebc084d54e6dd99e53292ddb4bc1cdb63d9bfcd9ce438fe3aa6eb106d79e2ea.txt",
+      "component": "npm:node_modules/tinyrainbow",
+      "sha256": "cebc084d54e6dd99e53292ddb4bc1cdb63d9bfcd9ce438fe3aa6eb106d79e2ea",
+      "source": "node_modules/tinyrainbow/LICENCE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c64182d48160db948b6aa97a984f1a32974ce4d2053900361264cd33853796cb.txt",
+      "component": "npm:node_modules/tldts",
+      "sha256": "c64182d48160db948b6aa97a984f1a32974ce4d2053900361264cd33853796cb",
+      "source": "node_modules/tldts/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c64182d48160db948b6aa97a984f1a32974ce4d2053900361264cd33853796cb.txt",
+      "component": "npm:node_modules/tldts-core",
+      "sha256": "c64182d48160db948b6aa97a984f1a32974ce4d2053900361264cd33853796cb",
+      "source": "node_modules/tldts-core/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/22ec6791c91ba42c0516a05f4cbdde019aae4687f8a38c5ca7e8a69ee68f851d.txt",
+      "component": "npm:node_modules/tough-cookie",
+      "sha256": "22ec6791c91ba42c0516a05f4cbdde019aae4687f8a38c5ca7e8a69ee68f851d",
+      "source": "node_modules/tough-cookie/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/499d6d466d064e0460427967a344e2a32fcb86ea8c6cd1a285ec4f1fa03fba67.txt",
+      "component": "npm:node_modules/tr46",
+      "sha256": "499d6d466d064e0460427967a344e2a32fcb86ea8c6cd1a285ec4f1fa03fba67",
+      "source": "node_modules/tr46/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/76c9d5f5ea942054715c026f33f8717c9e24603196a3737b8899afa216bcbdab.txt",
+      "component": "npm:node_modules/ts-api-utils",
+      "sha256": "76c9d5f5ea942054715c026f33f8717c9e24603196a3737b8899afa216bcbdab",
+      "source": "node_modules/ts-api-utils/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c.txt",
+      "component": "npm:node_modules/type-check",
+      "sha256": "b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c",
+      "source": "node_modules/type-check/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47.txt",
+      "component": "npm:node_modules/typescript",
+      "sha256": "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47",
+      "source": "node_modules/typescript/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0.txt",
+      "component": "npm:node_modules/typescript-eslint",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0",
+      "source": "node_modules/typescript-eslint/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a6db8096b2707bc0102d256917d4d33f298ba36d8c3f25de067a2b5bb379db27.txt",
+      "component": "npm:node_modules/undici-types",
+      "sha256": "a6db8096b2707bc0102d256917d4d33f298ba36d8c3f25de067a2b5bb379db27",
+      "source": "node_modules/undici-types/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/c414dde36704bd9c8a76c7aa2921b19270ff9abeb478ea0050250d16cf29b0f6.txt",
+      "component": "npm:node_modules/update-browserslist-db",
+      "sha256": "c414dde36704bd9c8a76c7aa2921b19270ff9abeb478ea0050250d16cf29b0f6",
+      "source": "node_modules/update-browserslist-db/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/0af366eff4c01ec147c9c61ea9e8ffad64a4294754c9d79355f3fd1b97cb2fb9.txt",
+      "component": "npm:node_modules/uri-js",
+      "sha256": "0af366eff4c01ec147c9c61ea9e8ffad64a4294754c9d79355f3fd1b97cb2fb9",
+      "source": "node_modules/uri-js/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/0154425673db15cdfa80ecba2c9b1f1a867f7197a006764712849bfc3a93cbb7.txt",
+      "component": "npm:node_modules/util-deprecate",
+      "sha256": "0154425673db15cdfa80ecba2c9b1f1a867f7197a006764712849bfc3a93cbb7",
+      "source": "node_modules/util-deprecate/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a77a1c089806b39ad339535bdf3677f636c91d96693e8ad7b11fe733f650ea64.txt",
+      "component": "npm:node_modules/vite",
+      "sha256": "a77a1c089806b39ad339535bdf3677f636c91d96693e8ad7b11fe733f650ea64",
+      "source": "node_modules/vite/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2a8a5d6197bb97a018b8a190dd3ed853d750ca87c8e80c17aad41d6c6ff448e1.txt",
+      "component": "npm:node_modules/vite/node_modules/fsevents",
+      "sha256": "2a8a5d6197bb97a018b8a190dd3ed853d750ca87c8e80c17aad41d6c6ff448e1",
+      "source": "node_modules/vite/node_modules/fsevents/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/881d660c26831481b697e39724d4a35c9f86e07b67156d4aeb693a0b39910435.txt",
+      "component": "npm:node_modules/vitest",
+      "sha256": "881d660c26831481b697e39724d4a35c9f86e07b67156d4aeb693a0b39910435",
+      "source": "node_modules/vitest/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/ab654de803cdaa9e2819ab2e934bdf7f757e308649ec231d78e80e92425cdc34.txt",
+      "component": "npm:node_modules/w3c-xmlserializer",
+      "sha256": "ab654de803cdaa9e2819ab2e934bdf7f757e308649ec231d78e80e92425cdc34",
+      "source": "node_modules/w3c-xmlserializer/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a889cc4dbee2ae172c179856b25d75b0b7a5a136e1b97109b9b590b2ff1a879c.txt",
+      "component": "npm:node_modules/webidl-conversions",
+      "sha256": "a889cc4dbee2ae172c179856b25d75b0b7a5a136e1b97109b9b590b2ff1a879c",
+      "source": "node_modules/webidl-conversions/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/528eec83cb836a0adda9f8fc3d6a2a70a710d6cc0be9a155f92212c8df28acfa.txt",
+      "component": "npm:node_modules/whatwg-mimetype",
+      "sha256": "528eec83cb836a0adda9f8fc3d6a2a70a710d6cc0be9a155f92212c8df28acfa",
+      "source": "node_modules/whatwg-mimetype/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/db480f236292a093e77a83c35431a8496624e1e664a3547768a9ce2bdde39877.txt",
+      "component": "npm:node_modules/whatwg-url",
+      "sha256": "db480f236292a093e77a83c35431a8496624e1e664a3547768a9ce2bdde39877",
+      "source": "node_modules/whatwg-url/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt",
+      "component": "npm:node_modules/which",
+      "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+      "source": "node_modules/which/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/6a134e51aa31496c15a741592fc5d782b2dbf8d8b6b8524e15c8520ae0cd6374.txt",
+      "component": "npm:node_modules/why-is-node-running",
+      "sha256": "6a134e51aa31496c15a741592fc5d782b2dbf8d8b6b8524e15c8520ae0cd6374",
+      "source": "node_modules/why-is-node-running/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/73b5283588baa142c5baaef5f56d3e8fdea7a30b214e8c5737e87640f882453a.txt",
+      "component": "npm:node_modules/word-wrap",
+      "sha256": "73b5283588baa142c5baaef5f56d3e8fdea7a30b214e8c5737e87640f882453a",
+      "source": "node_modules/word-wrap/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef.txt",
+      "component": "npm:node_modules/ws",
+      "sha256": "2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef",
+      "source": "node_modules/ws/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9.txt",
+      "component": "npm:node_modules/xml-name-validator",
+      "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+      "source": "node_modules/xml-name-validator/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/45d196313c2647d313cc65ca9b093d2d6974b64d35ee7346f2c60c9d518dff2c.txt",
+      "component": "npm:node_modules/xmlchars",
+      "sha256": "45d196313c2647d313cc65ca9b093d2d6974b64d35ee7346f2c60c9d518dff2c",
+      "source": "node_modules/xmlchars/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt",
+      "component": "npm:node_modules/yallist",
+      "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+      "source": "node_modules/yallist/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/yocto-queue",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/yocto-queue/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/3f1189b28e3866e0d979968d466b78f813f76827cfdca1fbb124cc0a5c8841f8.txt",
+      "component": "npm:node_modules/zod",
+      "sha256": "3f1189b28e3866e0d979968d466b78f813f76827cfdca1fbb124cc0a5c8841f8",
+      "source": "node_modules/zod/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/03cc9a630489a2544b799548a0e8b134f382fe09fa06dc22b339091b28b8f4a8.txt",
+      "component": "npm:node_modules/zod-validation-error",
+      "sha256": "03cc9a630489a2544b799548a0e8b134f382fe09fa06dc22b339091b28b8f4a8",
+      "source": "node_modules/zod-validation-error/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/1ede5b2be42015a43ead717974093bf1accdd4b3cb43aaf6a9b2f7bf8117d591.txt",
+      "component": "locked:upstream:NGINX-BSD-2-Clause",
+      "sha256": "1ede5b2be42015a43ead717974093bf1accdd4b3cb43aaf6a9b2f7bf8117d591",
+      "source": "compliance/upstream-license-texts/NGINX-BSD-2-Clause.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/d5642d03458c1add44c3e1ff16c382245dcd19ea066ac049cc2bb034a21eebd7.txt",
+      "component": "locked:upstream:PostgreSQL",
+      "sha256": "d5642d03458c1add44c3e1ff16c382245dcd19ea066ac049cc2bb034a21eebd7",
+      "source": "compliance/upstream-license-texts/PostgreSQL.txt"
+    }
+  ]
+}

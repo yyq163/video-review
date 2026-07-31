@@ -206,8 +206,16 @@ export interface FinalizationDTO {
   version_id: string;
   version_no: number;
   original_media: OriginalMediaSnapshotDTO;
-  status: "active";
+  status: "active" | "revoked";
   finalized_at: string;
+  revoked_at?: string | null;
+}
+
+export interface FinalizationRevocationDTO {
+  finalization: FinalizationDTO;
+  review_item: ReviewItemDTO;
+  cleanup_status: "pending" | "failed" | "complete";
+  invalidated_package_ids: string[];
 }
 
 export interface PackageSnapshotItem {
@@ -223,7 +231,7 @@ export interface PackageSnapshotItem {
 export interface PackageSnapshotDTO {
   id: string;
   project_ref_id: string;
-  status: "preparing" | "ready" | "failed" | "expired";
+  status: "preparing" | "ready" | "failed" | "expired" | "invalidated";
   package_filename: string;
   expires_at: string;
   file_count: number;

@@ -33,6 +33,10 @@ from backend.app.safe_files import (
     unlink_regular_file_if_identity,
 )
 from backend.app.settings import Settings, get_database_settings
+from backend.app.telemetry_metrics import (
+    observe_package_task,
+    start_worker_metrics_server,
+)
 
 LOGGER = logging.getLogger(__name__)
 PACKAGE_BUILD_BATCH_SIZE = 1
@@ -150,20 +154,26 @@ def process_package_snapshot(package_id: str) -> str:
 
 
 def _process_package_snapshot(package_id: str, settings: Settings) -> str:
+    started_at = time.monotonic()
+
+    def observed(status: str, failure_code: str = "") -> str:
+        observe_package_task(status, time.monotonic() - started_at, failure_code)
+        return status
+
     with _worker_session() as lookup_session:
         project_ref_id = lookup_session.scalar(select(FinalCutPackageSnapshotModel.project_ref_id).where(FinalCutPackageSnapshotModel.id == package_id))
     if project_ref_id is None:
-        return "skipped"
+        return observed("skipped")
     context = _worker_context(project_ref_id)
     with _package_build_lock(database_module.engine) as lock_acquired:
         if not lock_acquired:
-            return "skipped"
+            return observed("skipped")
         with _worker_session() as claim_session:
             claim_repository = SqlAlchemyReviewRepository(claim_session, settings)
             claim_status, claim = claim_repository.claim_package_build(package_id, context)
             claim_session.commit()
         if claim_status != "claimed" or claim is None:
-            return claim_status
+            return observed(claim_status)
         try:
             artifact = claim_repository.build_prepared_package(claim)
         except TimeoutError:
@@ -175,17 +185,19 @@ def _process_package_snapshot(package_id: str, settings: Settings) -> str:
                 storage_reclaimed=_package_staging_absent(claim),
             )
             if timeout_status == "failed":
-                return "failed"
+                return observed("failed", "PACKAGE_BUILD_TIMEOUT")
+            observed(timeout_status, "PACKAGE_BUILD_TIMEOUT")
             raise
         except (ReviewError, UnsafeFilePathError) as exc:
             error_code = exc.code if isinstance(exc, ReviewError) else "STORAGE_UNAVAILABLE"
-            return _record_build_failure(
+            status = _record_build_failure(
                 claim,
                 context,
                 error_code,
                 retryable=False,
                 storage_reclaimed=_package_staging_absent(claim),
             )
+            return observed(status, error_code)
         except Exception as exc:
             LOGGER.error(
                 "package_build_unexpected_failure",
@@ -198,24 +210,26 @@ def _process_package_snapshot(package_id: str, settings: Settings) -> str:
                 retryable=True,
                 storage_reclaimed=_package_staging_absent(claim),
             )
-            return "failed" if failure_status == "failed" else "skipped"
+            status = "failed" if failure_status == "failed" else "skipped"
+            return observed(status, "PACKAGE_BUILD_FAILED")
         with _worker_session() as publish_session:
             publish_repository = SqlAlchemyReviewRepository(publish_session, settings)
             publish_status = publish_repository.publish_prepared_package(artifact, context)
             publish_session.commit()
         if publish_status == "ready":
-            return "ready"
+            return observed("ready")
         storage_reclaimed = _discard_artifact(artifact)
         if publish_status == "skipped":
-            return "skipped"
+            return observed("skipped")
         error_code = "FILE_TOO_LARGE" if publish_status == "quota_exceeded" else "STORAGE_UNAVAILABLE"
-        return _record_build_failure(
+        status = _record_build_failure(
             claim,
             context,
             error_code,
             retryable=False,
             storage_reclaimed=storage_reclaimed,
         )
+        return observed(status, error_code)
 
 
 def process_pending_packages(batch_size: int = PACKAGE_BUILD_BATCH_SIZE) -> dict[str, int]:
@@ -331,6 +345,7 @@ def main() -> int:
     if args.command == "once":
         print(json.dumps(process_pending_packages(), sort_keys=True), flush=True)
         return 0
+    start_worker_metrics_server(9101)
     try:
         run_package_worker_loop(args.interval_seconds, cycle_timeout_seconds=args.cycle_timeout_seconds)
     except RuntimeError as exc:

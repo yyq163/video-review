@@ -1,13 +1,13 @@
 import type {
   FinalizationRecord,
+  FinalizationRevocation,
   ProjectRefId,
   ReviewItemId,
-  ReviewVersion,
   VersionId,
 } from '../contracts/types';
 import { invariant } from '../core/errors';
 import { createUuid } from '../core/uuid';
-import { cloneFinalization, cloneVersion, nowIso } from './in-memory-review-clones';
+import { cloneFinalization, nowIso } from './in-memory-review-clones';
 import type { InMemoryReviewStore } from './in-memory-review-store';
 
 interface ReviewTransitionInput {
@@ -18,29 +18,6 @@ interface ReviewTransitionInput {
 
 export class InMemoryReviewFinalizations {
   constructor(private readonly store: InMemoryReviewStore) {}
-
-  readonly requestChanges = async (input: ReviewTransitionInput): Promise<ReviewVersion> => {
-    this.store.assertProjectWritable(input.projectRefId);
-    const item = this.store.getItem(input.projectRefId, input.reviewItemId);
-    invariant(item.currentVersionId === input.versionId, '只能对当前版本要求修改', 'NOT_CURRENT_VERSION');
-    invariant(item.status !== 'finalized', '已定稿后不能要求修改', 'FINALIZED_READONLY');
-    invariant(item.status === 'in_review', '只有审阅中版本可以要求修改', 'INVALID_STATUS_TRANSITION');
-    const version = this.store.getVersion(input.projectRefId, input.reviewItemId, input.versionId);
-    const unresolved = this.store
-      .getIssuesForVersion(input.projectRefId, input.reviewItemId, input.versionId)
-      .filter((issue) => issue.status === 'unresolved');
-    invariant(unresolved.length > 0, '要求修改必须存在当前版本未解决意见', 'NO_UNRESOLVED_ISSUES');
-    const timestamp = nowIso();
-    const nextVersion: ReviewVersion = {
-      ...version,
-      status: 'changes_requested',
-      requestedChangesAt: timestamp,
-    };
-    this.store.versions.set(version.versionId, nextVersion);
-    this.store.items.set(item.reviewItemId, { ...item, status: 'changes_requested', updatedAt: timestamp });
-    this.store.emitChange();
-    return cloneVersion(nextVersion);
-  };
 
   readonly finalizeCurrentVersion = async (input: ReviewTransitionInput): Promise<FinalizationRecord> => {
     this.store.assertProjectWritable(input.projectRefId);
@@ -76,5 +53,35 @@ export class InMemoryReviewFinalizations {
     });
     this.store.emitChange();
     return cloneFinalization(finalization);
+  };
+
+  readonly revokeFinalization = async (input: {
+    projectRefId: ProjectRefId;
+    reviewItemId: ReviewItemId;
+  }): Promise<FinalizationRevocation> => {
+    this.store.assertProjectWritable(input.projectRefId);
+    const item = this.store.getItem(input.projectRefId, input.reviewItemId);
+    invariant(item.status === 'finalized' && item.activeFinalizationId, '当前条目未定稿', 'INVALID_STATUS_TRANSITION');
+    const finalization = this.store.finalizations.get(item.activeFinalizationId);
+    invariant(finalization, '定稿记录不存在', 'RESOURCE_NOT_FOUND');
+    const timestamp = nowIso();
+    const revoked = { ...finalization, status: 'revoked' as const, revokedAt: timestamp };
+    const updatedItem = {
+      ...item,
+      activeFinalizationId: null,
+      status: 'in_review' as const,
+      updatedAt: timestamp,
+    };
+    const version = this.store.getVersion(input.projectRefId, input.reviewItemId, item.currentVersionId);
+    this.store.finalizations.set(revoked.finalizationId, revoked);
+    this.store.items.set(updatedItem.reviewItemId, updatedItem);
+    this.store.versions.set(version.versionId, { ...version, status: 'in_review' });
+    this.store.emitChange();
+    return {
+      finalization: cloneFinalization(revoked),
+      reviewItem: { ...updatedItem },
+      cleanupStatus: 'complete',
+      invalidatedPackageIds: [],
+    };
   };
 }

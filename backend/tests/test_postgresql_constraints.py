@@ -2018,7 +2018,7 @@ def test_postgresql_orphan_cleanup_skips_put_transaction_and_preserves_committed
         get_settings.cache_clear()
 
 
-def test_postgresql_issue_delete_and_request_changes_serialize() -> None:
+def test_postgresql_issue_delete_and_new_issue_workflow_serialize() -> None:
     database_url = _postgres_database_url()
     _prepare_postgresql_schema(database_url)
     engine = create_engine(database_url)
@@ -2098,12 +2098,14 @@ def test_postgresql_issue_delete_and_request_changes_serialize() -> None:
 
         with pytest.raises(DBAPIError) as exc_info:
             SqlAlchemyReviewRepository(blocked_session, get_settings()).execute(
-                "RequestChanges",
+                "CreateReviewIssue",
                 {
                     "project_ref_id": project_id,
                     "review_item_id": item_id,
                     "version_id": version_id,
-                    "summary": "must serialize",
+                    "content": "must serialize",
+                    "timestamp_ms": 2,
+                    "frame_number": 2,
                 },
                 context,
                 blocked_item.lock_version,
@@ -2119,24 +2121,26 @@ def test_postgresql_issue_delete_and_request_changes_serialize() -> None:
     with SessionLocal() as request_session:
         request_item = request_session.get(ReviewItemModel, item_id)
         assert request_item is not None
-        with pytest.raises(ReviewError) as review_error_info:
-            SqlAlchemyReviewRepository(request_session, get_settings()).execute(
-                "RequestChanges",
-                {
-                    "project_ref_id": project_id,
-                    "review_item_id": item_id,
-                    "version_id": version_id,
-                    "summary": "must serialize",
-                },
-                context,
-                request_item.lock_version,
-            )
-        assert review_error_info.value.code == "NO_UNRESOLVED_ISSUE"
+        created = SqlAlchemyReviewRepository(request_session, get_settings()).execute(
+            "CreateReviewIssue",
+            {
+                "project_ref_id": project_id,
+                "review_item_id": item_id,
+                "version_id": version_id,
+                "content": "after delete",
+                "timestamp_ms": 3,
+                "frame_number": 3,
+            },
+            context,
+            request_item.lock_version,
+        )
+        assert created["status"] == "unresolved"
+        request_session.commit()
 
     with SessionLocal() as check_session:
         stored_item = check_session.get(ReviewItemModel, item_id)
         stored_issue = check_session.get(ReviewIssueModel, issue_id)
-        assert stored_item is not None and stored_item.workflow_status == "in_review"
+        assert stored_item is not None and stored_item.workflow_status == "changes_requested"
         assert stored_issue is not None and stored_issue.deleted_at is not None
 
     delete_session.close()

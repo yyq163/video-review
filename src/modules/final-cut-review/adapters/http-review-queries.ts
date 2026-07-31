@@ -50,9 +50,7 @@ export class HttpReviewQueries {
       `/api/v1/final-cut-review/projects/${projectRefId}/items/${reviewItemId}/versions/${versionId}/issues`,
       options,
     );
-    return Promise.all(
-      issues.map((issue) => this.issueWithMessages(projectRefId, reviewItemId, versionId, issue.id, issue, options)),
-    );
+    return issues.map((issue) => issueFromDto(issue));
   }
 
   async issueWithMessages(

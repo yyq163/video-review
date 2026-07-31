@@ -1,6 +1,5 @@
 import type { ProjectDTO, ReviewItemDTO, ReviewVersionDTO } from '../contracts-generated/backend-contract';
-import type { FinalizationRecord, ProjectDetail } from '../contracts/types';
-import type { ReviewApiPort } from '../ports';
+import type { ReviewApiPort, ReviewProjectSummary, ReviewProjectSummaryItem } from '../ports';
 import {
   itemFromDto,
   projectFromDto,
@@ -12,7 +11,9 @@ import type { HttpReviewTransport } from './http-review-transport';
 type ProjectApi = Pick<
   ReviewApiPort,
   | 'listProjects'
-  | 'getProjectDetail'
+  | 'getProjectSummary'
+  | 'getVersionIssues'
+  | 'getIssueDetail'
   | 'getWorkspace'
   | 'createProject'
   | 'updateProject'
@@ -22,8 +23,124 @@ type ProjectApi = Pick<
   | 'deleteProject'
 >;
 
+interface ReviewProjectSummaryDTO {
+  project: ProjectDTO;
+  items: ReviewProjectSummaryItemDTO[];
+}
+
+interface ReviewProjectSummaryItemDTO {
+  id: string;
+  project_ref_id: string;
+  item_code: string;
+  episode_no?: number | null;
+  title: string;
+  workflow_state: ReviewProjectSummaryItem['status'];
+  lock_version: number;
+  current_version_id: string;
+  current_version: {
+    id: string;
+    version_no: number;
+    version_label: string;
+    duration_ms: number;
+    file_size: number;
+    playback_status: 'pending' | 'ready' | 'failed';
+    playback_url: string | null;
+    thumbnail_status: 'pending' | 'ready' | 'failed';
+    thumbnail_url: string | null;
+  };
+  unresolved_current_version_count: number;
+  finalization: {
+    id: string;
+    status: 'active' | 'revoked';
+    revoked_at?: string | null;
+  } | null;
+  revocation_cleanup_status: 'none' | 'pending' | 'failed' | 'complete';
+  bulk_delete: {
+    eligible: boolean;
+    locked: boolean;
+    reason: string | null;
+  };
+}
+
 function editableItemFromDto(dto: ReviewItemDTO) {
   return Object.assign(itemFromDto(dto), { itemCode: dto.item_code });
+}
+
+function protectedMediaUrl(
+  baseUrl: string,
+  url: string | null,
+  ready: boolean,
+  expectedPath: string,
+): string | null {
+  if (!ready || url !== expectedPath) return null;
+  return `${baseUrl.replace(/\/+$/, '')}${expectedPath}`;
+}
+
+function summaryItemFromDto(
+  dto: ReviewProjectSummaryItemDTO,
+  project: ReviewProjectSummary['project'],
+  baseUrl: string,
+): ReviewProjectSummaryItem {
+  const finalization = dto.finalization
+    ? {
+        id: dto.finalization.id,
+        status: dto.finalization.status,
+        revokedAt: dto.finalization.revoked_at ?? null,
+      }
+    : null;
+  const playbackPath =
+    `/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.id}/versions/${dto.current_version.id}/stream`;
+  const thumbnailPath =
+    `/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.id}/versions/${dto.current_version.id}/thumbnail`;
+  const playbackUrl = protectedMediaUrl(
+    baseUrl,
+    dto.current_version.playback_url,
+    dto.current_version.playback_status === 'ready',
+    playbackPath,
+  );
+  const thumbnailUrl = protectedMediaUrl(
+    baseUrl,
+    dto.current_version.thumbnail_url,
+    dto.current_version.thumbnail_status === 'ready',
+    thumbnailPath,
+  );
+  return {
+    reviewItemId: dto.id,
+    projectRefId: dto.project_ref_id,
+    itemCode: dto.item_code,
+    title: dto.title,
+    episode: dto.episode_no?.toString() ?? dto.item_code,
+    currentVersionId: dto.current_version_id,
+    activeFinalizationId:
+      finalization?.status === 'active'
+        ? finalization.id
+        : null,
+    status: dto.workflow_state,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+    lockVersion: dto.lock_version,
+    currentVersion: {
+      id: dto.current_version.id,
+      versionNo: dto.current_version.version_no,
+      versionLabel: dto.current_version.version_label,
+      durationMs: dto.current_version.duration_ms,
+      fileSize: dto.current_version.file_size,
+      playbackStatus:
+        dto.current_version.playback_status === 'ready' && !playbackUrl
+          ? 'failed'
+          : dto.current_version.playback_status,
+      playbackUrl,
+      thumbnailStatus:
+        dto.current_version.thumbnail_status === 'ready' && !thumbnailUrl
+          ? 'failed'
+          : dto.current_version.thumbnail_status,
+      thumbnailUrl,
+    },
+    unresolvedCurrentVersionCount: dto.unresolved_current_version_count,
+    finalization,
+    revocationCleanupStatus: dto.revocation_cleanup_status,
+    bulkDelete: { ...dto.bulk_delete },
+  };
 }
 
 export class HttpReviewProjects implements ProjectApi {
@@ -40,46 +157,35 @@ export class HttpReviewProjects implements ProjectApi {
     return projects.map(projectFromDto);
   };
 
-  readonly getProjectDetail: ReviewApiPort['getProjectDetail'] = async (projectRefId, options) => {
-    const project = await this.transport.client.getProject(projectRefId, this.transport.queryInit(options));
-    const items = await this.transport.requestList<ReviewItemDTO[]>(
-      `/api/v1/final-cut-review/projects/${projectRefId}/items`,
-      options,
+  readonly getProjectSummary: ReviewApiPort['getProjectSummary'] = async (projectRefId, options) => {
+    const dto = await this.transport.requestJson<ReviewProjectSummaryDTO>(
+      `/api/v1/final-cut-review/projects/${projectRefId}/summary`,
+      { signal: options?.signal },
     );
-    const versionsByItem: ProjectDetail['versionsByItem'] = {};
-    const issuesByVersion: ProjectDetail['issuesByVersion'] = {};
-    const finalizations: FinalizationRecord[] = [];
-
-    for (const item of items) {
-      const versions = await this.transport.requestList<ReviewVersionDTO[]>(
-        `/api/v1/final-cut-review/projects/${projectRefId}/items/${item.id}/versions`,
-        options,
-      );
-      versionsByItem[item.id] = versions.map((version) =>
-        versionFromDto(version, this.transport.baseUrl, item),
-      );
-      for (const version of versions) {
-        issuesByVersion[version.id] = await this.queries.issuesForVersion(
-          projectRefId,
-          item.id,
-          version.id,
-          options,
-        );
-      }
-      const finalization = await this.queries.optionalFinalization(projectRefId, item.id, options);
-      if (finalization) {
-        finalizations.push(finalization);
-      }
-    }
-
+    const project = projectFromDto(dto.project);
     return {
-      project: projectFromDto(project),
-      items: items.map(editableItemFromDto),
-      versionsByItem,
-      issuesByVersion,
-      finalizations,
+      project,
+      items: dto.items.map((item) => summaryItemFromDto(item, project, this.transport.baseUrl)),
     };
   };
+
+  readonly getVersionIssues: ReviewApiPort['getVersionIssues'] = async (params, options) =>
+    this.queries.issuesForVersion(
+      params.projectRefId,
+      params.reviewItemId,
+      params.versionId,
+      options,
+    );
+
+  readonly getIssueDetail: ReviewApiPort['getIssueDetail'] = async (params, options) =>
+    this.queries.issueWithMessages(
+      params.projectRefId,
+      params.reviewItemId,
+      params.versionId,
+      params.issueId,
+      undefined,
+      options,
+    );
 
   readonly getWorkspace: ReviewApiPort['getWorkspace'] = async (params, options) => {
     const [projectDto, itemDto, versionDtos] = await Promise.all([
@@ -100,21 +206,12 @@ export class HttpReviewProjects implements ProjectApi {
         `/api/v1/final-cut-review/projects/${params.projectRefId}/items/${params.reviewItemId}/versions/${versionId}`,
         { signal: options?.signal },
       ));
-    const issuesByVersion = await Promise.all(
-      versionDtos.map(async (version) => ({
-        version,
-        issues: await this.queries.issuesForVersion(
-          params.projectRefId,
-          params.reviewItemId,
-          version.id,
-          options,
-        ),
-      })),
+    const currentIssues = await this.queries.issuesForVersion(
+      params.projectRefId,
+      params.reviewItemId,
+      versionId,
+      options,
     );
-    const currentIssues = issuesByVersion.find((entry) => entry.version.id === versionId)?.issues ?? [];
-    const historicalIssues = issuesByVersion
-      .filter((entry) => entry.version.id !== versionId)
-      .flatMap((entry) => entry.issues);
     const activeFinalization = await this.queries.optionalFinalization(
       params.projectRefId,
       params.reviewItemId,
@@ -127,7 +224,7 @@ export class HttpReviewProjects implements ProjectApi {
       versions: versionDtos.map((version) => versionFromDto(version, this.transport.baseUrl, itemDto)),
       currentVersion: versionFromDto(currentVersionDto, this.transport.baseUrl, itemDto),
       currentIssues,
-      historicalIssues,
+      historicalIssues: [],
       activeFinalization,
     };
   };

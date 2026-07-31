@@ -2,6 +2,7 @@ FROM python:3.13-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493
 
 ARG APP_UID=10001
 ARG APP_GID=10001
+ARG FFMPEG_PACKAGE_VERSION=7:7.1.5-0+deb13u1
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,7 +11,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg gosu \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        ffmpeg="${FFMPEG_PACKAGE_VERSION}" \
+        gosu \
     && install -d -m 0755 /usr/share/postgresql-common/pgdg \
     && curl --fail --silent --show-error --location \
         https://www.postgresql.org/media/keys/ACCC4CF8.asc \
@@ -30,7 +35,19 @@ RUN apt-get update \
         postgresql-client-16=16.14-1.pgdg13+1 \
     && test "$(pg_dump --version | awk '{print $3}' | cut -d. -f1)" = 16 \
     && test "$(pg_restore --version | awk '{print $3}' | cut -d. -f1)" = 16 \
+    && test "$(dpkg-query --show --showformat='${Version}' ffmpeg)" = "${FFMPEG_PACKAGE_VERSION}" \
     && ffprobe -version >/dev/null \
+    && ! ffmpeg -buildconf 2>&1 | grep -F -- '--enable-nonfree' \
+    && install -d -m 0755 /usr/share/fj-build \
+    && ffmpeg -version > /usr/share/fj-build/ffmpeg-version.txt 2>&1 \
+    && ffmpeg -buildconf > /usr/share/fj-build/ffmpeg-buildconf.txt 2>&1 \
+    && ffprobe -version > /usr/share/fj-build/ffprobe-version.txt 2>&1 \
+    && dpkg-query --show --showformat='${Package}\\t${Version}\\t${Architecture}\\n' \
+        ffmpeg 'libavcodec*' 'libavdevice*' 'libavfilter*' 'libavformat*' \
+        'libavutil*' 'libpostproc*' 'libswresample*' 'libswscale*' \
+        | sort -u > /usr/share/fj-build/ffmpeg-debian-packages.tsv \
+    && { ldd /usr/bin/ffmpeg; ldd /usr/bin/ffprobe; } \
+        | sort -u > /usr/share/fj-build/ffmpeg-dynamic-libraries.txt \
     && apt-get purge -y --auto-remove curl \
     && rm -f /etc/apt/sources.list.d/pgdg.list /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     && rm -rf /var/lib/apt/lists/*

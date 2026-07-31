@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-31T00:00:00Z",
+  "commercial_release_status": "BLOCKED",
+  "commercial_release_blockers": [
+    "target distribution regions are not approved",
+    "final H.264, H.265, and AAC codec combinations are not approved",
+    "the candidate backend image digest and its runtime FFmpeg build records do not exist until an authorized build"
+  ],
+  "components": [
+    {
+      "name": "python",
+      "version": "3.13-slim",
+      "type": "container",
+      "source": "docker.io/library/python",
+      "digest": "sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280",
+      "license": "Python-2.0",
+      "distribution": ["saas", "customer-container"]
+    },
+    {
+      "name": "postgresql",
+      "version": "16-alpine",
+      "type": "container",
+      "source": "docker.io/library/postgres",
+      "digest": "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "license": "PostgreSQL",
+      "distribution": ["saas", "customer-container"],
+      "notes": "pg_stat_statements is shipped with PostgreSQL and uses the PostgreSQL License"
+    },
+    {
+      "name": "nginx",
+      "version": "1.31.3-alpine3.24",
+      "type": "container",
+      "source": "docker.io/library/nginx",
+      "digest": "sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752",
+      "license": "BSD-2-Clause",
+      "distribution": ["saas", "customer-container"],
+      "notes": "Image-layer zlib, PCRE2, OpenSSL, musl, and Alpine package notices must be attached from the exact image SBOM before customer release"
+    },
+    {
+      "name": "prometheus",
+      "version": "3.13.0",
+      "type": "container",
+      "source": "docker.io/prom/prometheus",
+      "digest": "sha256:c6b27ea434f8389bfe233fbc7be381cf50587c286e871bc842008f5a1b1908a7",
+      "license": "Apache-2.0",
+      "distribution": ["saas", "customer-container"]
+    },
+    {
+      "name": "cadvisor",
+      "version": "0.57.0",
+      "type": "container",
+      "source": "ghcr.io/google/cadvisor",
+      "digest": "sha256:e75bdb03b74b0b6995f208f166fead2e6e555dde73e44200113bb26f41b1981d",
+      "license": "Apache-2.0",
+      "distribution": ["saas"],
+      "notes": "Disabled by default; Linux host capability and read-only mount validation requires separate approval"
+    },
+    {
+      "name": "ffmpeg",
+      "version": "7:7.1.5-0+deb13u1",
+      "type": "deb",
+      "source": "https://deb.debian.org/debian/pool/main/f/ffmpeg/",
+      "source_sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f",
+      "artifact_hashes": {
+        "amd64": "sha256:8669bc77e55393c14e0dd257ba9a916007cb6da0e1074c9b5e1d53812024f2af",
+        "arm64": "sha256:6ec9c42306df30803c731c9e53300627257fd59d2f5a80b394c14cec5fd6d5ef"
+      },
+      "license": "NOASSERTION",
+      "distribution": ["saas", "customer-container"],
+      "notes": "The Docker build rejects --enable-nonfree and records version, buildconf, package versions, and dynamic libraries. GPL/LGPL classification remains blocked until those candidate-image records are reviewed."
+    },
+    {
+      "name": "prometheus-client",
+      "version": "0.25.0",
+      "type": "python",
+      "source": "https://pypi.org/project/prometheus-client/0.25.0/",
+      "artifact": "prometheus_client-0.25.0-py3-none-any.whl",
+      "digest": "sha256:d5aec89e349a6ec230805d0df882f3807f74fd6c1a2fa86864e3c2279059fed1",
+      "license": "Apache-2.0",
+      "distribution": ["saas", "customer-container"],
+      "notice_required": true
+    }
+  ]
+}
