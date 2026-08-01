@@ -58,7 +58,11 @@ export function EpisodeStrip(props: {
               aria-label={`第 ${item.episode} 集，当前版本 ${currentVersionLabel}，未修改 ${unresolvedCount}，${currentFileName}，${reviewStatusLabel(item.status)}`}
               aria-pressed={selected}
               data-testid={`episode-item-${item.reviewItemId}`}
-              className={selected ? 'is-active' : ''}
+              className={[
+                selected ? 'is-active' : '',
+                item.status === 'changes_requested' ? 'is-changes-requested' : '',
+                item.status === 'finalized' ? 'is-finalized' : '',
+              ].filter(Boolean).join(' ')}
               onClick={(event) => {
                 scrollEpisodeIntoView(event.currentTarget);
                 props.onSelect(item);

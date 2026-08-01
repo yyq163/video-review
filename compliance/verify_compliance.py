@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +52,19 @@ def sha256_value(value: object) -> str:
 
 def file_sha256(path: str) -> str:
     return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+
+
+def utc_timestamp(value: object) -> datetime:
+    require(isinstance(value, str), "SBOM timestamp is not a string")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RuntimeError("SBOM timestamp is not RFC 3339") from error
+    require(
+        parsed.tzinfo is not None and parsed.utcoffset() == timezone.utc.utcoffset(parsed),
+        "SBOM timestamp is not UTC",
+    )
+    return parsed
 
 
 def compose_network_names(service: dict[str, Any]) -> set[str]:
@@ -161,12 +176,14 @@ def verify_prometheus() -> None:
         "fj-final-cut-review-backend",
         "fj-final-cut-review-package-worker",
         "fj-final-cut-review-media-worker",
+        "fj-final-cut-review-nginx-range",
         "fj-final-cut-review-cadvisor",
     }, "Prometheus scrape scope drifted")
     expected_targets = {
         "fj-final-cut-review-backend": ["backend:8000"],
         "fj-final-cut-review-package-worker": ["package-worker:9101"],
         "fj-final-cut-review-media-worker": ["media-worker:9102"],
+        "fj-final-cut-review-nginx-range": ["nginx-metrics-exporter:9103"],
     }
     for job_name, targets in expected_targets.items():
         require(
@@ -213,6 +230,10 @@ def verify_supply_chain() -> dict[str, int]:
             for item in blockers
         ),
         "commercial release blockers are incomplete",
+    )
+    require(
+        any("GPL corresponding-source" in str(item) for item in blockers),
+        "FFmpeg GPL corresponding-source release blocker is absent",
     )
     locked_components = {component["name"]: component for component in lock["components"]}
     for component in lock["components"]:
@@ -298,13 +319,60 @@ def verify_supply_chain() -> dict[str, int]:
     results: dict[str, int] = {}
     locked_ffmpeg = locked_components["ffmpeg"]
     require(
+        locked_ffmpeg.get("license") == "GPL-2.0-or-later",
+        "the verified GPL FFmpeg candidate is not classified as GPL",
+    )
+    require(
+        re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(locked_ffmpeg.get("candidate_image_digest", "")),
+        )
+        is not None,
+        "candidate FFmpeg image digest is missing",
+    )
+    require(
         bool(locked_ffmpeg.get("source_sha256"))
         and set(locked_ffmpeg.get("artifact_hashes", {})) == {"amd64", "arm64"},
         "FFmpeg source and required architecture hashes are incomplete",
     )
+    ffmpeg_materials = locked_ffmpeg.get("license_materials", [])
+    require(
+        {material.get("path") for material in ffmpeg_materials}
+        == {
+            "compliance/upstream-license-texts/FFmpeg-GPL-2.txt",
+            "compliance/upstream-license-texts/FFmpeg-Debian-copyright.txt",
+        },
+        "FFmpeg GPL/copyright material coverage is incomplete",
+    )
+    for material in ffmpeg_materials:
+        material_hash = sha256_value(material["sha256"])
+        require(
+            file_sha256(material["path"]) == material_hash
+            and str(material.get("source", "")).startswith("candidate-image:/usr/share/"),
+            "FFmpeg GPL/copyright material provenance mismatch",
+        )
+        required_license_entries.add(
+            ("locked:deb:ffmpeg", material_hash, material["path"])
+        )
+    lock_generated_at = utc_timestamp(lock["generated_at"])
+    serial_numbers: set[str] = set()
     for name in ("saas", "customer-container"):
         sbom = load_json(f"compliance/sbom/{name}.cdx.json")
         require(sbom["bomFormat"] == "CycloneDX" and sbom["specVersion"] == "1.6", f"{name} SBOM schema drifted")
+        serial_number = str(sbom.get("serialNumber", ""))
+        require(serial_number.startswith("urn:uuid:"), f"{name} SBOM serial number is invalid")
+        try:
+            uuid.UUID(serial_number.removeprefix("urn:uuid:"))
+        except ValueError as error:
+            raise RuntimeError(f"{name} SBOM serial number is invalid") from error
+        require(serial_number not in serial_numbers, "SBOM serial numbers are not unique")
+        serial_numbers.add(serial_number)
+        require(sbom.get("version") == 1, f"{name} SBOM version is invalid")
+        require(
+            utc_timestamp(sbom.get("metadata", {}).get("timestamp"))
+            >= lock_generated_at,
+            f"{name} SBOM predates the locked candidate image",
+        )
         metadata_properties = {
             item["name"]: item["value"]
             for item in sbom.get("metadata", {}).get("properties", [])
@@ -368,6 +436,16 @@ def verify_supply_chain() -> dict[str, int]:
         ffmpeg_properties = {
             item["name"]: item["value"] for item in ffmpeg["properties"]
         }
+        require(
+            ffmpeg.get("licenses")
+            == [{"license": {"id": "GPL-2.0-or-later"}}],
+            f"{name} SBOM does not classify the verified FFmpeg candidate as GPL",
+        )
+        require(
+            ffmpeg_properties.get("fcr:candidate-image-digest")
+            == locked_ffmpeg["candidate_image_digest"],
+            f"{name} SBOM omits the candidate FFmpeg image digest",
+        )
         require(
             ffmpeg_properties.get("fcr:source-sha256")
             == sha256_value(locked_ffmpeg["source_sha256"])

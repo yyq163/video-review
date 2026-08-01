@@ -87,7 +87,11 @@ export class HttpReviewWorkflow implements WorkflowApi {
           commandId: operation.commandId,
         },
       );
-      clearRevokeFinalizationOperation(input.projectRefId, input.reviewItemId);
+      clearRevokeFinalizationOperation(
+        input.projectRefId,
+        input.reviewItemId,
+        operation.commandId,
+      );
       return {
         finalization: finalizationFromDto(result.finalization),
         reviewItem: itemFromDto(result.review_item),
@@ -100,7 +104,11 @@ export class HttpReviewWorkflow implements WorkflowApi {
         error.httpStatus < 500 &&
         error.code !== 'IDEMPOTENCY_CONFLICT'
       ) {
-        clearRevokeFinalizationOperation(input.projectRefId, input.reviewItemId);
+        clearRevokeFinalizationOperation(
+          input.projectRefId,
+          input.reviewItemId,
+          operation.commandId,
+        );
         throw error;
       }
       throw new RevokeFinalizationResultUncertainError(error);

@@ -201,7 +201,7 @@
       "licenses": [
         {
           "license": {
-            "id": "NOASSERTION"
+            "id": "GPL-2.0-or-later"
           }
         }
       ],
@@ -226,6 +226,10 @@
         {
           "name": "fcr:artifact-sha256:arm64",
           "value": "6ec9c42306df30803c731c9e53300627257fd59d2f5a80b394c14cec5fd6d5ef"
+        },
+        {
+          "name": "fcr:candidate-image-digest",
+          "value": "sha256:4b2f5282ef86c56fe8d192cb54196621003d826c4c8d35acfbbf5cc36d6eb6b3"
         }
       ],
       "type": "library",
@@ -4863,7 +4867,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "ee8172ef4dddc5f637fcd2f10b57e1d925024341fdae6018fb91290d57d78d44d3b3e1c4c11da761aa8bbfe196713b2e9b0c4f7e2cfa0b308d9305f0054c2a08"
+          "content": "49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6"
         }
       ],
       "licenses": [
@@ -4884,9 +4888,9 @@
           "value": "true"
         }
       ],
-      "purl": "pkg:npm/brace-expansion@5.0.7",
+      "purl": "pkg:npm/brace-expansion@5.0.9",
       "type": "library",
-      "version": "5.0.7"
+      "version": "5.0.9"
     },
     {
       "bom-ref": "npm:node_modules/@typescript-eslint/typescript-estree/node_modules/minimatch",
@@ -5643,7 +5647,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "203c38f0adbfda446483d2dd271babbeade557768182ad11118f3d76e12a151b618e53dd5c728c8fb12740e5d5724c73822b229dfde71dfadc13616e7c52d733"
+          "content": "11d7a9fd7f5f1aa54d9b328156c0d820eb43fb3d6db9ecd5ef42c18dd0acb7d4eabbbea5b27bd1899ea84e27359fefc12305fa4031803bde0f3783764800efb7"
         }
       ],
       "licenses": [
@@ -5664,9 +5668,9 @@
           "value": "true"
         }
       ],
-      "purl": "pkg:npm/brace-expansion@1.1.16",
+      "purl": "pkg:npm/brace-expansion@1.1.18",
       "type": "library",
-      "version": "1.1.16"
+      "version": "1.1.18"
     },
     {
       "bom-ref": "npm:node_modules/browserslist",
@@ -8463,7 +8467,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "641f511ffdfdaa9ab956ee98f8d99468585047aa69f8cd97b7be970671300da19c540aa196fc6b9770766ca4b90f7347dd047beafdda4ab29a17f2a2cbb944b5"
+          "content": "6f394a4f2349efe2dd188230cbc8a316922a11022f69f6a157b798ca427c0af878d8474978e0e827a814257a5026f7a3d4175d1fc3aa4d764d13f29f6d602ef1"
         }
       ],
       "licenses": [
@@ -8484,9 +8488,9 @@
           "value": "true"
         }
       ],
-      "purl": "pkg:npm/nanoid@3.3.12",
+      "purl": "pkg:npm/nanoid@3.3.16",
       "type": "library",
-      "version": "3.3.12"
+      "version": "3.3.16"
     },
     {
       "bom-ref": "npm:node_modules/natural-compare",
@@ -8973,7 +8977,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "15f47cb237787a6d93e9f6f723633000953b1d654cafdcdb6be7a799079e5857c26e6f94382ff45f80d2f17b6951333058c19b8ca60fef18df35e933c86981dc"
+          "content": "0d33f1dd15924a75b2ccbc509e51f4ac93fe116e5e925d7a654e3fa6c6c8840d1ee779097dd81a379bca33ec4fef226d5d5bbe9df75516696014310a01ee0fcb"
         }
       ],
       "licenses": [
@@ -8994,9 +8998,9 @@
           "value": "true"
         }
       ],
-      "purl": "pkg:npm/postcss@8.5.15",
+      "purl": "pkg:npm/postcss@8.5.25",
       "type": "library",
-      "version": "8.5.15"
+      "version": "8.5.25"
     },
     {
       "bom-ref": "npm:node_modules/prelude-ls",
@@ -9303,7 +9307,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "a534c6b7c27e8e2d4d3a66278f34fe6c0272ff5cc3f89a78ce23ba70bed3dd92ef5cab6eb0eec1a45aa54578adaa970f56a965b085c51d132dfb6fe4dd79fa1d"
+          "content": "69454c8c59b71803d34d92fba18af913b1138aa7d008744b1fe07ee5a7e7202bdfd2bee490ae1e47a48cbb06d24c9c3feedfb5da4853fca6a18a3e3d7ea38222"
         }
       ],
       "licenses": [
@@ -9324,16 +9328,16 @@
           "value": "false"
         }
       ],
-      "purl": "pkg:npm/react-router@7.18.0",
+      "purl": "pkg:npm/react-router@7.18.2",
       "type": "library",
-      "version": "7.18.0"
+      "version": "7.18.2"
     },
     {
       "bom-ref": "npm:node_modules/react-router-dom",
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "162d3263a920b4a69efd3876c626dd58ad0a49d619e01e771b27fac11b6898e296829366ec7efe0f27c386771dcfd14a6e94bed63983860dc5e16a0627ec8538"
+          "content": "008289fe38069456f711b7c25e4e46cec862c2dfa5de6a9b0ab36398458c323a90c4d277b2f05ae9b833172082d92c37440d15585d64837b907f63858716fc87"
         }
       ],
       "licenses": [
@@ -9354,9 +9358,9 @@
           "value": "false"
         }
       ],
-      "purl": "pkg:npm/react-router-dom@7.18.0",
+      "purl": "pkg:npm/react-router-dom@7.18.2",
       "type": "library",
-      "version": "7.18.0"
+      "version": "7.18.2"
     },
     {
       "bom-ref": "npm:node_modules/readable-stream",
@@ -11026,9 +11030,9 @@
         "value": "BLOCKED"
       }
     ],
-    "timestamp": "2026-07-31T00:00:00Z"
+    "timestamp": "2026-08-01T11:06:07Z"
   },
-  "serialNumber": "urn:uuid:98650c35-cd5e-a2af-de84-68b6d1866d3d",
+  "serialNumber": "urn:uuid:7f0b439a-d5bf-452b-8689-b31b2a73bcf0",
   "specVersion": "1.6",
   "version": 1
 }

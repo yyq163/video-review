@@ -218,6 +218,15 @@ PG_STATEMENTS_SQL = text(
     FROM fcr_observability.fcr_pg_stat_summary()
     """
 )
+PG_STATEMENT_HOTSPOTS_SQL = text(
+    """
+    SELECT criterion, rank, queryid, calls, total_exec_time_ms, rows,
+           shared_blocks_hit, shared_blocks_read,
+           shared_blocks_dirtied, shared_blocks_written,
+           temp_blocks_read, temp_blocks_written
+    FROM fcr_observability.fcr_pg_stat_hotspots(5)
+    """
+)
 UPLOAD_RESERVATION_SCOPE_SQL = text(
     """
     WITH active AS (
@@ -246,6 +255,11 @@ PACKAGE_RESERVATION_SQL = text(
     WHERE status = 'preparing' AND storage_reclaimed_at IS NULL
     """
 )
+
+
+def _queryid_words(queryid: int) -> tuple[int, int]:
+    unsigned = queryid & ((1 << 64) - 1)
+    return unsigned >> 32, unsigned & 0xFFFFFFFF
 MEDIA_FAILURE_SQL = text(
     """
     SELECT error_code, count(*)::bigint
@@ -567,6 +581,45 @@ class DatabaseAggregateCollector:
                     metric.add_metric([], float(value))
                     pg_stat_metrics.append(metric)
 
+                pg_hotspot_metric_names = (
+                    "queryid_high32",
+                    "queryid_low32",
+                    "calls",
+                    "total_exec_time_ms",
+                    "rows",
+                    "shared_blocks_hit",
+                    "shared_blocks_read",
+                    "shared_blocks_dirtied",
+                    "shared_blocks_written",
+                    "temp_blocks_read",
+                    "temp_blocks_written",
+                )
+                pg_hotspot_metrics = {
+                    metric_name: GaugeMetricFamily(
+                        f"fcr_pg_statements_hotspot_{metric_name}",
+                        "Top-five pg_stat_statements hotspot without SQL text or identifier labels.",
+                        labels=["criterion", "rank"],
+                    )
+                    for metric_name in pg_hotspot_metric_names
+                }
+                allowed_criteria = {"calls", "total_exec_time", "shared_io", "temp_io"}
+                for row in session.execute(PG_STATEMENT_HOTSPOTS_SQL):
+                    criterion = str(row[0])
+                    rank = int(row[1])
+                    if criterion not in allowed_criteria or not 1 <= rank <= 5:
+                        continue
+                    high32, low32 = _queryid_words(row[2])
+                    values = (high32, low32, *row[3:])
+                    for metric_name, value in zip(
+                        pg_hotspot_metric_names,
+                        values,
+                        strict=True,
+                    ):
+                        pg_hotspot_metrics[metric_name].add_metric(
+                            [criterion, str(rank)],
+                            float(value),
+                        )
+
             success.add_metric(["database"], 1)
             yield upload_sessions
             yield upload_reserved
@@ -589,6 +642,7 @@ class DatabaseAggregateCollector:
             yield package_queue_age
             yield package_failures
             yield from pg_stat_metrics
+            yield from pg_hotspot_metrics.values()
         except Exception:
             logger.warning("database observability degraded without affecting business traffic", exc_info=True)
             success.add_metric(["database"], 0)

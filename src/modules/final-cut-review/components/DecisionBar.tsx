@@ -15,7 +15,9 @@ export function DecisionBar(props: {
   onPackage(): void;
 }) {
   const openCurrent = props.issues.some((issue) => issue.status === 'unresolved');
-  const isCurrentFinalized = props.finalization?.versionId === props.version.versionId;
+  const isCurrentFinalized =
+    props.finalization?.status !== 'revoked' &&
+    props.finalization?.versionId === props.version.versionId;
   const isReadonly = Boolean(props.readonlyReason);
 
   return (
@@ -52,7 +54,7 @@ export function DecisionBar(props: {
         </button>
       </CapabilityGate>
       <CapabilityGate entryMode={props.entryMode} capability="review.package.create">
-        <button className="fj-review-secondary" data-testid="package-project" onClick={props.onPackage} disabled={props.pending}>
+        <button className="fj-review-secondary" data-testid="package-project" onClick={props.onPackage} disabled={props.pending || isReadonly}>
           <IconText icon="package">
             {props.packageState === 'preparing'
               ? '项目包准备中...'

@@ -401,6 +401,44 @@
   opacity: 0.48;
 }
 
+.fj-review-disabled-action-tooltip {
+  display: inline-flex;
+  position: relative;
+}
+
+.fj-review-disabled-action-tooltip[data-tooltip]::after {
+  background: #20272b;
+  border: 1px solid var(--fj-review-line);
+  border-radius: 6px;
+  bottom: calc(100% + 8px);
+  color: var(--fj-review-text);
+  content: attr(data-tooltip);
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0;
+  padding: 6px 8px;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  transform: translateY(3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  white-space: nowrap;
+  z-index: 20;
+}
+
+.fj-review-disabled-action-tooltip[data-tooltip]:hover::after,
+.fj-review-disabled-action-tooltip[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.fj-review-root button.is-delete-disabled:disabled {
+  background: var(--fj-review-surface-2);
+  border-color: var(--fj-review-line);
+  color: var(--fj-review-muted);
+  opacity: 0.72;
+}
+
 .fj-review-primary {
   background: var(--fj-review-aqua);
   border: 1px solid var(--fj-review-aqua);
@@ -1923,6 +1961,43 @@
 .fj-review-episodes button.is-active {
   border-color: var(--fj-review-aqua);
   box-shadow: inset 0 -3px 0 var(--fj-review-aqua);
+}
+
+.fj-review-episodes button.is-changes-requested {
+  background:
+    linear-gradient(rgba(255, 201, 71, 0.18), rgba(255, 201, 71, 0.18)),
+    var(--fj-review-surface);
+  border-color: rgba(255, 201, 71, 0.62);
+  box-shadow: inset 4px 0 0 var(--fj-review-yellow);
+}
+
+.fj-review-episodes button.is-finalized {
+  background:
+    linear-gradient(rgba(114, 216, 139, 0.2), rgba(114, 216, 139, 0.2)),
+    var(--fj-review-surface);
+  border-color: rgba(114, 216, 139, 0.62);
+  box-shadow: inset 4px 0 0 var(--fj-review-green);
+}
+
+.fj-review-episodes button.is-active.is-changes-requested,
+.fj-review-episodes button.is-active.is-finalized {
+  border-color: var(--fj-review-aqua);
+  box-shadow:
+    inset 4px 0 0 currentColor,
+    inset 0 -3px 0 var(--fj-review-aqua);
+}
+
+.fj-review-episodes button.is-active.is-changes-requested {
+  color: var(--fj-review-yellow);
+}
+
+.fj-review-episodes button.is-active.is-finalized {
+  color: var(--fj-review-green);
+}
+
+.fj-review-episodes button.is-active.is-changes-requested .fj-review-episode-copy,
+.fj-review-episodes button.is-active.is-finalized .fj-review-episode-copy {
+  color: var(--fj-review-text);
 }
 
 .fj-review-episode-copy {

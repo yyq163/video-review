@@ -21,6 +21,8 @@ export class InMemoryReviewRepository {
   readonly relinkOriginalFiles: InMemoryReviewStore['relinkOriginalFiles'];
   readonly listProjects: InMemoryReviewQueries['listProjects'];
   readonly getProjectSummary: InMemoryReviewQueries['getProjectSummary'];
+  readonly getReviewItem: InMemoryReviewQueries['getReviewItem'];
+  readonly getVersion: InMemoryReviewQueries['getVersion'];
   readonly getVersionIssues: InMemoryReviewQueries['getVersionIssues'];
   readonly getIssueDetail: InMemoryReviewQueries['getIssueDetail'];
   readonly getWorkspace: InMemoryReviewQueries['getWorkspace'];
@@ -63,6 +65,8 @@ export class InMemoryReviewRepository {
     this.relinkOriginalFiles = store.relinkOriginalFiles;
     this.listProjects = queries.listProjects;
     this.getProjectSummary = queries.getProjectSummary;
+    this.getReviewItem = queries.getReviewItem;
+    this.getVersion = queries.getVersion;
     this.getVersionIssues = queries.getVersionIssues;
     this.getIssueDetail = queries.getIssueDetail;
     this.getWorkspace = queries.getWorkspace;

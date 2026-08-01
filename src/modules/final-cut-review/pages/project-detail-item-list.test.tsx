@@ -175,17 +175,18 @@ describe('ProjectDetailItemList server-authoritative selection', () => {
     const locked = summaryItem('locked', {
       episode: '11',
       bulkDelete: {
-        eligible: true,
+        eligible: false,
         locked: true,
-        reason: 'DELETE_PENDING',
+        reason: 'version_history',
       },
     });
     const ineligible = summaryItem('ineligible', {
       episode: '12',
+      status: 'in_review',
       bulkDelete: {
         eligible: false,
-        locked: false,
-        reason: 'REVIEW_STARTED',
+        locked: true,
+        reason: 'workflow_locked',
       },
     });
     const { onDeleteReviewItem } = renderList({
@@ -200,6 +201,18 @@ describe('ProjectDetailItemList server-authoritative selection', () => {
     const eligibleRow = screen.getByTestId('review-item-row-eligible');
     const lockedRow = screen.getByTestId('review-item-row-locked');
     const ineligibleRow = screen.getByTestId('review-item-row-ineligible');
+    const lockedDelete = within(lockedRow).getByRole('button', { name: /删除分集/ });
+    const ineligibleDelete = within(ineligibleRow).getByRole('button', { name: /删除分集/ });
+    expect(lockedDelete).toBeDisabled();
+    expect(lockedDelete.parentElement).toHaveAttribute(
+      'title',
+      '存在历史版本，不可删除',
+    );
+    expect(ineligibleDelete).toBeDisabled();
+    expect(ineligibleDelete).toHaveClass('is-delete-disabled');
+    expect(ineligibleDelete.parentElement).toHaveAttribute('title', '审阅中，不可删除');
+    expect(ineligibleDelete.parentElement).toHaveAttribute('data-tooltip', '审阅中，不可删除');
+    expect(ineligibleDelete.parentElement).toHaveAttribute('tabindex', '0');
     await userEvent.click(eligibleRow);
     expect(eligibleRow).not.toHaveClass('is-selected-for-delete');
 
@@ -470,7 +483,7 @@ describe('ProjectDetailItemList status and finalization revocation', () => {
     const revoke = screen.getByRole('button', { name: '撤销第13集定稿' });
     await userEvent.click(revoke);
     expect(window.confirm).toHaveBeenCalledWith(
-      '确认撤销第 13 集定稿？关联项目包将立即失效并进入受控清理。',
+      '确认撤销第 13 集定稿？关联项目包将立即失效、无法继续下载，并进入物理删除的受控清理。',
     );
     expect(onRevokeFinalization).toHaveBeenCalledWith(finalized);
     expect(await screen.findByText('撤回结果确认中')).toBeInTheDocument();

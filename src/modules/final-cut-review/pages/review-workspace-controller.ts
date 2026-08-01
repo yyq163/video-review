@@ -74,7 +74,12 @@ export function useReviewWorkspaceController(
       mutations.deleteIssue.isPending,
     [mutations],
   );
-  const readonlyReason = data.project.status === 'archived' ? '归档项目只读，恢复后才能执行写操作。' : undefined;
+  const readonlyReason =
+    data.project.status === 'archived'
+      ? '归档项目只读，恢复后才能执行写操作。'
+      : data.item.status === 'finalized' && !data.item.activeFinalizationId
+        ? '撤回结果确认中，正在查询权威状态。'
+        : undefined;
   const isSelectedCurrent = data.currentVersion.versionId === data.item.currentVersionId;
   const writeReadonlyReason =
     readonlyReason ??

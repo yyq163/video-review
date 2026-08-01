@@ -77,6 +77,7 @@ export function makeVersion(input: {
     playbackStatus: 'ready',
     playbackAssetId: `playback_${input.versionId}`,
     playbackUrl: input.file.playbackUrl || `/mock-playback/${input.versionId}`,
+    thumbnailStatus: 'pending',
     thumbnailAssetId: `thumbnail_${input.versionId}`,
     thumbnailUrl: null,
     status: input.status,

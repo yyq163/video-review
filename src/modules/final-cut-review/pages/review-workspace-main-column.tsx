@@ -71,7 +71,11 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
         </div>
         {controller.readonlyReason ? (
           <section className="fj-review-readonly-notice" data-testid="archived-workspace-readonly-notice">
-            <strong>项目已归档</strong>
+            <strong>
+              {data.project.status === 'archived'
+                ? '项目已归档'
+                : '撤回结果确认中'}
+            </strong>
             <span>{controller.readonlyReason}</span>
           </section>
         ) : null}

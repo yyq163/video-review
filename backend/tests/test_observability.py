@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, MutableMapping
+from pathlib import Path
 from typing import Any
 
 from backend.app import observability
@@ -44,38 +45,65 @@ def test_request_range_and_outcomes_are_bounded() -> None:
     assert observability._outcome(200, cancelled=True) == "cancelled"
 
 
-def test_pg_statements_query_does_not_select_query_text_or_query_id() -> None:
-    statement = str(observability.PG_STATEMENTS_SQL).lower()
-    assert "queryid" not in statement
-    assert " query," not in statement
-    assert " query " not in statement
-    assert "fcr_pg_stat_summary" in statement
+def test_pg_statements_queries_expose_bounded_hotspots_without_query_text() -> None:
+    aggregate = str(observability.PG_STATEMENTS_SQL).lower()
+    hotspots = str(observability.PG_STATEMENT_HOTSPOTS_SQL).lower()
+    assert "fcr_pg_stat_summary" in aggregate
+    assert "fcr_pg_stat_hotspots(5)" in hotspots
+    assert "queryid" in hotspots
+    for statement in (aggregate, hotspots):
+        assert " query," not in statement
+        assert " query " not in statement
+
+
+def test_shared_io_hotspot_ranking_excludes_cache_hits() -> None:
+    bootstrap = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "bootstrap_database_roles.py"
+    ).read_text(encoding="utf-8")
+    shared_io_rank = bootstrap.split("SELECT 'shared_io'::text", 1)[1].split(
+        "UNION ALL", 1
+    )[0]
+    assert "shared_blks_read" in shared_io_rank
+    assert "shared_blks_written" in shared_io_rank
+    assert "shared_blks_hit" not in shared_io_rank
+    assert "shared_blks_dirtied" not in shared_io_rank
+
+
+def test_queryid_is_exported_as_two_exact_numeric_words_without_a_label() -> None:
+    assert observability._queryid_words(0) == (0, 0)
+    assert observability._queryid_words(0x12345678ABCDEF01) == (
+        0x12345678,
+        0xABCDEF01,
+    )
+    assert observability._queryid_words(-1) == (0xFFFFFFFF, 0xFFFFFFFF)
 
 
 def test_metrics_path_bypasses_business_application(monkeypatch) -> None:
     downstream_called = False
-    messages: list[dict[str, Any]] = []
+    messages: list[MutableMapping[str, Any]] = []
 
     async def downstream(
-        _scope: dict[str, Any],
-        _receive: Callable[[], Awaitable[dict[str, Any]]],
-        _send: Callable[[dict[str, Any]], Awaitable[None]],
+        _scope: MutableMapping[str, Any],
+        _receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        _send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
     ) -> None:
         nonlocal downstream_called
         downstream_called = True
 
     async def metrics(
-        _scope: dict[str, Any],
-        _receive: Callable[[], Awaitable[dict[str, Any]]],
-        send: Callable[[dict[str, Any]], Awaitable[None]],
+        _scope: MutableMapping[str, Any],
+        _receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
     ) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"fcr_http_requests_total 1\n"})
 
-    async def receive() -> dict[str, Any]:
+    async def receive() -> MutableMapping[str, Any]:
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    async def send(message: dict[str, Any]) -> None:
+    async def send(message: MutableMapping[str, Any]) -> None:
         messages.append(message)
 
     application = observability.InstrumentedApplication(downstream, metrics)
@@ -101,27 +129,27 @@ def test_metrics_failure_returns_bounded_503_without_calling_business_applicatio
     monkeypatch,
 ) -> None:
     downstream_called = False
-    messages: list[dict[str, Any]] = []
+    messages: list[MutableMapping[str, Any]] = []
 
     async def downstream(
-        _scope: dict[str, Any],
-        _receive: Callable[[], Awaitable[dict[str, Any]]],
-        _send: Callable[[dict[str, Any]], Awaitable[None]],
+        _scope: MutableMapping[str, Any],
+        _receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        _send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
     ) -> None:
         nonlocal downstream_called
         downstream_called = True
 
     async def metrics(
-        _scope: dict[str, Any],
-        _receive: Callable[[], Awaitable[dict[str, Any]]],
-        _send: Callable[[dict[str, Any]], Awaitable[None]],
+        _scope: MutableMapping[str, Any],
+        _receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        _send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
     ) -> None:
         raise RuntimeError("sensitive internal failure")
 
-    async def receive() -> dict[str, Any]:
+    async def receive() -> MutableMapping[str, Any]:
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    async def send(message: dict[str, Any]) -> None:
+    async def send(message: MutableMapping[str, Any]) -> None:
         messages.append(message)
 
     application = observability.InstrumentedApplication(downstream, metrics)
@@ -148,7 +176,7 @@ def test_metrics_path_is_hidden_outside_management_network(monkeypatch) -> None:
     monkeypatch.setenv("MANAGEMENT_NETWORK_CIDR", "10.231.58.0/24")
     downstream_called = False
     metrics_called = False
-    messages: list[dict[str, Any]] = []
+    messages: list[MutableMapping[str, Any]] = []
 
     async def downstream(*_args: Any) -> None:
         nonlocal downstream_called
@@ -158,10 +186,10 @@ def test_metrics_path_is_hidden_outside_management_network(monkeypatch) -> None:
         nonlocal metrics_called
         metrics_called = True
 
-    async def receive() -> dict[str, Any]:
+    async def receive() -> MutableMapping[str, Any]:
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    async def send(message: dict[str, Any]) -> None:
+    async def send(message: MutableMapping[str, Any]) -> None:
         messages.append(message)
 
     application = observability.InstrumentedApplication(downstream, metrics)

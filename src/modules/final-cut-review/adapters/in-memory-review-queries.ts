@@ -80,7 +80,7 @@ export class InMemoryReviewQueries {
               currentVersion.playbackStatus === 'ready'
                 ? currentVersion.playbackUrl
                 : null,
-            thumbnailStatus: currentVersion.thumbnailUrl ? 'ready' as const : 'pending' as const,
+            thumbnailStatus: currentVersion.thumbnailStatus,
             thumbnailUrl: currentVersion.thumbnailUrl,
           },
           unresolvedCurrentVersionCount: currentIssues.filter(
@@ -113,6 +113,30 @@ export class InMemoryReviewQueries {
       },
       items,
     };
+  };
+
+  readonly getReviewItem = async (input: {
+    projectRefId: ProjectRefId;
+    reviewItemId: ReviewItemId;
+  }): Promise<ReviewItemWithMetadata> => {
+    const project = this.store.getProject(input.projectRefId);
+    this.store.assertProjectVisible(project);
+    return { ...this.store.getItem(input.projectRefId, input.reviewItemId) };
+  };
+
+  readonly getVersion = async (input: {
+    projectRefId: ProjectRefId;
+    reviewItemId: ReviewItemId;
+    versionId: VersionId;
+  }): Promise<ReviewVersion> => {
+    const project = this.store.getProject(input.projectRefId);
+    this.store.assertProjectVisible(project);
+    const version = this.store.getVersionsForItem(
+      input.projectRefId,
+      input.reviewItemId,
+    ).find((candidate) => candidate.versionId === input.versionId);
+    invariant(version, '版本不存在或已越界', 'VERSION_NOT_FOUND');
+    return cloneVersion(version);
   };
 
   readonly getWorkspace = async (input: {

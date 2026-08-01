@@ -42,7 +42,7 @@ RUN apt-get update \
     && ffmpeg -version > /usr/share/fj-build/ffmpeg-version.txt 2>&1 \
     && ffmpeg -buildconf > /usr/share/fj-build/ffmpeg-buildconf.txt 2>&1 \
     && ffprobe -version > /usr/share/fj-build/ffprobe-version.txt 2>&1 \
-    && dpkg-query --show --showformat='${Package}\\t${Version}\\t${Architecture}\\n' \
+    && dpkg-query --show --showformat='${Package}\t${Version}\t${Architecture}\n' \
         ffmpeg 'libavcodec*' 'libavdevice*' 'libavfilter*' 'libavformat*' \
         'libavutil*' 'libpostproc*' 'libswresample*' 'libswscale*' \
         | sort -u > /usr/share/fj-build/ffmpeg-debian-packages.tsv \

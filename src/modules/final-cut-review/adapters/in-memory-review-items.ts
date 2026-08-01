@@ -213,6 +213,7 @@ export class InMemoryReviewItems {
       playbackStatus: 'ready',
       playbackAssetId: `playback_${versionId}`,
       playbackUrl: input.file.playbackUrl,
+      thumbnailStatus: 'pending',
       thumbnailAssetId: `thumbnail_${versionId}`,
       thumbnailUrl: null,
       status: input.status,

@@ -8,10 +8,10 @@ from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import Table, create_engine
 from sqlalchemy.orm import Session
 
 from backend.app import media_derivatives
@@ -49,7 +49,7 @@ def _settings(tmp_path: Path, **updates: Any) -> Settings:
         "write_guard_session_secret": "test-signing-secret-final-cut-review-v13",
     }
     values.update(updates)
-    return Settings(_env_file=None, **values)
+    return Settings(_env_file=None, **values)  # type: ignore[call-arg]
 
 
 def _claim(tmp_path: Path, kind: str = "thumbnail") -> MediaDerivativeClaim:
@@ -393,10 +393,10 @@ def test_persistent_claim_lease_and_attempt_exhaustion(tmp_path: Path) -> None:
     Base.metadata.create_all(
         engine,
         tables=[
-            FileObjectModel.__table__,
-            ReviewItemModel.__table__,
-            ReviewVersionModel.__table__,
-            MediaDerivativeTaskModel.__table__,
+            cast(Table, FileObjectModel.__table__),
+            cast(Table, ReviewItemModel.__table__),
+            cast(Table, ReviewVersionModel.__table__),
+            cast(Table, MediaDerivativeTaskModel.__table__),
         ],
     )
     settings = _settings(tmp_path, media_worker_max_attempts=2)
@@ -512,10 +512,10 @@ def test_thumbnail_publish_is_rejected_after_current_version_switch(
     Base.metadata.create_all(
         engine,
         tables=[
-            FileObjectModel.__table__,
-            ReviewItemModel.__table__,
-            ReviewVersionModel.__table__,
-            MediaDerivativeTaskModel.__table__,
+            cast(Table, FileObjectModel.__table__),
+            cast(Table, ReviewItemModel.__table__),
+            cast(Table, ReviewVersionModel.__table__),
+            cast(Table, MediaDerivativeTaskModel.__table__),
         ],
     )
     now = utcnow()

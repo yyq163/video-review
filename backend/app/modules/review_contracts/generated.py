@@ -232,6 +232,7 @@ class ReviewVersionDTO(ContractModel):
     original_media: OriginalMediaSnapshotDTO
     playback_status: Literal["processing", "ready", "failed"]
     playback_asset_id: str | None = None
+    thumbnail_status: Literal["processing", "ready", "failed"]
     thumbnail_asset_id: str | None = None
     version_note: str | None = None
     change_summary: str | None = None

@@ -41,11 +41,17 @@ image build pins Debian package `7:7.1.5-0+deb13u1`, rejects
 `--enable-nonfree`, and records `ffmpeg -version`, `ffmpeg -buildconf`,
 `ffprobe -version`, Debian package versions, and dynamic libraries.
 
-The actual GPL/LGPL obligations are determined by those candidate-image build
-records and linked libraries. If `--enable-gpl` or GPL libraries are present,
-the distribution must be handled as GPL; it must not be described as an LGPL
-build. Target-region patent review for H.264, H.265, AAC, and any final codec
-combination is still incomplete, so commercial release remains blocked.
+The 2026-08-01 local isolated candidate image
+`sha256:4b2f5282ef86c56fe8d192cb54196621003d826c4c8d35acfbbf5cc36d6eb6b3`
+reports `--enable-gpl`, no `--enable-nonfree`, shared libraries, and FFmpeg's
+GPL version 2 or later notice. This candidate and both distribution SBOMs are
+therefore classified as `GPL-2.0-or-later`; they must not be described as an
+LGPL build. The exact candidate image's `/usr/share/common-licenses/GPL-2` and
+`/usr/share/doc/ffmpeg/copyright` are preserved byte-for-byte in the generated
+license index under `locked:deb:ffmpeg`. The customer redistribution procedure
+for providing the corresponding GPL source is not approved. Target-region
+patent review for H.264, H.265, AAC, and any final codec combination is also
+incomplete, so commercial release remains blocked.
 
 ## Generated dependency notices
 

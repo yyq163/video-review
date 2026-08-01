@@ -728,6 +728,12 @@ def test_project_summary_is_batched_and_contains_authoritative_card_state(
         "SUM003",
     )
     create_issue(client, project_two["project_ref_id"], first, content="summary issue")
+    version_status = client.get(
+        f"/api/v1/final-cut-review/projects/{project_two['project_ref_id']}"
+        f"/items/{first['id']}/versions/{first['current_version_id']}"
+    )
+    assert version_status.status_code == 200, version_status.text
+    version_status_data = api_data(version_status)
 
     physical_verification_calls: list[str] = []
 
@@ -792,6 +798,8 @@ def test_project_summary_is_batched_and_contains_authoritative_card_state(
     assert first_card["current_version"]["playback_url"].endswith("/stream")
     assert first_card["current_version"]["thumbnail_status"] == "pending"
     assert first_card["current_version"]["thumbnail_url"] is None
+    assert version_status_data["playback_status"] == "ready"
+    assert version_status_data["thumbnail_status"] == "processing"
     assert first_card["bulk_delete"] == {
         "eligible": False,
         "locked": True,
@@ -915,6 +923,7 @@ def test_protected_playback_accepts_managed_media_derivative_id(
     )
     response = client.get(stream_path, headers={"Range": "bytes=0-3"})
     assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-accel-redirect"] == f"/_protected_media/{playback_id}"
     assert str(get_settings().storage_root) not in response.headers["x-accel-redirect"]
 
@@ -976,6 +985,7 @@ def test_protected_thumbnail_requires_current_ready_derivative(
     response = client.get(thumbnail_route)
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("image/jpeg")
+    assert response.headers["cache-control"] == "private, no-cache, max-age=0, must-revalidate"
     assert response.content == thumbnail_bytes
 
     create_issue(client, project["project_ref_id"], item, content="request v2")
@@ -4552,7 +4562,7 @@ def test_package_worker_rejects_source_size_drift_before_archive_entry_write(
     archive_entry_opened = False
     original_open = repository_module.zipfile.ZipFile.open
 
-    def track_archive_open(*args: object, **kwargs: object) -> Any:
+    def track_archive_open(*args: Any, **kwargs: Any) -> Any:
         nonlocal archive_entry_opened
         archive_entry_opened = True
         return original_open(*args, **kwargs)

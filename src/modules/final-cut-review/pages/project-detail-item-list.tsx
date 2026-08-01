@@ -57,8 +57,27 @@ interface ProjectDetailItemListProps {
 
 function isControlTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(
-    target.closest('a, button, input, textarea, select, label, summary'),
+    target.closest('a, button, input, textarea, select, label, summary, [data-selection-control="true"]'),
   );
+}
+
+function deleteUnavailableReason(
+  item: ReviewProjectSummaryItem,
+  itemActionPending: boolean,
+  uncertain: boolean,
+): string | null {
+  if (itemActionPending) return '操作处理中';
+  if (uncertain) return '删除结果确认中，不可重复删除';
+  if (item.bulkDelete.eligible) return null;
+  if (item.status === 'in_review') return '审阅中，不可删除';
+  if (item.status === 'changes_requested') return '待修改，不可删除';
+  if (item.status === 'finalized') return '已定稿，不可删除';
+  if (item.bulkDelete.reason === 'project_read_only') return '项目已归档，不可删除';
+  if (item.bulkDelete.reason === 'version_history') return '存在历史版本，不可删除';
+  if (item.bulkDelete.reason === 'issue_history') return '存在审阅意见，不可删除';
+  if (item.bulkDelete.reason === 'finalization_history') return '存在定稿记录，不可删除';
+  if (item.bulkDelete.locked) return '当前条目已锁定，不可删除';
+  return '当前不可删除';
 }
 
 function thumbnailState(item: ReviewProjectSummaryItem) {
@@ -377,6 +396,11 @@ export function ProjectDetailItemList({
         const cleanupPending = item.revocationCleanupStatus === 'pending';
         const cleanupFailed = item.revocationCleanupStatus === 'failed';
         const isFinalized = item.status === 'finalized' && item.finalization?.status === 'active';
+        const deleteReason = deleteUnavailableReason(
+          item,
+          itemActionPending,
+          batchDeleteUncertainIds.has(item.reviewItemId),
+        );
         const classes = [
           'fj-review-item-row',
           selected ? 'is-selected-for-delete' : '',
@@ -437,7 +461,7 @@ export function ProjectDetailItemList({
                   className="fj-review-finalized-revoke"
                   disabled={itemActionPending || revokePending || revokeUncertain}
                   onClick={() => {
-                    if (!window.confirm(`确认撤销第 ${item.episode} 集定稿？关联项目包将立即失效并进入受控清理。`)) {
+                    if (!window.confirm(`确认撤销第 ${item.episode} 集定稿？关联项目包将立即失效、无法继续下载，并进入物理删除的受控清理。`)) {
                       return;
                     }
                     setRevokeUiStates((current) => ({
@@ -497,17 +521,26 @@ export function ProjectDetailItemList({
                   />
                 </CapabilityGate>
               ) : null}
-              {item.bulkDelete.eligible ? (
+              {!isArchived ? (
                 <CapabilityGate entryMode={entryMode} capability="review.item.delete">
-                  <button
-                    aria-label={`删除分集 ${item.title}`}
-                    className="fj-review-secondary is-danger"
-                    disabled={itemActionPending || item.bulkDelete.locked || batchDeleteUncertainIds.has(item.reviewItemId)}
-                    onClick={() => onDeleteReviewItem(item)}
-                    type="button"
+                  <span
+                    className="fj-review-disabled-action-tooltip"
+                    aria-label={deleteReason ?? undefined}
+                    data-selection-control="true"
+                    data-tooltip={deleteReason ?? undefined}
+                    tabIndex={deleteReason ? 0 : undefined}
+                    title={deleteReason ?? undefined}
                   >
-                    删除
-                  </button>
+                    <button
+                      aria-label={`删除分集 ${item.title}`}
+                      className={`fj-review-secondary is-danger${deleteReason ? ' is-delete-disabled' : ''}`}
+                      disabled={Boolean(deleteReason)}
+                      onClick={() => onDeleteReviewItem(item)}
+                      type="button"
+                    >
+                      删除
+                    </button>
+                  </span>
                 </CapabilityGate>
               ) : null}
               {batchDeleteFailures[item.reviewItemId] ? (

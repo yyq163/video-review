@@ -4,6 +4,8 @@ import copy
 import hashlib
 import importlib.util
 import json
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -79,6 +81,17 @@ def test_ffmpeg_source_and_architecture_hashes_are_in_both_sboms() -> None:
         if component["name"] == "ffmpeg"
     )
     assert set(ffmpeg_lock["artifact_hashes"]) == {"amd64", "arm64"}
+    assert ffmpeg_lock["license"] == "GPL-2.0-or-later"
+    index = load_json("compliance/license-index.json")
+    indexed_ffmpeg_materials = {
+        (entry["source"], entry["sha256"])
+        for entry in index["licenses"]
+        if entry["component"] == "locked:deb:ffmpeg"
+    }
+    assert indexed_ffmpeg_materials == {
+        (material["path"], material["sha256"])
+        for material in ffmpeg_lock["license_materials"]
+    }
     expected_hashes = {
         normalized_sha256(ffmpeg_lock["source_sha256"]),
         *(
@@ -87,8 +100,22 @@ def test_ffmpeg_source_and_architecture_hashes_are_in_both_sboms() -> None:
         ),
     }
 
+    lock_generated_at = datetime.fromisoformat(
+        str(lock["generated_at"]).replace("Z", "+00:00")
+    )
+    serial_numbers: set[str] = set()
     for distribution in ("saas", "customer-container"):
         sbom = load_json(f"compliance/sbom/{distribution}.cdx.json")
+        generated_at = datetime.fromisoformat(
+            str(sbom["metadata"]["timestamp"]).replace("Z", "+00:00")
+        )
+        assert generated_at >= lock_generated_at
+        serial_number = str(sbom["serialNumber"])
+        assert serial_number.startswith("urn:uuid:")
+        uuid.UUID(serial_number.removeprefix("urn:uuid:"))
+        assert serial_number not in serial_numbers
+        serial_numbers.add(serial_number)
+        assert sbom["version"] == 1
         ffmpeg = next(
             component
             for component in sbom["components"]
@@ -98,6 +125,12 @@ def test_ffmpeg_source_and_architecture_hashes_are_in_both_sboms() -> None:
         properties = {
             item["name"]: item["value"] for item in ffmpeg["properties"]
         }
+        assert ffmpeg["licenses"] == [
+            {"license": {"id": "GPL-2.0-or-later"}}
+        ]
+        assert properties["fcr:candidate-image-digest"] == ffmpeg_lock[
+            "candidate_image_digest"
+        ]
         assert properties["fcr:source-sha256"] == normalized_sha256(
             ffmpeg_lock["source_sha256"]
         )

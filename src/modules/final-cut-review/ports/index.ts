@@ -62,6 +62,18 @@ export interface ReviewProjectSummary {
 export interface ReviewQueryPort {
   listProjects(options?: QueryOptions): Promise<Project[]>;
   getProjectSummary(projectRefId: ProjectRefId, options?: QueryOptions): Promise<ReviewProjectSummary>;
+  getReviewItem(
+    params: { projectRefId: ProjectRefId; reviewItemId: ReviewItemId },
+    options?: QueryOptions,
+  ): Promise<ReviewItemWithMetadata>;
+  getVersion(
+    params: {
+      projectRefId: ProjectRefId;
+      reviewItemId: ReviewItemId;
+      versionId: VersionId;
+    },
+    options?: QueryOptions,
+  ): Promise<ReviewVersion>;
   getVersionIssues(
     params: {
       projectRefId: ProjectRefId;

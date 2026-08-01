@@ -587,7 +587,6 @@ review.issue.reply
 review.issue.resolve
 review.issue.reopen
 review.session.start
-review.session.request_changes
 review.finalization.read
 review.finalization.create
 review.download.finalized_original
@@ -841,7 +840,6 @@ const REVIEW_ENTRY_PROFILE = [
   "review.issue.resolve",
   "review.issue.reopen",
   "review.session.start",
-  "review.session.request_changes",
   "review.finalization.read",
   "review.finalization.create",
   "review.download.finalized_original",
@@ -1629,25 +1627,22 @@ resolved -> unresolved
 
 ---
 
-# 18. 要求修改
+# 18. 意见生命周期驱动待修改
 
-## 18.1 前置条件
+## 18.1 触发条件
 
-- 目标版本是当前版本。
-- 条目状态为 `in_review`。
-- 当前版本至少一条 unresolved Issue。
-- 当前版本必须 playback ready。
-- 修改要求说明必填。
+- 只统计 `current_version_id` 对应版本的未删除 unresolved Issue。
+- 第一条这类意见被创建或重新打开时触发。
+- 最后一条这类意见被解决或删除时触发。
 
 ## 18.2 结果
 
 同一事务内：
 
-1. 创建 `ReviewDecision(changes_requested)`。
-2. 状态变为 `changes_requested`。
-3. 当前版本和意见保持只读可查。
-4. 发布 `review.changes_requested`。
-5. 剪辑入口显示“上传新版本”。
+1. 未解决、未删除意见从 0 变为 1+ 时，条目自动变为 `changes_requested`。
+2. 计数从 1+ 变为 0 时，条目自动回到 `in_review`。
+3. 不注册手动 RequestChanges capability、命令、路由或 handler。
+4. `changes_requested` 作为意见驱动的工作流状态保留。
 
 ---
 
@@ -1916,7 +1911,6 @@ UpdateReviewIssue
 AddReviewMessage
 ResolveReviewIssue
 ReopenReviewIssue
-RequestChanges
 FinalizeVersion
 PrepareFinalizedPackage
 ```
@@ -2894,7 +2888,7 @@ EmbeddedReviewHostBridge
 - 显式 Start Review 可进入审阅中。
 - 创建第一条意见可隐式开始审阅。
 - 审阅中禁止上传新版本。
-- 要求修改后可上传新版本。
+- 当前版本存在未删除意见后可上传新版本，不依赖手动状态命令。
 - 已定稿后全部写命令拒绝。
 
 ## 37.6 防串
@@ -2952,7 +2946,7 @@ EmbeddedReviewHostBridge
 
 ```text
 剪辑入口：项目管理、创建成片、上传 V1、追加版本、查看意见、单片定稿下载。
-审阅入口：完整审阅、批注、回复、解决、重新打开、要求修改、定稿、单片下载、项目打包。
+审阅入口：完整审阅、批注、回复、解决、重新打开、意见驱动状态、定稿、单片下载、项目打包。
 ```
 
 ```text

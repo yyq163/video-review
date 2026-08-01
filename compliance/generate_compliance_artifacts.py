@@ -9,11 +9,13 @@ import re
 import urllib.parse
 import uuid
 from collections import deque
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from packaging.requirements import Requirement
-from packaging.utils import canonicalize_name
+from packaging.utils import NormalizedName, canonicalize_name
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPLIANCE_ROOT = ROOT / "compliance"
@@ -66,15 +68,15 @@ class DistributionLike(Protocol):
 
 
 def _resolved_python_names(
-    installed: dict[str, DistributionLike],
+    installed: Mapping[NormalizedName, DistributionLike],
     roots: list[Requirement],
-) -> list[str]:
-    queue: deque[tuple[str, frozenset[str]]] = deque(
+) -> list[NormalizedName]:
+    queue: deque[tuple[NormalizedName, frozenset[str]]] = deque(
         (canonicalize_name(requirement.name), frozenset(requirement.extras))
         for requirement in roots
     )
-    visited: set[tuple[str, frozenset[str]]] = set()
-    selected: set[str] = set()
+    visited: set[tuple[NormalizedName, frozenset[str]]] = set()
+    selected: set[NormalizedName] = set()
     while queue:
         state = queue.popleft()
         if state in visited:
@@ -101,7 +103,10 @@ def _python_dependency_closure() -> list[importlib.metadata.Distribution]:
         for distribution in importlib.metadata.distributions(path=[str(PYTHON_SITE_PACKAGES)])
         if distribution.metadata.get("Name")
     }
-    names = _resolved_python_names(installed, _direct_python_requirements())
+    names = _resolved_python_names(
+        cast(Mapping[NormalizedName, DistributionLike], installed),
+        _direct_python_requirements(),
+    )
     return [installed[name] for name in names]
 
 
@@ -214,6 +219,14 @@ def _infrastructure_components(distribution_form: str) -> list[dict[str, Any]]:
                     "value": normalized_artifact,
                 }
             )
+        candidate_image_digest = entry.get("candidate_image_digest")
+        if candidate_image_digest:
+            properties.append(
+                {
+                    "name": "fcr:candidate-image-digest",
+                    "value": f"sha256:{_sha256_value(candidate_image_digest)}",
+                }
+            )
         if hashes:
             component["hashes"] = list(
                 {item["content"]: item for item in hashes}.values()
@@ -233,20 +246,22 @@ def _candidate_sbom(
     distribution_form: str,
     python_components: list[dict[str, Any]],
     npm_components: list[dict[str, Any]],
+    *,
+    generated_at: str,
+    serial_number: uuid.UUID,
 ) -> dict[str, Any]:
     components = [
         *_infrastructure_components(distribution_form),
         *python_components,
         *npm_components,
     ]
-    deterministic = hashlib.sha256(distribution_form.encode()).hexdigest()
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.6",
-        "serialNumber": f"urn:uuid:{uuid.UUID(deterministic[:32])}",
+        "serialNumber": f"urn:uuid:{serial_number}",
         "version": 1,
         "metadata": {
-            "timestamp": "2026-07-31T00:00:00Z",
+            "timestamp": generated_at,
             "component": {
                 "type": "application",
                 "bom-ref": "application:fj-final-cut-review",
@@ -379,6 +394,37 @@ def _record_apache_infrastructure_materials(
     return recorded_paths
 
 
+def _record_ffmpeg_materials(index: list[dict[str, str]]) -> set[Path]:
+    lock = json.loads(
+        (COMPLIANCE_ROOT / "component-lock.json").read_text(encoding="utf-8")
+    )
+    ffmpeg = next(
+        (entry for entry in lock["components"] if entry["name"] == "ffmpeg"),
+        None,
+    )
+    if ffmpeg is None or ffmpeg.get("license") != "GPL-2.0-or-later":
+        raise RuntimeError("locked FFmpeg GPL identity is absent")
+    materials = ffmpeg.get("license_materials", [])
+    expected_paths = {
+        "compliance/upstream-license-texts/FFmpeg-GPL-2.txt",
+        "compliance/upstream-license-texts/FFmpeg-Debian-copyright.txt",
+    }
+    if {material.get("path") for material in materials} != expected_paths:
+        raise RuntimeError("FFmpeg GPL/copyright material coverage is incomplete")
+    recorded_paths: set[Path] = set()
+    for material in materials:
+        path = ROOT / str(material["path"])
+        _record_license(
+            index,
+            bom_ref="locked:deb:ffmpeg",
+            source=path,
+            expected_sha256=_sha256_value(material["sha256"]),
+            upstream_source=str(material["source"]),
+        )
+        recorded_paths.add(path)
+    return recorded_paths
+
+
 def _generate_license_index(
     python_distributions: dict[str, importlib.metadata.Distribution],
     npm_paths: dict[str, Path],
@@ -386,9 +432,10 @@ def _generate_license_index(
     index: list[dict[str, str]] = []
     discovered: set[str] = set()
     material_paths = _record_apache_infrastructure_materials(index)
+    material_paths.update(_record_ffmpeg_materials(index))
     for bom_ref, distribution in sorted(python_distributions.items()):
         for item in distribution.files or ():
-            path = Path(distribution.locate_file(item))
+            path = Path(str(distribution.locate_file(item)))
             if path.is_file() and LICENSE_NAME.fullmatch(path.name):
                 _record_license(index, bom_ref=bom_ref, source=path)
                 discovered.add(bom_ref)
@@ -419,13 +466,30 @@ def main() -> int:
     python_distributions = _python_dependency_closure()
     python_components, python_by_ref = _python_components(python_distributions)
     npm_components, npm_paths = _npm_components()
+    generated_at = (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
     _write_json(
         SBOM_ROOT / "saas.cdx.json",
-        _candidate_sbom("saas", python_components, npm_components),
+        _candidate_sbom(
+            "saas",
+            python_components,
+            npm_components,
+            generated_at=generated_at,
+            serial_number=uuid.uuid4(),
+        ),
     )
     _write_json(
         SBOM_ROOT / "customer-container.cdx.json",
-        _candidate_sbom("customer-container", python_components, npm_components),
+        _candidate_sbom(
+            "customer-container",
+            python_components,
+            npm_components,
+            generated_at=generated_at,
+            serial_number=uuid.uuid4(),
+        ),
     )
     _generate_license_index(python_by_ref, npm_paths)
     print(

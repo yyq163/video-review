@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-31T00:00:00Z",
+  "generated_at": "2026-08-01T05:21:32Z",
   "commercial_release_status": "BLOCKED",
   "commercial_release_blockers": [
     "target distribution regions are not approved",
     "final H.264, H.265, and AAC codec combinations are not approved",
-    "the candidate backend image digest and its runtime FFmpeg build records do not exist until an authorized build"
+    "FFmpeg GPL corresponding-source delivery and customer redistribution procedure are not approved",
+    "the candidate backend image digest and runtime FFmpeg build records are locally verified but are not approved for production or customer distribution"
   ],
   "components": [
     {
@@ -66,9 +67,22 @@
         "amd64": "sha256:8669bc77e55393c14e0dd257ba9a916007cb6da0e1074c9b5e1d53812024f2af",
         "arm64": "sha256:6ec9c42306df30803c731c9e53300627257fd59d2f5a80b394c14cec5fd6d5ef"
       },
-      "license": "NOASSERTION",
+      "candidate_image_digest": "sha256:4b2f5282ef86c56fe8d192cb54196621003d826c4c8d35acfbbf5cc36d6eb6b3",
+      "license": "GPL-2.0-or-later",
+      "license_materials": [
+        {
+          "path": "compliance/upstream-license-texts/FFmpeg-GPL-2.txt",
+          "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+          "source": "candidate-image:/usr/share/common-licenses/GPL-2"
+        },
+        {
+          "path": "compliance/upstream-license-texts/FFmpeg-Debian-copyright.txt",
+          "sha256": "28700587b4c278cd4e24adf4174a6fbe2510f27af962966d9ff15144b0b9ddbb",
+          "source": "candidate-image:/usr/share/doc/ffmpeg/copyright"
+        }
+      ],
       "distribution": ["saas", "customer-container"],
-      "notes": "The Docker build rejects --enable-nonfree and records version, buildconf, package versions, and dynamic libraries. GPL/LGPL classification remains blocked until those candidate-image records are reviewed."
+      "notes": "The 2026-08-01 local isolated candidate reports FFmpeg 7.1.5-0+deb13u1, --enable-gpl, no --enable-nonfree, shared libraries, and the built-in GPL version 2 or later notice. Treat this candidate as GPL; production/customer approval and codec patent review remain blocked."
     },
     {
       "name": "prometheus-client",

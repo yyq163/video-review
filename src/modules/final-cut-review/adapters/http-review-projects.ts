@@ -12,6 +12,8 @@ type ProjectApi = Pick<
   ReviewApiPort,
   | 'listProjects'
   | 'getProjectSummary'
+  | 'getReviewItem'
+  | 'getVersion'
   | 'getVersionIssues'
   | 'getIssueDetail'
   | 'getWorkspace'
@@ -168,6 +170,23 @@ export class HttpReviewProjects implements ProjectApi {
       items: dto.items.map((item) => summaryItemFromDto(item, project, this.transport.baseUrl)),
     };
   };
+
+  readonly getReviewItem: ReviewApiPort['getReviewItem'] = async (params, options) =>
+    editableItemFromDto(
+      await this.transport.requestJson<ReviewItemDTO>(
+        `/api/v1/final-cut-review/projects/${params.projectRefId}/items/${params.reviewItemId}`,
+        { signal: options?.signal },
+      ),
+    );
+
+  readonly getVersion: ReviewApiPort['getVersion'] = async (params, options) =>
+    versionFromDto(
+      await this.transport.requestJson<ReviewVersionDTO>(
+        `/api/v1/final-cut-review/projects/${params.projectRefId}/items/${params.reviewItemId}/versions/${params.versionId}`,
+        { signal: options?.signal },
+      ),
+      this.transport.baseUrl,
+    );
 
   readonly getVersionIssues: ReviewApiPort['getVersionIssues'] = async (params, options) =>
     this.queries.issuesForVersion(

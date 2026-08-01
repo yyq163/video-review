@@ -144,6 +144,7 @@ def test_worker_metrics_are_management_only_and_prometheus_scraped() -> None:
     }
     assert "package-worker:9101" in scrape_targets
     assert "media-worker:9102" in scrape_targets
+    assert "nginx-metrics-exporter:9103" in scrape_targets
     assert compose["networks"]["management"]["internal"] is True
     assert set(compose["services"]["prometheus"]["networks"]) == {"management"}
     assert compose["services"]["backend"]["environment"]["MANAGEMENT_NETWORK_CIDR"] == (
@@ -153,6 +154,37 @@ def test_worker_metrics_are_management_only_and_prometheus_scraped() -> None:
         {"subnet": "${MANAGEMENT_NETWORK_SUBNET:-172.30.0.0/24}"}
     ]
     assert "ports" not in compose["services"]["prometheus"]
+
+
+def test_nginx_range_metrics_are_bounded_management_only_and_best_effort() -> None:
+    root = Path(__file__).resolve().parents[2]
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text(encoding="utf-8"))
+    exporter = compose["services"]["nginx-metrics-exporter"]
+    assert exporter["profiles"] == ["observability"]
+    assert exporter["user"] == "10001:10001"
+    assert exporter["read_only"] is True
+    assert exporter["cap_drop"] == ["ALL"]
+    assert exporter["security_opt"] == ["no-new-privileges:true"]
+    assert exporter["expose"] == ["9103", "5514/udp"]
+    assert "ports" not in exporter
+    assert set(exporter["networks"]) == {"management"}
+
+    nginx = compose["services"]["nginx"]
+    assert set(nginx["networks"]) == {"app-internal", "management"}
+    assert nginx["environment"]["NGINX_METRICS_EXPORTER_MANAGEMENT_IP"] == (
+        "${NGINX_METRICS_EXPORTER_MANAGEMENT_IP:-172.30.0.15}"
+    )
+    template = (root / "ops/nginx/nginx.conf.template").read_text(encoding="utf-8")
+    metric_format = next(
+        line for line in template.splitlines() if "log_format range_metrics" in line
+    )
+    assert "$uri" not in metric_format
+    assert "$request_uri" not in metric_format
+    assert "$remote_addr" not in metric_format
+    assert "$request_id" not in metric_format
+    assert "$http_range" not in metric_format
+    assert "if=$fcr_metric_loggable" in template
+    assert "syslog:server=${NGINX_METRICS_EXPORTER_MANAGEMENT_IP}:5514" in template
 
 
 def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:

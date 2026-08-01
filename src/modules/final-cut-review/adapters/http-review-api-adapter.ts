@@ -13,6 +13,8 @@ export class HttpReviewApiAdapter implements ReviewApiPort {
   private readonly uploads: HttpReviewUploads;
   readonly listProjects: ReviewApiPort['listProjects'];
   readonly getProjectSummary: ReviewApiPort['getProjectSummary'];
+  readonly getReviewItem: ReviewApiPort['getReviewItem'];
+  readonly getVersion: ReviewApiPort['getVersion'];
   readonly getVersionIssues: ReviewApiPort['getVersionIssues'];
   readonly getIssueDetail: ReviewApiPort['getIssueDetail'];
   readonly getWorkspace: ReviewApiPort['getWorkspace'];
@@ -59,6 +61,8 @@ export class HttpReviewApiAdapter implements ReviewApiPort {
 
     this.listProjects = projects.listProjects;
     this.getProjectSummary = projects.getProjectSummary;
+    this.getReviewItem = projects.getReviewItem;
+    this.getVersion = projects.getVersion;
     this.getVersionIssues = projects.getVersionIssues;
     this.getIssueDetail = projects.getIssueDetail;
     this.getWorkspace = projects.getWorkspace;

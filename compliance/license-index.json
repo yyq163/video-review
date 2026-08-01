@@ -22,6 +22,20 @@
       "upstream_source": "https://raw.githubusercontent.com/prometheus/prometheus/40af9c2cdc0eda00f3622e867a27f6359f7295f3/NOTICE"
     },
     {
+      "bundled_file": "compliance/license-texts/edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6.txt",
+      "component": "locked:deb:ffmpeg",
+      "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+      "source": "compliance/upstream-license-texts/FFmpeg-GPL-2.txt",
+      "upstream_source": "candidate-image:/usr/share/common-licenses/GPL-2"
+    },
+    {
+      "bundled_file": "compliance/license-texts/28700587b4c278cd4e24adf4174a6fbe2510f27af962966d9ff15144b0b9ddbb.txt",
+      "component": "locked:deb:ffmpeg",
+      "sha256": "28700587b4c278cd4e24adf4174a6fbe2510f27af962966d9ff15144b0b9ddbb",
+      "source": "compliance/upstream-license-texts/FFmpeg-Debian-copyright.txt",
+      "upstream_source": "candidate-image:/usr/share/doc/ffmpeg/copyright"
+    },
+    {
       "bundled_file": "compliance/license-texts/35ea9c3419b261faf1be448c4f47d9255281bf6b36b5ffea55052227d4ba54de.txt",
       "component": "python:alembic",
       "sha256": "35ea9c3419b261faf1be448c4f47d9255281bf6b36b5ffea55052227d4ba54de",

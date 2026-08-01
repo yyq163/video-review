@@ -988,13 +988,49 @@ class SqlAlchemyReviewRepository:
         ).model_dump(mode="json")
 
     def version_dto(self, version: ReviewVersionModel) -> dict[str, Any]:
-        playback_file = self.session.get(FileObjectModel, version.playback_asset_id) if version.playback_asset_id else None
-        return self._version_dto(version, playback_file)
+        derivative_tasks = {
+            task.kind: task
+            for task in self.session.scalars(
+                select(MediaDerivativeTaskModel).where(
+                    MediaDerivativeTaskModel.project_ref_id == version.project_ref_id,
+                    MediaDerivativeTaskModel.review_item_id == version.review_item_id,
+                    MediaDerivativeTaskModel.version_id == version.id,
+                )
+            ).all()
+        }
+        asset_ids = {
+            asset_id
+            for asset_id in (version.playback_asset_id, version.thumbnail_asset_id)
+            if asset_id
+        }
+        files = {
+            file.id: file
+            for file in self.session.scalars(
+                select(FileObjectModel).where(FileObjectModel.id.in_(asset_ids))
+            ).all()
+        } if asset_ids else {}
+        return self._version_dto(
+            version,
+            playback_status=self._version_derivative_status(
+                version,
+                "playback_faststart",
+                derivative_tasks.get("playback_faststart"),
+                files.get(version.playback_asset_id or ""),
+            ),
+            thumbnail_status=self._version_derivative_status(
+                version,
+                "thumbnail",
+                derivative_tasks.get("thumbnail"),
+                files.get(version.thumbnail_asset_id or ""),
+            ),
+        )
 
     def _version_dto(
         self,
         version: ReviewVersionModel,
-        playback_file: FileObjectModel | None,
+        *,
+        playback_status: str,
+        thumbnail_status: str,
     ) -> dict[str, Any]:
         return ReviewVersionDTO(
             id=version.id,
@@ -1005,14 +1041,40 @@ class SqlAlchemyReviewRepository:
             version_label=version.version_label,
             is_current=version.is_current,
             original_media=_media_from_version(version),
-            playback_status=self._playback_file_status(playback_file),  # type: ignore[arg-type]
+            playback_status=playback_status,  # type: ignore[arg-type]
             playback_asset_id=version.playback_asset_id,
+            thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
             thumbnail_asset_id=version.thumbnail_asset_id,
             version_note=version.version_note,
             change_summary=version.change_summary,
             lock_version=version.lock_version,
             created_at=iso(version.created_at),
         ).model_dump(mode="json")
+
+    def _version_derivative_status(
+        self,
+        version: ReviewVersionModel,
+        kind: str,
+        task: MediaDerivativeTaskModel | None,
+        file: FileObjectModel | None,
+    ) -> str:
+        asset_id = (
+            version.playback_asset_id
+            if kind == "playback_faststart"
+            else version.thumbnail_asset_id
+        )
+        if task is not None:
+            if task.status in {"queued", "running"}:
+                return "processing"
+            if (
+                task.status != "ready"
+                or task.output_file_id is None
+                or task.output_file_id != asset_id
+            ):
+                return "failed"
+        if asset_id is None or file is None or file.id != asset_id:
+            return "failed"
+        return "ready" if self._playback_file_is_ready(file) else "failed"
 
     def _playback_status(self, version: ReviewVersionModel) -> str:
         playback_file = self.session.get(FileObjectModel, version.playback_asset_id) if version.playback_asset_id else None
@@ -3435,9 +3497,45 @@ class SqlAlchemyReviewRepository:
         versions = self.session.scalars(
             select(ReviewVersionModel).where(*filters).order_by(ReviewVersionModel.version_no).offset(self._page_offset(page, page_size)).limit(page_size)
         ).all()
-        playback_ids = [version.playback_asset_id for version in versions if version.playback_asset_id]
-        playback_files = {file.id: file for file in self.session.scalars(select(FileObjectModel).where(FileObjectModel.id.in_(playback_ids))).all()}
-        return [self._version_dto(version, playback_files.get(version.playback_asset_id or "")) for version in versions], int(total)
+        version_ids = [version.id for version in versions]
+        derivative_tasks = {
+            (task.version_id, task.kind): task
+            for task in self.session.scalars(
+                select(MediaDerivativeTaskModel).where(
+                    MediaDerivativeTaskModel.version_id.in_(version_ids)
+                )
+            ).all()
+        } if version_ids else {}
+        asset_ids = {
+            asset_id
+            for version in versions
+            for asset_id in (version.playback_asset_id, version.thumbnail_asset_id)
+            if asset_id
+        }
+        files = {
+            file.id: file
+            for file in self.session.scalars(
+                select(FileObjectModel).where(FileObjectModel.id.in_(asset_ids))
+            ).all()
+        } if asset_ids else {}
+        return [
+            self._version_dto(
+                version,
+                playback_status=self._version_derivative_status(
+                    version,
+                    "playback_faststart",
+                    derivative_tasks.get((version.id, "playback_faststart")),
+                    files.get(version.playback_asset_id or ""),
+                ),
+                thumbnail_status=self._version_derivative_status(
+                    version,
+                    "thumbnail",
+                    derivative_tasks.get((version.id, "thumbnail")),
+                    files.get(version.thumbnail_asset_id or ""),
+                ),
+            )
+            for version in versions
+        ], int(total)
 
     def list_issues_page(
         self,

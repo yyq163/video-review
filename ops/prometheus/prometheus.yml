@@ -28,6 +28,14 @@ scrape_configs:
       - targets:
           - media-worker:9102
 
+  - job_name: fj-final-cut-review-nginx-range
+    metrics_path: /metrics
+    honor_labels: false
+    sample_limit: 5000
+    static_configs:
+      - targets:
+          - nginx-metrics-exporter:9103
+
   - job_name: fj-final-cut-review-cadvisor
     metrics_path: /metrics
     honor_labels: false

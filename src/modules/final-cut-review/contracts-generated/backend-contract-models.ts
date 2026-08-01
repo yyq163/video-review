@@ -115,6 +115,7 @@ export interface ReviewVersionDTO {
   original_media: OriginalMediaSnapshotDTO;
   playback_status: "processing" | "ready" | "failed";
   playback_asset_id?: string | null;
+  thumbnail_status: "processing" | "ready" | "failed";
   thumbnail_asset_id?: string | null;
   version_note?: string | null;
   change_summary?: string | null;

@@ -1356,6 +1356,7 @@ function reviewVersion(versionNo: number, file: File): ReviewVersionDTO {
     },
     playback_status: 'ready',
     playback_asset_id: `file_${label.toLowerCase()}`,
+    thumbnail_status: 'failed',
     thumbnail_asset_id: null,
     version_note: `${label} note`,
     change_summary: `${label} changes`,

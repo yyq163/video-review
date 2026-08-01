@@ -436,9 +436,14 @@ services:
         esac
         test "$${#edge_secret}" -ge 32
         test "$${#edge_secret}" -le 128
+        metrics_exporter_ip="$${NGINX_METRICS_EXPORTER_MANAGEMENT_IP}"
+        case "$${metrics_exporter_ip}" in
+          ""|*[!0-9.]*) echo "invalid NGINX metrics exporter address" >&2; exit 1 ;;
+        esac
         export FCR_EDGE_HANDOFF_SECRET="$${edge_secret}"
-        envsubst '$${FCR_EDGE_HANDOFF_SECRET}' < /etc/nginx/templates/nginx.conf.template > /tmp/nginx.conf
-        unset edge_secret FCR_EDGE_HANDOFF_SECRET
+        export NGINX_METRICS_EXPORTER_MANAGEMENT_IP="$${metrics_exporter_ip}"
+        envsubst '$${FCR_EDGE_HANDOFF_SECRET} $${NGINX_METRICS_EXPORTER_MANAGEMENT_IP}' < /etc/nginx/templates/nginx.conf.template > /tmp/nginx.conf
+        unset edge_secret metrics_exporter_ip FCR_EDGE_HANDOFF_SECRET NGINX_METRICS_EXPORTER_MANAGEMENT_IP
         exec nginx -c /tmp/nginx.conf -g 'daemon off;'
     depends_on:
       backend:
@@ -462,12 +467,59 @@ services:
       - ALL
     secrets:
       - edge_handoff_secret
+    environment:
+      NGINX_METRICS_EXPORTER_MANAGEMENT_IP: ${NGINX_METRICS_EXPORTER_MANAGEMENT_IP:-172.30.0.15}
     volumes:
       - ./ops/nginx/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
       - fj-final-cut-review-data:/data:ro
     networks:
       app-internal:
         ipv4_address: ${NGINX_INTERNAL_IP:-172.29.0.10}
+      management:
+        ipv4_address: ${NGINX_MANAGEMENT_IP:-172.30.0.14}
+
+  nginx-metrics-exporter:
+    image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    profiles:
+      - observability
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 128m
+    pids_limit: 32
+    entrypoint: []
+    user: "10001:10001"
+    command:
+      - python
+      - -m
+      - backend.app.nginx_metrics_exporter
+    environment:
+      NGINX_METRICS_BIND_HOST: ${NGINX_METRICS_EXPORTER_MANAGEMENT_IP:-172.30.0.15}
+      NGINX_METRICS_UDP_PORT: "5514"
+      NGINX_METRICS_HTTP_PORT: "9103"
+      LOG_LEVEL: INFO
+    expose:
+      - "9103"
+      - "5514/udp"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os,urllib.request;
+          urllib.request.urlopen('http://' + os.environ['NGINX_METRICS_BIND_HOST'] + ':9103/metrics', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      management:
+        ipv4_address: ${NGINX_METRICS_EXPORTER_MANAGEMENT_IP:-172.30.0.15}
 
   prometheus:
     image: prom/prometheus:v3.13.0@sha256:c6b27ea434f8389bfe233fbc7be381cf50587c286e871bc842008f5a1b1908a7

@@ -1874,7 +1874,7 @@ components:
         updated_at: {type: string, format: date-time}
     ReviewVersionDTO:
       type: object
-      required: [id, project_ref_id, review_item_id, version_no, version_label, is_current, original_media, playback_status, lock_version, created_at]
+      required: [id, project_ref_id, review_item_id, version_no, version_label, is_current, original_media, playback_status, thumbnail_status, lock_version, created_at]
       additionalProperties: false
       properties:
         id: {type: string, minLength: 1, maxLength: 128}
@@ -1887,6 +1887,7 @@ components:
         original_media: {$ref: "#/components/schemas/OriginalMediaSnapshotDTO"}
         playback_status: {type: string, enum: [processing, ready, failed]}
         playback_asset_id: {type: string}
+        thumbnail_status: {type: string, enum: [processing, ready, failed]}
         thumbnail_asset_id: {type: string}
         version_note: {type: string}
         change_summary: {type: string}

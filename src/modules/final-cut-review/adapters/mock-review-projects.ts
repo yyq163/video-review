@@ -5,6 +5,8 @@ type ProjectApi = Pick<
   ReviewApiPort,
   | 'listProjects'
   | 'getProjectSummary'
+  | 'getReviewItem'
+  | 'getVersion'
   | 'getVersionIssues'
   | 'getIssueDetail'
   | 'getWorkspace'
@@ -28,6 +30,18 @@ export class MockReviewProjects implements ProjectApi {
     await this.context.ready();
     this.context.throwIfAborted(options?.signal);
     return this.context.repository.getProjectSummary(projectRefId);
+  };
+
+  readonly getReviewItem: ReviewApiPort['getReviewItem'] = async (input, options) => {
+    await this.context.ready();
+    this.context.throwIfAborted(options?.signal);
+    return this.context.repository.getReviewItem(input);
+  };
+
+  readonly getVersion: ReviewApiPort['getVersion'] = async (input, options) => {
+    await this.context.ready();
+    this.context.throwIfAborted(options?.signal);
+    return this.context.repository.getVersion(input);
   };
 
   readonly getVersionIssues: ReviewApiPort['getVersionIssues'] = async (input, options) => {

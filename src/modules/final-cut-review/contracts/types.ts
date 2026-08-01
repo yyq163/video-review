@@ -171,6 +171,7 @@ export interface ReviewVersion {
   playbackStatus: 'pending' | 'ready' | 'failed';
   playbackAssetId: string | null;
   playbackUrl: string;
+  thumbnailStatus: 'pending' | 'ready' | 'failed';
   thumbnailAssetId: string | null;
   thumbnailUrl: string | null;
   status: ReviewItemStatus;

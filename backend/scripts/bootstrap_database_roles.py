@@ -424,6 +424,115 @@ def _ensure_pg_stat_statements(
             ).format(schema, runtime)
         )
         cursor.execute(
+            sql.SQL(
+                """
+            CREATE OR REPLACE FUNCTION {}.fcr_pg_stat_hotspots(limit_count integer DEFAULT 5)
+            RETURNS TABLE (
+                criterion text,
+                rank integer,
+                queryid bigint,
+                calls bigint,
+                total_exec_time_ms double precision,
+                rows bigint,
+                shared_blocks_hit bigint,
+                shared_blocks_read bigint,
+                shared_blocks_dirtied bigint,
+                shared_blocks_written bigint,
+                temp_blocks_read bigint,
+                temp_blocks_written bigint
+            )
+            LANGUAGE sql
+            SECURITY DEFINER
+            SET search_path = pg_catalog
+            AS $function$
+                WITH filtered AS (
+                    SELECT
+                        statements.queryid,
+                        statements.calls,
+                        statements.total_exec_time,
+                        statements.rows,
+                        statements.shared_blks_hit,
+                        statements.shared_blks_read,
+                        statements.shared_blks_dirtied,
+                        statements.shared_blks_written,
+                        statements.temp_blks_read,
+                        statements.temp_blks_written
+                    FROM {}.pg_stat_statements AS statements
+                    WHERE statements.dbid = (
+                        SELECT database.oid
+                        FROM pg_catalog.pg_database AS database
+                        WHERE database.datname = pg_catalog.current_database()
+                    )
+                      AND statements.userid = (
+                        SELECT role.oid
+                        FROM pg_catalog.pg_roles AS role
+                        WHERE role.rolname = session_user
+                    )
+                      AND statements.toplevel
+                      AND statements.queryid IS NOT NULL
+                ), ranked AS (
+                    SELECT 'calls'::text AS criterion,
+                           row_number() OVER (ORDER BY calls DESC, queryid)::integer AS rank,
+                           filtered.*
+                    FROM filtered
+                    UNION ALL
+                    SELECT 'total_exec_time'::text,
+                           row_number() OVER (ORDER BY total_exec_time DESC, queryid)::integer,
+                           filtered.*
+                    FROM filtered
+                    UNION ALL
+                    SELECT 'shared_io'::text,
+                           row_number() OVER (
+                               ORDER BY (
+                                   shared_blks_read + shared_blks_written
+                               ) DESC, queryid
+                           )::integer,
+                           filtered.*
+                    FROM filtered
+                    UNION ALL
+                    SELECT 'temp_io'::text,
+                           row_number() OVER (
+                               ORDER BY (temp_blks_read + temp_blks_written) DESC, queryid
+                           )::integer,
+                           filtered.*
+                    FROM filtered
+                )
+                SELECT
+                    ranked.criterion,
+                    ranked.rank,
+                    ranked.queryid,
+                    ranked.calls,
+                    ranked.total_exec_time::double precision,
+                    ranked.rows,
+                    ranked.shared_blks_hit,
+                    ranked.shared_blks_read,
+                    ranked.shared_blks_dirtied,
+                    ranked.shared_blks_written,
+                    ranked.temp_blks_read,
+                    ranked.temp_blks_written
+                FROM ranked
+                WHERE ranked.rank <= least(
+                    greatest(limit_count, 1),
+                    5
+                )
+                ORDER BY ranked.criterion, ranked.rank
+            $function$
+            """
+            ).format(schema, schema)
+        )
+        cursor.execute(
+            sql.SQL(
+                "REVOKE ALL PRIVILEGES ON FUNCTION "
+                "{}.fcr_pg_stat_hotspots(integer) FROM PUBLIC"
+            ).format(schema)
+        )
+        cursor.execute(
+            sql.SQL(
+                "GRANT EXECUTE ON FUNCTION "
+                "{}.fcr_pg_stat_hotspots(integer) TO {}"
+            ).format(schema, runtime)
+        )
+        cursor.execute(
             "SELECT pg_has_role(%s, 'pg_read_all_stats', 'member')",
             (runtime_user,),
         )

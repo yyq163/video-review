@@ -13,6 +13,9 @@ http {
     log_format bounded '$request_id $request_method $status $body_bytes_sent $request_time';
     access_log /dev/stdout bounded;
 
+    log_format range_metrics 'fcr_range $fcr_metric_kind $fcr_metric_method $status $body_bytes_sent $request_time $upstream_header_time $fcr_metric_range $fcr_metric_completion';
+    access_log syslog:server=${NGINX_METRICS_EXPORTER_MANAGEMENT_IP}:5514,facility=local7,tag=fcr_nginx,severity=info range_metrics if=$fcr_metric_loggable;
+
     server_tokens off;
     sendfile on;
     tcp_nopush on;
@@ -28,6 +31,34 @@ http {
     map $http_x_fcr_edge_handoff $edge_handoff_valid {
         default 0;
         "${FCR_EDGE_HANDOFF_SECRET}" 1;
+    }
+
+    map $request_method $fcr_metric_method {
+        default other;
+        GET get;
+        HEAD head;
+    }
+
+    map $http_range $fcr_metric_range {
+        "" false;
+        default true;
+    }
+
+    map $request_completion $fcr_metric_completion {
+        "OK" complete;
+        default cancelled;
+    }
+
+    map $uri $fcr_metric_kind {
+        default other;
+        ~^/_protected_media/ media;
+        ~^/api/v1/final-cut-review/projects/[^/]+/items/[^/]+/versions/[^/]+/stream$ stream;
+    }
+
+    map $fcr_metric_kind $fcr_metric_loggable {
+        default 0;
+        media 1;
+        stream 1;
     }
 
     upstream fcr_backend {

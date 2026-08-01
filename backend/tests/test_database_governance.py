@@ -90,7 +90,7 @@ def test_upload_reservation_covers_parts_and_full_staging_peak(client: TestClien
 def test_upload_session_ttl_exceeds_body_timeout_with_safety_margin() -> None:
     from backend.app.settings import Settings, UPLOAD_SESSION_TTL_SAFETY_MARGIN_SECONDS
 
-    defaults = Settings(_env_file=None)
+    defaults = Settings(_env_file=None)  # type: ignore[call-arg]
     assert defaults.upload_session_ttl_seconds == 15 * 60
     assert defaults.max_inflight_upload_parts_per_principal >= 15 * 5
     assert defaults.max_inflight_upload_part_candidates >= 15 * 5

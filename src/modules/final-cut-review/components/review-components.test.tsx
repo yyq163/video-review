@@ -24,6 +24,7 @@ import { DecisionBar } from './DecisionBar';
 import { ProjectListPage } from '../pages/ProjectListPage';
 import { ProjectDetailPage } from '../pages/ProjectDetailPage';
 import { ReviewWorkspacePage } from '../pages/ReviewWorkspacePage';
+import { EpisodeStrip } from '../pages/review-workspace-elements';
 import { HttpReviewApiAdapter } from '../adapters/http-review-api-adapter';
 import {
   V1UploadResultUncertainError,
@@ -168,6 +169,39 @@ function renderEditReviewWorkspace(route = '/edit/projects/prj_seed_final_cut/it
   return { ...result, runtime, queryClient };
 }
 
+describe('EpisodeStrip project-detail status colors', () => {
+  it('uses the same dark, yellow, and green state classes as project detail rows', () => {
+    const base = createSeedData().items[0];
+    const items = [
+      { ...base, reviewItemId: 'episode-reviewing', status: 'in_review' as const },
+      { ...base, reviewItemId: 'episode-changes', status: 'changes_requested' as const },
+      { ...base, reviewItemId: 'episode-finalized', status: 'finalized' as const },
+    ];
+    render(
+      <EpisodeStrip
+        currentFileNames={{}}
+        currentItemId="episode-changes"
+        currentVersionLabels={{}}
+        items={items}
+        onSelect={vi.fn()}
+        unresolvedCounts={{}}
+      />,
+    );
+
+    expect(screen.getByTestId('episode-item-episode-reviewing')).not.toHaveClass(
+      'is-changes-requested',
+      'is-finalized',
+    );
+    expect(screen.getByTestId('episode-item-episode-changes')).toHaveClass(
+      'is-changes-requested',
+      'is-active',
+    );
+    expect(screen.getByTestId('episode-item-episode-finalized')).toHaveClass(
+      'is-finalized',
+    );
+  });
+});
+
 describe('DecisionBar component', () => {
   it('presents a failed package as a retry action', async () => {
     const seed = createSeedData();
@@ -188,6 +222,29 @@ describe('DecisionBar component', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '重新准备项目包' }));
     expect(onPackage).toHaveBeenCalledOnce();
+    cleanupRuntime(runtimeResult.runtime);
+  });
+
+  it('keeps package creation locked while revocation authority is uncertain', () => {
+    const seed = createSeedData();
+    const runtimeResult = renderWithRuntime(
+      <DecisionBar
+        entryMode="review"
+        version={{ ...seed.versions[1], status: 'finalized' }}
+        issues={[]}
+        finalization={null}
+        isCurrentVersion
+        readonlyReason="撤回结果确认中，正在查询权威状态。"
+        packageState="idle"
+        onFinalize={vi.fn()}
+        onDownload={vi.fn()}
+        onPackage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '下载单片定稿原片' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '打包项目定稿原片' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '最终通过' })).not.toBeInTheDocument();
     cleanupRuntime(runtimeResult.runtime);
   });
 });
@@ -1385,7 +1442,9 @@ describe('ProjectDetailPage archive workflow', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /删除分集 第 28 集/ })).not.toBeInTheDocument();
+    const existingDelete = screen.getByRole('button', { name: /删除分集 第 28 集/ });
+    expect(existingDelete).toBeDisabled();
+    expect(existingDelete.parentElement).toHaveAttribute('title');
     await userEvent.upload(screen.getByTestId('create-item-file'), new File(['v1'], '王爷28-duplicate.mp4', { type: 'video/mp4' }));
     const row = screen.getByTestId('upload-row-0');
     await userEvent.clear(within(row).getByLabelText('成片标题'));
@@ -2069,53 +2128,76 @@ describe('ReviewWorkspacePage issue playback', () => {
     cleanupRuntime(rendered.runtime, rendered.queryClient);
   });
 
-  it('polls only a mounted workspace whose playback derivative is still pending', async () => {
-    const current = renderReviewWorkspace();
+  it('polls only the pending version endpoint and stops without refetching the workspace', async () => {
+    const runtime = createReviewRuntime();
+    const review = runtime.getApi('review');
+    const originalWorkspace = await review.getWorkspace({
+      projectRefId: 'prj_seed_final_cut',
+      reviewItemId: 'item_ep28',
+    });
+    const pendingVersion = {
+      ...originalWorkspace.currentVersion,
+      playbackStatus: 'pending' as const,
+      playbackAssetId: null,
+      playbackUrl: '',
+      thumbnailStatus: 'pending' as const,
+      thumbnailAssetId: null,
+      thumbnailUrl: null,
+    };
+    const getWorkspace = vi.spyOn(review, 'getWorkspace').mockResolvedValue({
+      ...originalWorkspace,
+      currentVersion: pendingVersion,
+      versions: originalWorkspace.versions.map((version) =>
+        version.versionId === pendingVersion.versionId ? pendingVersion : version,
+      ),
+    });
+    const getVersion = vi
+      .spyOn(review, 'getVersion')
+      .mockResolvedValueOnce({
+        ...pendingVersion,
+        playbackStatus: 'ready',
+        playbackAssetId: 'asset-ready',
+        playbackUrl: 'blob:ready-version',
+      })
+      .mockResolvedValue({
+        ...pendingVersion,
+        playbackStatus: 'ready',
+        playbackAssetId: 'asset-ready',
+        playbackUrl: 'blob:ready-version',
+        thumbnailStatus: 'ready',
+        thumbnailAssetId: 'thumbnail-ready',
+        thumbnailUrl: 'blob:ready-thumbnail',
+      });
+    const current = renderReviewWorkspace(
+      '/review/projects/prj_seed_final_cut/items/item_ep28',
+      runtime,
+    );
     expect(await screen.findByTestId('review-workspace-frame')).toBeInTheDocument();
-    const currentQuery = current.queryClient.getQueryCache().find({
+    await waitFor(() => expect(getVersion).toHaveBeenCalledTimes(1));
+    expect(getWorkspace).toHaveBeenCalledTimes(1);
+
+    const workspaceQuery = current.queryClient.getQueryCache().find({
       queryKey: ['fj-review', 'workspace', 'prj_seed_final_cut', 'item_ep28', 'current'],
     });
-    const currentPollingOptions = currentQuery?.options as NonNullable<typeof currentQuery>['options'] & {
-      refetchInterval?: (query: typeof currentQuery) => number | false;
+    const workspaceOptions = workspaceQuery?.options as NonNullable<typeof workspaceQuery>['options'] & {
+      refetchInterval?: unknown;
     };
-    expect(currentPollingOptions.refetchInterval?.(currentQuery)).toBe(false);
-    const pendingDerivativeQuery = {
-      state: {
-        data: {
-          currentVersion: {
-            playbackStatus: 'pending',
-          },
-        },
-      },
-    } as typeof currentQuery;
-    expect(currentPollingOptions.refetchInterval?.(pendingDerivativeQuery)).toBe(5_000);
+    expect(workspaceOptions.refetchInterval).toBeUndefined();
+    const versionStatusQuery = current.queryClient.getQueryCache().find({
+      queryKey: ['fj-review', 'version-status', 'prj_seed_final_cut', 'item_ep28', 'ver_ep28_v2'],
+    });
+    const pollingOptions = versionStatusQuery?.options as NonNullable<typeof versionStatusQuery>['options'] & {
+      refetchInterval?: (query: typeof versionStatusQuery) => number | false;
+    };
+    expect(pollingOptions.refetchInterval?.(versionStatusQuery)).toBe(5_000);
+
+    await versionStatusQuery?.fetch();
+    expect(getVersion).toHaveBeenCalledTimes(2);
+    expect(getWorkspace).toHaveBeenCalledTimes(1);
+    expect(pollingOptions.refetchInterval?.(versionStatusQuery)).toBe(false);
     current.unmount();
-    expect(currentQuery?.getObserversCount()).toBe(0);
+    expect(versionStatusQuery?.getObserversCount()).toBe(0);
     cleanupRuntime(current.runtime, current.queryClient);
-
-    const historical = renderReviewWorkspace('/review/projects/prj_seed_final_cut/items/item_ep28?version=ver_ep28_v1');
-    expect(await screen.findByTestId('review-workspace-frame')).toBeInTheDocument();
-    const historicalQuery = historical.queryClient.getQueryCache().find({
-      queryKey: ['fj-review', 'workspace', 'prj_seed_final_cut', 'item_ep28', 'ver_ep28_v1'],
-    });
-    const historicalPollingOptions = historicalQuery?.options as NonNullable<typeof historicalQuery>['options'] & {
-      refetchInterval?: (query: typeof historicalQuery) => number | false;
-    };
-    expect(historicalPollingOptions.refetchInterval?.(historicalQuery)).toBe(false);
-    historical.unmount();
-    cleanupRuntime(historical.runtime, historical.queryClient);
-
-    const explicitCurrent = renderReviewWorkspace('/review/projects/prj_seed_final_cut/items/item_ep28?version=ver_ep28_v2');
-    expect(await screen.findByTestId('review-workspace-frame')).toBeInTheDocument();
-    const explicitCurrentQuery = explicitCurrent.queryClient.getQueryCache().find({
-      queryKey: ['fj-review', 'workspace', 'prj_seed_final_cut', 'item_ep28', 'ver_ep28_v2'],
-    });
-    const explicitCurrentPollingOptions = explicitCurrentQuery?.options as NonNullable<typeof explicitCurrentQuery>['options'] & {
-      refetchInterval?: (query: typeof explicitCurrentQuery) => number | false;
-    };
-    expect(explicitCurrentPollingOptions.refetchInterval?.(explicitCurrentQuery)).toBe(false);
-    explicitCurrent.unmount();
-    cleanupRuntime(explicitCurrent.runtime, explicitCurrent.queryClient);
   });
 
   it('keeps the current issue draft when the workspace mutation rejects', async () => {

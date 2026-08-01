@@ -96,8 +96,12 @@ export function versionFromDto(dto: ReviewVersionDTO, baseUrl: string, item?: Re
     playbackUrl: playbackReady
       ? `${baseUrl}/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.review_item_id}/versions/${dto.id}/stream`
       : '',
+    thumbnailStatus:
+      dto.thumbnail_status === 'processing'
+        ? 'pending'
+        : dto.thumbnail_status,
     thumbnailAssetId: dto.thumbnail_asset_id ?? null,
-    thumbnailUrl: dto.thumbnail_asset_id
+    thumbnailUrl: dto.thumbnail_status === 'ready' && dto.thumbnail_asset_id
       ? `${baseUrl}/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.review_item_id}/versions/${dto.id}/thumbnail`
       : null,
     status: versionStatus(dto, item),

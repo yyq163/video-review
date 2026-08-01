@@ -152,6 +152,7 @@ MEDIA_RESPONSE_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
 }
+THUMBNAIL_CACHE_CONTROL = "private, no-cache, max-age=0, must-revalidate"
 
 
 def contained_existing_path(
@@ -282,6 +283,7 @@ def protected_media_response(
     file: Any,
     *,
     range_header: str | None,
+    cache_control: str = "no-store",
 ) -> Response:
     settings = get_settings()
     if settings.protected_media_direct_stream_enabled:
@@ -292,7 +294,7 @@ def protected_media_response(
             Path("files") / file.id,
         )
         start, end, status_code = parse_range_header(range_header, file.file_size)
-        headers = {"Accept-Ranges": "bytes"}
+        headers = {"Accept-Ranges": "bytes", "Cache-Control": cache_control}
         if status_code == 206:
             headers["Content-Range"] = f"bytes {start}-{end}/{file.file_size}"
         return regular_file_response(
@@ -311,6 +313,7 @@ def protected_media_response(
         media_type=file.mime_type,
         headers={
             **MEDIA_RESPONSE_HEADERS,
+            "Cache-Control": cache_control,
             "Accept-Ranges": "bytes",
             "X-Accel-Redirect": f"{PROTECTED_MEDIA_INTERNAL_PREFIX}/{quote(file.id, safe='')}",
         },
@@ -599,7 +602,11 @@ def get_review_version_thumbnail(
         review_item_id,
         version_id,
     )
-    return protected_media_response(file, range_header=None)
+    return protected_media_response(
+        file,
+        range_header=None,
+        cache_control=THUMBNAIL_CACHE_CONTROL,
+    )
 
 
 @router.get("/projects/{project_ref_id}/items/{review_item_id}/finalized-original/download")
