@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -58,6 +58,7 @@ function summaryItem(
 function renderList(input: {
   items: ReviewProjectSummaryItem[];
   entryMode?: 'edit' | 'review';
+  itemActionPending?: boolean;
   onBulkDeleteReviewItems?: (
     items: ReviewItem[],
   ) => Promise<{
@@ -72,32 +73,45 @@ function renderList(input: {
   const runtime = createReviewRuntime();
   activeRuntimes.push(runtime);
   const onDeleteReviewItem = vi.fn();
-  const groups = input.items.map((item) => ({
-    episodeKey: item.episode,
-    representative: item,
-    items: [item],
-  }));
-  render(
-    <ReviewRuntimeProvider runtime={runtime}>
-      <MemoryRouter>
-        <ProjectDetailItemList
-          entryMode={input.entryMode ?? 'edit'}
-          episodeGroups={groups}
-          isArchived={false}
-          itemActionPending={false}
-          onBulkDeleteReviewItems={input.onBulkDeleteReviewItems}
-          onDeleteReviewItem={onDeleteReviewItem}
-          onRevokeFinalization={input.onRevokeFinalization}
-          onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
-          projectRefId="prj_seed_final_cut"
-        />
-      </MemoryRouter>
-    </ReviewRuntimeProvider>,
-  );
-  return { onDeleteReviewItem };
+  const renderView = (
+    items: ReviewProjectSummaryItem[],
+    itemActionPending = input.itemActionPending ?? false,
+  ) => {
+    const groups = items.map((item) => ({
+      episodeKey: item.episode,
+      representative: item,
+      items: [item],
+    }));
+    return (
+      <ReviewRuntimeProvider runtime={runtime}>
+        <MemoryRouter>
+          <ProjectDetailItemList
+            entryMode={input.entryMode ?? 'edit'}
+            episodeGroups={groups}
+            isArchived={false}
+            itemActionPending={itemActionPending}
+            onBulkDeleteReviewItems={input.onBulkDeleteReviewItems}
+            onDeleteReviewItem={onDeleteReviewItem}
+            onRevokeFinalization={input.onRevokeFinalization}
+            onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
+            projectRefId="prj_seed_final_cut"
+          />
+        </MemoryRouter>
+      </ReviewRuntimeProvider>
+    );
+  };
+  const result = render(renderView(input.items));
+  return {
+    onDeleteReviewItem,
+    rerenderList: (
+      items = input.items,
+      itemActionPending = input.itemActionPending ?? false,
+    ) => result.rerender(renderView(items, itemActionPending)),
+  };
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const runtime of activeRuntimes.splice(0)) runtime.dispose();
   vi.restoreAllMocks();
 });
@@ -156,7 +170,7 @@ describe('ProjectDetailItemList summary rendering', () => {
 });
 
 describe('ProjectDetailItemList server-authoritative selection', () => {
-  it('uses non-control row clicks, removes row checkboxes, and never selects locked/ineligible items', async () => {
+  it('requires a long press on non-control content and never selects locked/ineligible items', async () => {
     const eligible = summaryItem('eligible', { episode: '10' });
     const locked = summaryItem('locked', {
       episode: '11',
@@ -187,7 +201,23 @@ describe('ProjectDetailItemList server-authoritative selection', () => {
     const lockedRow = screen.getByTestId('review-item-row-locked');
     const ineligibleRow = screen.getByTestId('review-item-row-ineligible');
     await userEvent.click(eligibleRow);
+    expect(eligibleRow).not.toHaveClass('is-selected-for-delete');
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(eligibleRow, {
+      button: 0,
+      clientX: 20,
+      clientY: 20,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+    });
+    act(() => vi.advanceTimersByTime(499));
+    expect(eligibleRow).not.toHaveClass('is-selected-for-delete');
+    act(() => vi.advanceTimersByTime(1));
     expect(eligibleRow).toHaveClass('is-selected-for-delete');
+    fireEvent.pointerUp(eligibleRow, { pointerId: 1, pointerType: 'mouse' });
+    vi.useRealTimers();
 
     await userEvent.click(within(eligibleRow).getByRole('button', { name: '删除分集 第 28 集 · 最终成片' }));
     expect(onDeleteReviewItem).toHaveBeenCalledWith(eligible);
@@ -198,6 +228,171 @@ describe('ProjectDetailItemList server-authoritative selection', () => {
     expect(lockedRow).not.toHaveClass('is-selected-for-delete');
     expect(ineligibleRow).not.toHaveClass('is-selected-for-delete');
     expect(screen.queryByRole('checkbox', { name: /选择第/ })).not.toBeInTheDocument();
+  });
+
+  it('cancels selection when a press is released or moves before the threshold', () => {
+    vi.useFakeTimers();
+    const eligible = summaryItem('eligible');
+    renderList({
+      items: [eligible],
+      onBulkDeleteReviewItems: vi.fn(async () => ({
+        succeededIds: [],
+        failures: {},
+        uncertainIds: [],
+      })),
+    });
+    const row = screen.getByTestId('review-item-row-eligible');
+
+    fireEvent.pointerDown(row, {
+      button: 0,
+      clientX: 10,
+      clientY: 10,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'touch',
+    });
+    fireEvent.pointerUp(row, { pointerId: 1, pointerType: 'touch' });
+    act(() => vi.advanceTimersByTime(500));
+    expect(row).not.toHaveClass('is-selected-for-delete');
+
+    fireEvent.pointerDown(row, {
+      button: 0,
+      clientX: 10,
+      clientY: 10,
+      isPrimary: true,
+      pointerId: 2,
+      pointerType: 'touch',
+    });
+    fireEvent.pointerMove(row, {
+      clientX: 30,
+      clientY: 10,
+      pointerId: 2,
+      pointerType: 'touch',
+    });
+    act(() => vi.advanceTimersByTime(500));
+    expect(row).not.toHaveClass('is-selected-for-delete');
+
+    const deleteButton = within(row).getByRole('button', { name: /删除分集/ });
+    fireEvent.pointerDown(deleteButton, {
+      button: 0,
+      clientX: 10,
+      clientY: 10,
+      isPrimary: true,
+      pointerId: 3,
+      pointerType: 'touch',
+    });
+    act(() => vi.advanceTimersByTime(500));
+    expect(row).not.toHaveClass('is-selected-for-delete');
+  });
+
+  it('keeps accessible synthetic activation while ignoring physical clicks', async () => {
+    const eligible = summaryItem('eligible');
+    renderList({ items: [eligible], onBulkDeleteReviewItems: vi.fn() });
+    const row = screen.getByTestId('review-item-row-eligible');
+
+    await userEvent.click(row);
+    expect(row).not.toHaveClass('is-selected-for-delete');
+    fireEvent.click(row, { detail: 0 });
+    expect(row).toHaveClass('is-selected-for-delete');
+    fireEvent.click(row, { detail: 0 });
+    expect(row).not.toHaveClass('is-selected-for-delete');
+  });
+
+  it('ignores non-primary pointers and non-primary buttons', () => {
+    vi.useFakeTimers();
+    const eligible = summaryItem('eligible');
+    renderList({ items: [eligible], onBulkDeleteReviewItems: vi.fn() });
+    const row = screen.getByTestId('review-item-row-eligible');
+
+    fireEvent.pointerDown(row, {
+      button: 0,
+      clientX: 10,
+      clientY: 10,
+      isPrimary: false,
+      pointerId: 2,
+      pointerType: 'touch',
+    });
+    act(() => vi.advanceTimersByTime(500));
+    expect(row).not.toHaveClass('is-selected-for-delete');
+
+    fireEvent.pointerDown(row, {
+      button: 2,
+      clientX: 10,
+      clientY: 10,
+      isPrimary: true,
+      pointerId: 3,
+      pointerType: 'pen',
+    });
+    act(() => vi.advanceTimersByTime(500));
+    expect(row).not.toHaveClass('is-selected-for-delete');
+  });
+
+  it('cancels on pointer leave and pointer cancel', () => {
+    vi.useFakeTimers();
+    const eligible = summaryItem('eligible');
+    renderList({ items: [eligible], onBulkDeleteReviewItems: vi.fn() });
+    const row = screen.getByTestId('review-item-row-eligible');
+
+    for (const [pointerId, cancel] of [
+      [4, () => fireEvent.pointerLeave(row, { pointerId: 4, pointerType: 'touch' })],
+      [5, () => fireEvent.pointerCancel(row, { pointerId: 5, pointerType: 'touch' })],
+    ] as const) {
+      fireEvent.pointerDown(row, {
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        isPrimary: true,
+        pointerId,
+        pointerType: 'touch',
+      });
+      cancel();
+      act(() => vi.advanceTimersByTime(500));
+      expect(row).not.toHaveClass('is-selected-for-delete');
+    }
+  });
+
+  it('rechecks current pending and eligibility state at the long-press threshold', () => {
+    vi.useFakeTimers();
+    const eligible = summaryItem('eligible');
+    const ineligible = summaryItem('eligible', {
+      bulkDelete: {
+        eligible: false,
+        locked: false,
+        reason: 'REVIEW_STARTED',
+      },
+    });
+    const { rerenderList } = renderList({
+      items: [eligible],
+      onBulkDeleteReviewItems: vi.fn(),
+    });
+    const row = screen.getByTestId('review-item-row-eligible');
+
+    fireEvent.pointerDown(row, {
+      button: 0,
+      clientX: 10,
+      clientY: 10,
+      isPrimary: true,
+      pointerId: 6,
+      pointerType: 'touch',
+    });
+    act(() => vi.advanceTimersByTime(499));
+    rerenderList([eligible], true);
+    act(() => vi.advanceTimersByTime(1));
+    expect(row).not.toHaveClass('is-selected-for-delete');
+
+    rerenderList([eligible], false);
+    fireEvent.pointerDown(row, {
+      button: 0,
+      clientX: 10,
+      clientY: 10,
+      isPrimary: true,
+      pointerId: 7,
+      pointerType: 'touch',
+    });
+    act(() => vi.advanceTimersByTime(499));
+    rerenderList([ineligible], false);
+    act(() => vi.advanceTimersByTime(1));
+    expect(row).not.toHaveClass('is-selected-for-delete');
   });
 
   it('select-all selects only server eligible unlocked rows and keeps red selection highest priority', async () => {

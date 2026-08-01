@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { CapabilityGate, EmptyState, IconText, StatusBadge } from '../components/shared';
@@ -14,6 +14,23 @@ export type ProjectDetailMetadataEpisodeGroup = Omit<ReviewEpisodeGroup, 'items'
 };
 
 type RevokeUiState = 'pending' | 'uncertain';
+
+const LONG_PRESS_SELECTION_MS = 500;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+
+interface LongPressSelection {
+  itemId: string;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  timerId: number;
+}
+
+interface SelectionGuardState {
+  batchDeletePending: boolean;
+  itemActionPending: boolean;
+  serverEligibleIds: ReadonlySet<string>;
+}
 
 interface ProjectDetailItemListProps {
   entryMode: EntryMode;
@@ -88,6 +105,7 @@ export function ProjectDetailItemList({
   const [locallyDeletedIds, setLocallyDeletedIds] = useState<Set<string>>(() => new Set());
   const [batchDeletePending, setBatchDeletePending] = useState(false);
   const [revokeUiStates, setRevokeUiStates] = useState<Record<string, RevokeUiState>>({});
+  const longPressSelectionRef = useRef<LongPressSelection | null>(null);
   const visibleItems = useMemo(
     () =>
       episodeGroups
@@ -110,6 +128,11 @@ export function ProjectDetailItemList({
     () => new Set(serverEligibleItems.map((item) => item.reviewItemId)),
     [serverEligibleItems],
   );
+  const selectionGuardRef = useRef<SelectionGuardState>({
+    batchDeletePending,
+    itemActionPending,
+    serverEligibleIds,
+  });
   const selectedItems = serverEligibleItems.filter((item) =>
     selectedDeleteIds.has(item.reviewItemId),
   );
@@ -117,11 +140,20 @@ export function ProjectDetailItemList({
     serverEligibleItems.length > 0 &&
     selectedItems.length === serverEligibleItems.length;
 
+  useLayoutEffect(() => {
+    selectionGuardRef.current = {
+      batchDeletePending,
+      itemActionPending,
+      serverEligibleIds,
+    };
+  }, [batchDeletePending, itemActionPending, serverEligibleIds]);
+
   const toggleItem = (item: ReviewProjectSummaryItem) => {
+    const latest = selectionGuardRef.current;
     if (
-      batchDeletePending ||
-      itemActionPending ||
-      !serverEligibleIds.has(item.reviewItemId)
+      latest.batchDeletePending ||
+      latest.itemActionPending ||
+      !latest.serverEligibleIds.has(item.reviewItemId)
     ) {
       return;
     }
@@ -137,6 +169,73 @@ export function ProjectDetailItemList({
       delete next[item.reviewItemId];
       return next;
     });
+  };
+
+  const cancelLongPressSelection = (pointerId?: number) => {
+    const current = longPressSelectionRef.current;
+    if (!current || (pointerId !== undefined && current.pointerId !== pointerId)) return;
+    window.clearTimeout(current.timerId);
+    longPressSelectionRef.current = null;
+  };
+
+  const startLongPressSelection = (
+    event: React.PointerEvent<HTMLElement>,
+    item: ReviewProjectSummaryItem,
+  ) => {
+    if (
+      batchDeletePending ||
+      itemActionPending ||
+      !serverEligibleIds.has(item.reviewItemId) ||
+      isControlTarget(event.target) ||
+      !event.isPrimary ||
+      event.button !== 0
+    ) {
+      return;
+    }
+    cancelLongPressSelection();
+    const pointerId = event.pointerId;
+    const itemId = item.reviewItemId;
+    const timerId = window.setTimeout(() => {
+      const current = longPressSelectionRef.current;
+      if (
+        !current ||
+        current.pointerId !== pointerId ||
+        current.itemId !== itemId
+      ) {
+        return;
+      }
+      const latest = selectionGuardRef.current;
+      if (
+        latest.batchDeletePending ||
+        latest.itemActionPending ||
+        !latest.serverEligibleIds.has(itemId)
+      ) {
+        longPressSelectionRef.current = null;
+        return;
+      }
+      longPressSelectionRef.current = null;
+      toggleItem(item);
+    }, LONG_PRESS_SELECTION_MS);
+    longPressSelectionRef.current = {
+      itemId,
+      pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      timerId,
+    };
+  };
+
+  const moveLongPressSelection = (event: React.PointerEvent<HTMLElement>) => {
+    const current = longPressSelectionRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    if (
+      Math.hypot(
+        event.clientX - current.startX,
+        event.clientY - current.startY,
+      ) > LONG_PRESS_MOVE_TOLERANCE_PX
+    ) {
+      cancelLongPressSelection(event.pointerId);
+    }
   };
 
   const bulkDeleteControls = onBulkDeleteReviewItems && visibleItems.some(
@@ -251,6 +350,11 @@ export function ProjectDetailItemList({
     return () => window.cancelAnimationFrame(frame);
   }, [revocationUncertainIds, serverEligibleIds, visibleItems]);
 
+  useEffect(() => () => {
+    const current = longPressSelectionRef.current;
+    if (current) window.clearTimeout(current.timerId);
+  }, []);
+
   if (visibleItems.length === 0) {
     return <EmptyState title="暂无成片" detail="剪辑入口可创建成片并上传 V1。" icon="upload" />;
   }
@@ -288,7 +392,10 @@ export function ProjectDetailItemList({
             data-testid={`review-item-row-${item.reviewItemId}`}
             key={item.reviewItemId}
             onClick={(event) => {
-              if (!isControlTarget(event.target)) toggleItem(item);
+              if (event.detail === 0 && !isControlTarget(event.target)) toggleItem(item);
+            }}
+            onContextMenu={(event) => {
+              if (selectable && !isControlTarget(event.target)) event.preventDefault();
             }}
             onKeyDown={(event) => {
               if (!selectable || isControlTarget(event.target)) return;
@@ -297,6 +404,11 @@ export function ProjectDetailItemList({
                 toggleItem(item);
               }
             }}
+            onPointerCancel={(event) => cancelLongPressSelection(event.pointerId)}
+            onPointerDown={(event) => startLongPressSelection(event, item)}
+            onPointerLeave={(event) => cancelLongPressSelection(event.pointerId)}
+            onPointerMove={moveLongPressSelection}
+            onPointerUp={(event) => cancelLongPressSelection(event.pointerId)}
             role={selectable ? 'button' : undefined}
             tabIndex={selectable ? 0 : undefined}
           >

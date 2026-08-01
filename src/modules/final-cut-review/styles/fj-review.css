@@ -658,7 +658,10 @@
 }
 
 .fj-review-item-row.is-selectable {
-  cursor: pointer;
+  cursor: default;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .fj-review-item-row.is-locked {
