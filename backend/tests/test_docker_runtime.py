@@ -187,6 +187,34 @@ def test_nginx_range_metrics_are_bounded_management_only_and_best_effort() -> No
     assert "syslog:server=${NGINX_METRICS_EXPORTER_MANAGEMENT_IP}:5514" in template
 
 
+def test_nginx_protected_media_preserves_only_backend_vetted_cors_headers() -> None:
+    root = Path(__file__).resolve().parents[2]
+    template = (root / "ops/nginx/nginx.conf.template").read_text(encoding="utf-8")
+    protected_location = template[
+        template.index('location ~ "^/_protected_media/') : template.index(
+            "location /_protected_media/"
+        )
+    ]
+
+    assert "internal;" in protected_location
+    assert "add_header Accept-Ranges bytes always;" in protected_location
+    assert (
+        "add_header Access-Control-Allow-Origin "
+        "$upstream_http_access_control_allow_origin always;"
+    ) in protected_location
+    assert (
+        "add_header Access-Control-Allow-Credentials "
+        "$upstream_http_access_control_allow_credentials always;"
+    ) in protected_location
+    assert (
+        "add_header Access-Control-Expose-Headers "
+        "$upstream_http_access_control_expose_headers always;"
+    ) in protected_location
+    assert "add_header Vary $upstream_http_vary always;" in protected_location
+    assert "$http_origin" not in protected_location
+    assert "Access-Control-Allow-Origin *" not in protected_location
+
+
 def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:
     root = Path(__file__).resolve().parents[2]
     script = (root / "scripts/verify-compose-persistence.sh").read_text(encoding="utf-8")

@@ -85,6 +85,13 @@ http {
             alias /data/storage/files/$opaque_file_id;
             disable_symlinks on from=/data/storage/files;
             add_header Accept-Ranges bytes always;
+            # X-Accel-Redirect performs an internal redirect and otherwise drops
+            # the CORS headers already vetted by FastAPI.  Propagate only the
+            # upstream-approved values; never reflect the browser Origin here.
+            add_header Access-Control-Allow-Origin $upstream_http_access_control_allow_origin always;
+            add_header Access-Control-Allow-Credentials $upstream_http_access_control_allow_credentials always;
+            add_header Access-Control-Expose-Headers $upstream_http_access_control_expose_headers always;
+            add_header Vary $upstream_http_vary always;
         }
 
         location /_protected_media/ {
