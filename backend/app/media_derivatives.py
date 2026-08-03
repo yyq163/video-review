@@ -25,6 +25,7 @@ from backend.app.modules.final_cut_review.infra import database as database_modu
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     FileObjectModel,
     MediaDerivativeTaskModel,
+    ProjectRefModel,
     ReviewItemModel,
     ReviewVersionModel,
     utcnow,
@@ -475,18 +476,64 @@ def _claim_task(
         ),
     )
     statement = (
-        select(MediaDerivativeTaskModel)
+        select(
+            MediaDerivativeTaskModel.id,
+            MediaDerivativeTaskModel.project_ref_id,
+            MediaDerivativeTaskModel.review_item_id,
+            MediaDerivativeTaskModel.version_id,
+        )
         .where(eligible)
         .order_by(MediaDerivativeTaskModel.created_at, MediaDerivativeTaskModel.id)
-        .with_for_update(skip_locked=True)
         .limit(1)
     )
     if task_id is not None:
         statement = statement.where(MediaDerivativeTaskModel.id == task_id)
-    task = session.scalar(statement)
-    if task is None:
+    candidate = session.execute(statement).one_or_none()
+    if candidate is None:
         existing = session.get(MediaDerivativeTaskModel, task_id) if task_id is not None else None
         return (existing.status if existing is not None else "skipped"), None
+    # Use the same project -> item -> version -> task lock order as upload V2,
+    # item deletion, and derivative publication.  The candidate lookup is
+    # intentionally unlocked; eligibility is checked again after the locks.
+    project = session.scalar(
+        select(ProjectRefModel)
+        .where(ProjectRefModel.id == candidate.project_ref_id)
+        .with_for_update()
+    )
+    item = session.scalar(
+        select(ReviewItemModel)
+        .where(
+            ReviewItemModel.id == candidate.review_item_id,
+            ReviewItemModel.project_ref_id == candidate.project_ref_id,
+        )
+        .with_for_update()
+    )
+    version = session.scalar(
+        select(ReviewVersionModel)
+        .where(
+            ReviewVersionModel.id == candidate.version_id,
+            ReviewVersionModel.project_ref_id == candidate.project_ref_id,
+            ReviewVersionModel.review_item_id == candidate.review_item_id,
+        )
+        .with_for_update()
+    )
+    task = session.scalar(
+        select(MediaDerivativeTaskModel)
+        .where(MediaDerivativeTaskModel.id == candidate.id)
+        .with_for_update()
+    )
+    if project is None or item is None or version is None or task is None:
+        return "skipped", None
+    task_is_eligible = (
+        task.status == "queued"
+        and not _lease_deadline_is_future(task.next_attempt_at, now)
+    ) or (
+        task.status == "running"
+        and task.lease_expires_at is not None
+        and not _lease_deadline_is_future(task.lease_expires_at, now)
+    )
+    if not task_is_eligible:
+        return task.status, None
     if task.kind not in SUPPORTED_KINDS:
         task.status = "failed"
         task.lease_id = None
@@ -504,15 +551,6 @@ def _claim_task(
         task.updated_at = now
         return "failed", None
 
-    version = session.scalar(
-        select(ReviewVersionModel)
-        .where(
-            ReviewVersionModel.id == task.version_id,
-            ReviewVersionModel.project_ref_id == task.project_ref_id,
-            ReviewVersionModel.review_item_id == task.review_item_id,
-        )
-        .with_for_update()
-    )
     source = session.get(FileObjectModel, version.original_file_id) if version is not None else None
     if version is None or source is None:
         task.status = "failed"
@@ -539,7 +577,6 @@ def _claim_task(
         task.updated_at = now
         return "failed", None
     if task.kind == "thumbnail":
-        item = session.get(ReviewItemModel, task.review_item_id)
         if (
             item is None
             or not version.is_current
@@ -1056,12 +1093,34 @@ def _publish_database(
     prepared: PreparedDerivative,
 ) -> str:
     with _worker_session() as session:
+        project = session.scalar(
+            select(ProjectRefModel)
+            .where(ProjectRefModel.id == claim.project_ref_id)
+            .with_for_update()
+        )
+        item = session.scalar(
+            select(ReviewItemModel)
+            .where(
+                ReviewItemModel.id == claim.review_item_id,
+                ReviewItemModel.project_ref_id == claim.project_ref_id,
+            )
+            .with_for_update()
+        )
+        version = session.scalar(
+            select(ReviewVersionModel)
+            .where(
+                ReviewVersionModel.id == claim.version_id,
+                ReviewVersionModel.project_ref_id == claim.project_ref_id,
+                ReviewVersionModel.review_item_id == claim.review_item_id,
+            )
+            .with_for_update()
+        )
         task = session.scalar(
             select(MediaDerivativeTaskModel)
             .where(MediaDerivativeTaskModel.id == claim.task_id)
             .with_for_update()
         )
-        if task is None:
+        if project is None or item is None or version is None or task is None:
             session.rollback()
             return "skipped"
         if task.status == "ready" and task.output_file_id == prepared.output_file_id:
@@ -1074,29 +1133,9 @@ def _publish_database(
         ):
             session.rollback()
             return "skipped"
-        version = session.scalar(
-            select(ReviewVersionModel)
-            .where(
-                ReviewVersionModel.id == claim.version_id,
-                ReviewVersionModel.project_ref_id == claim.project_ref_id,
-                ReviewVersionModel.review_item_id == claim.review_item_id,
-            )
-            .with_for_update()
-        )
-        if version is None:
-            raise MediaDerivativeError("MEDIA_DERIVATIVE_VERSION_MISSING", "publish", retryable=False)
         if claim.kind == "thumbnail":
-            item = session.scalar(
-                select(ReviewItemModel)
-                .where(
-                    ReviewItemModel.id == claim.review_item_id,
-                    ReviewItemModel.project_ref_id == claim.project_ref_id,
-                )
-                .with_for_update()
-            )
             if (
-                item is None
-                or not version.is_current
+                not version.is_current
                 or item.current_version_id != version.id
             ):
                 session.rollback()
@@ -1167,14 +1206,31 @@ def _publication_database_state(
             # Lock in the same order as the publishing transaction. If the
             # original COMMIT is still resolving server-side, this waits for
             # that transaction before declaring the publication uncommitted.
-            task = session.scalar(
-                select(MediaDerivativeTaskModel)
-                .where(MediaDerivativeTaskModel.id == claim.task_id)
+            project = session.scalar(
+                select(ProjectRefModel)
+                .where(ProjectRefModel.id == claim.project_ref_id)
+                .with_for_update()
+            )
+            item = session.scalar(
+                select(ReviewItemModel)
+                .where(
+                    ReviewItemModel.id == claim.review_item_id,
+                    ReviewItemModel.project_ref_id == claim.project_ref_id,
+                )
                 .with_for_update()
             )
             version = session.scalar(
                 select(ReviewVersionModel)
-                .where(ReviewVersionModel.id == claim.version_id)
+                .where(
+                    ReviewVersionModel.id == claim.version_id,
+                    ReviewVersionModel.project_ref_id == claim.project_ref_id,
+                    ReviewVersionModel.review_item_id == claim.review_item_id,
+                )
+                .with_for_update()
+            )
+            task = session.scalar(
+                select(MediaDerivativeTaskModel)
+                .where(MediaDerivativeTaskModel.id == claim.task_id)
                 .with_for_update()
             )
             file = session.scalar(
@@ -1192,7 +1248,10 @@ def _publication_database_state(
                 )
             )
             return bool(
-                task is not None
+                project is not None
+                and item is not None
+                and version is not None
+                and task is not None
                 and task.status == "ready"
                 and task.output_file_id == prepared.output_file_id
                 and file is not None

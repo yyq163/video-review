@@ -80,10 +80,14 @@ function deleteUnavailableReason(
   return '当前不可删除';
 }
 
-function thumbnailState(item: ReviewProjectSummaryItem) {
+function ItemThumbnail({ item }: { item: ReviewProjectSummaryItem }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const loadFailed = failedUrl !== null && item.currentVersion.thumbnailUrl === failedUrl;
+
   if (
     item.currentVersion.thumbnailStatus === 'ready' &&
-    item.currentVersion.thumbnailUrl
+    item.currentVersion.thumbnailUrl &&
+    !loadFailed
   ) {
     return (
       <img
@@ -91,6 +95,7 @@ function thumbnailState(item: ReviewProjectSummaryItem) {
         className="fj-review-item-thumbnail"
         data-testid={`item-row-thumbnail-${item.reviewItemId}`}
         loading="lazy"
+        onError={() => setFailedUrl(item.currentVersion.thumbnailUrl)}
         src={item.currentVersion.thumbnailUrl}
       />
     );
@@ -100,7 +105,11 @@ function thumbnailState(item: ReviewProjectSummaryItem) {
       className={`fj-review-item-thumbnail-placeholder is-${item.currentVersion.thumbnailStatus}`}
       data-testid={`item-row-thumbnail-${item.reviewItemId}`}
     >
-      {item.currentVersion.thumbnailStatus === 'failed' ? '首帧生成失败' : '首帧生成中'}
+      {loadFailed
+        ? '首帧重新生成中'
+        : item.currentVersion.thumbnailStatus === 'failed'
+          ? '首帧生成失败'
+          : '首帧生成中'}
     </span>
   );
 }
@@ -437,7 +446,10 @@ export function ProjectDetailItemList({
             tabIndex={selectable ? 0 : undefined}
           >
             <div className="fj-review-item-thumbnail-slot">
-              {thumbnailState(item)}
+              <ItemThumbnail
+                key={`${item.reviewItemId}:${item.currentVersion.thumbnailStatus}:${item.currentVersion.thumbnailUrl ?? 'none'}`}
+                item={item}
+              />
             </div>
             <div className="fj-review-item-summary">
               <div className="fj-review-item-summary-text">
@@ -457,8 +469,9 @@ export function ProjectDetailItemList({
             {isFinalized && entryMode === 'review' && !isArchived && onRevokeFinalization ? (
               <CapabilityGate entryMode={entryMode} capability="review.finalization.revoke">
                 <button
+                  aria-busy={revokePending || undefined}
                   aria-label={`撤销第${formatEpisodeDisplayValue(item.episode)}集定稿`}
-                  className="fj-review-finalized-revoke"
+                  className={`fj-review-finalized-revoke${revokePending ? ' is-pending' : ''}`}
                   disabled={itemActionPending || revokePending || revokeUncertain}
                   onClick={() => {
                     if (!window.confirm(`确认撤销第 ${item.episode} 集定稿？关联项目包将立即失效、无法继续下载，并进入物理删除的受控清理。`)) {

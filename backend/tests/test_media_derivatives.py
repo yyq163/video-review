@@ -33,6 +33,7 @@ from backend.app.modules.final_cut_review.infra.database import Base
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     FileObjectModel,
     MediaDerivativeTaskModel,
+    ProjectRefModel,
     ReviewItemModel,
     ReviewVersionModel,
     utcnow,
@@ -393,6 +394,7 @@ def test_persistent_claim_lease_and_attempt_exhaustion(tmp_path: Path) -> None:
     Base.metadata.create_all(
         engine,
         tables=[
+            cast(Table, ProjectRefModel.__table__),
             cast(Table, FileObjectModel.__table__),
             cast(Table, ReviewItemModel.__table__),
             cast(Table, ReviewVersionModel.__table__),
@@ -403,6 +405,13 @@ def test_persistent_claim_lease_and_attempt_exhaustion(tmp_path: Path) -> None:
     now = utcnow()
     with Session(engine) as session:
         session.connection().exec_driver_sql("PRAGMA foreign_keys=OFF")
+        session.add(
+            ProjectRefModel(
+                id="prj_1",
+                project_code="MEDIA",
+                project_name="Media project",
+            )
+        )
         session.add(
             FileObjectModel(
                 id="file_original",
@@ -512,6 +521,7 @@ def test_thumbnail_publish_is_rejected_after_current_version_switch(
     Base.metadata.create_all(
         engine,
         tables=[
+            cast(Table, ProjectRefModel.__table__),
             cast(Table, FileObjectModel.__table__),
             cast(Table, ReviewItemModel.__table__),
             cast(Table, ReviewVersionModel.__table__),
@@ -522,6 +532,13 @@ def test_thumbnail_publish_is_rejected_after_current_version_switch(
     claim = _claim(tmp_path)
     with Session(engine) as session:
         session.connection().exec_driver_sql("PRAGMA foreign_keys=OFF")
+        session.add(
+            ProjectRefModel(
+                id="prj_1",
+                project_code="MEDIA",
+                project_name="Media project",
+            )
+        )
         session.add_all(
             [
                 FileObjectModel(
@@ -783,13 +800,15 @@ def test_database_publish_reconciliation_waits_on_authoritative_rows(
     )
     rows = iter(
         (
-            SimpleNamespace(
-                status="ready",
-                output_file_id=prepared.output_file_id,
-            ),
+            SimpleNamespace(id=claim.project_ref_id),
+            SimpleNamespace(id=claim.review_item_id),
             SimpleNamespace(
                 playback_asset_id=None,
                 thumbnail_asset_id=prepared.output_file_id,
+            ),
+            SimpleNamespace(
+                status="ready",
+                output_file_id=prepared.output_file_id,
             ),
             SimpleNamespace(
                 sha256=prepared.sha256,
@@ -811,7 +830,7 @@ def test_database_publish_reconciliation_waits_on_authoritative_rows(
 
     monkeypatch.setattr(media_derivatives, "_worker_session", worker_session)
     assert media_derivatives._publication_database_state(claim, prepared) is True
-    assert len(statements) == 3
+    assert len(statements) == 5
     assert all(statement._for_update_arg is not None for statement in statements)
 
 

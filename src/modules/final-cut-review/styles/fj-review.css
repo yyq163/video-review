@@ -986,6 +986,20 @@
   display: inline;
 }
 
+.fj-review-finalized-revoke.is-pending:disabled {
+  background: rgba(255, 201, 71, 0.18);
+  border-color: rgba(255, 201, 71, 0.6);
+  color: var(--fj-review-yellow);
+}
+
+.fj-review-finalized-revoke.is-pending .fj-review-finalized-label {
+  display: none;
+}
+
+.fj-review-finalized-revoke.is-pending .fj-review-revoke-label {
+  display: inline;
+}
+
 .fj-review-revoke-state {
   color: var(--fj-review-yellow);
   font-size: 12px;

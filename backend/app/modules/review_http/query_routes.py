@@ -582,7 +582,17 @@ def stream_version(
 ) -> Response:
     authorize_query(query_context(request, request_id), "review.version.read", project_ref_id)
     repo = SqlAlchemyReviewRepository(session, get_settings())
-    file = repo.get_file_for_version(project_ref_id, review_item_id, version_id)
+    try:
+        file = repo.get_file_for_version(project_ref_id, review_item_id, version_id)
+    except ReviewError as exc:
+        if exc.code == "PLAYBACK_NOT_READY" and repo.requeue_missing_ready_derivative(
+            project_ref_id,
+            review_item_id,
+            version_id,
+            "playback_faststart",
+        ):
+            session.commit()
+        raise
     return protected_media_response(file, range_header=range_header)
 
 
@@ -597,11 +607,21 @@ def get_review_version_thumbnail(
 ) -> Response:
     authorize_query(query_context(request, request_id), "review.version.read", project_ref_id)
     repo = SqlAlchemyReviewRepository(session, get_settings())
-    file = repo.get_thumbnail_file_for_current_version(
-        project_ref_id,
-        review_item_id,
-        version_id,
-    )
+    try:
+        file = repo.get_thumbnail_file_for_current_version(
+            project_ref_id,
+            review_item_id,
+            version_id,
+        )
+    except ReviewError as exc:
+        if exc.code == "PLAYBACK_NOT_READY" and repo.requeue_missing_ready_derivative(
+            project_ref_id,
+            review_item_id,
+            version_id,
+            "thumbnail",
+        ):
+            session.commit()
+        raise
     return protected_media_response(
         file,
         range_header=None,

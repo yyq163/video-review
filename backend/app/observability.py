@@ -7,10 +7,11 @@ import re
 import shutil
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, MutableMapping
+from concurrent.futures import ThreadPoolExecutor
 from ipaddress import ip_address, ip_network
 from typing import Any
 
-from prometheus_client import Counter, Gauge, Histogram, REGISTRY, make_asgi_app
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, REGISTRY, generate_latest
 from prometheus_client.core import GaugeMetricFamily
 from sqlalchemy import text
 
@@ -26,6 +27,7 @@ from backend.app.telemetry_metrics import (
 logger = logging.getLogger(__name__)
 
 METRICS_PATH = "/internal/metrics"
+METRICS_RENDER_TIMEOUT_SECONDS = 2.5
 ALLOWED_HTTP_METHODS = frozenset({"get", "head", "post", "put", "patch", "delete", "options"})
 ROUTE_FAMILIES = frozenset(
     {
@@ -335,8 +337,8 @@ def _bounded_staging_totals(directory: str, kind: str) -> tuple[int, int]:
     count = 0
     total_bytes = 0
     with os.scandir(directory) as entries:
-        for entry in entries:
-            if count >= 10_000:
+        for inspected, entry in enumerate(entries, start=1):
+            if inspected > 10_000:
                 raise RuntimeError("staging scan exceeded the bounded entry limit")
             if kind == "package":
                 matches = entry.name.endswith(".staging.zip")
@@ -650,11 +652,49 @@ class DatabaseAggregateCollector:
 
 
 REGISTRY.register(DatabaseAggregateCollector())
-metrics_application = make_asgi_app(registry=REGISTRY)
 
 ASGIReceive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 ASGISend = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 ASGIApplication = Callable[[MutableMapping[str, Any], ASGIReceive, ASGISend], Awaitable[None]]
+
+
+_METRICS_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="fcr-metrics",
+)
+
+
+class IsolatedMetricsApplication:
+    """Render collectors away from the sole business event-loop worker."""
+
+    async def __call__(
+        self,
+        scope: MutableMapping[str, Any],
+        _receive: ASGIReceive,
+        send: ASGISend,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            payload = await asyncio.wait_for(
+                loop.run_in_executor(_METRICS_EXECUTOR, generate_latest, REGISTRY),
+                timeout=METRICS_RENDER_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise RuntimeError("metrics rendering exceeded its bounded deadline") from exc
+        headers = [
+            (b"content-type", CONTENT_TYPE_LATEST.encode("ascii")),
+            (b"content-length", str(len(payload)).encode("ascii")),
+        ]
+        await send({"type": "http.response.start", "status": 200, "headers": headers})
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"" if str(scope.get("method", "GET")).upper() == "HEAD" else payload,
+            }
+        )
+
+
+metrics_application = IsolatedMetricsApplication()
 
 
 class InstrumentedApplication:

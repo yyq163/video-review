@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Awaitable, Callable, MutableMapping
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,31 @@ def test_labels_are_bounded() -> None:
     assert observability._bounded_label("project/customer/file", observability.PACKAGE_STATUSES) == "other"
     assert observability._http_method({"method": "GET"}) == "get"
     assert observability._http_method({"method": "USER-CONTROLLED"}) == "other"
+
+
+def test_staging_scan_budget_counts_every_directory_entry(monkeypatch) -> None:
+    class Entry:
+        name = "ordinary-media.mp4"
+
+        def is_file(self, *, follow_symlinks: bool) -> bool:
+            del follow_symlinks
+            return True
+
+    class Scan:
+        def __enter__(self):
+            return iter(Entry() for _ in range(10_001))
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(observability.os, "scandir", lambda _directory: Scan())
+
+    try:
+        observability._bounded_staging_totals("/managed/files", "media")
+    except RuntimeError as exc:
+        assert "bounded entry limit" in str(exc)
+    else:
+        raise AssertionError("ordinary files must consume the staging scan budget")
 
 
 def test_route_family_never_uses_project_item_version_or_upload_identifiers() -> None:
@@ -162,6 +188,77 @@ def test_metrics_path_bypasses_business_application(monkeypatch) -> None:
 
     assert downstream_called is False
     assert messages[0]["status"] == 200
+
+
+def test_metrics_rendering_does_not_block_business_event_loop(monkeypatch) -> None:
+    render_started = threading.Event()
+    release_render = threading.Event()
+    business_completed = False
+
+    def slow_render(_registry: object) -> bytes:
+        render_started.set()
+        assert release_render.wait(timeout=2)
+        return b"fcr_runtime 1\n"
+
+    monkeypatch.setattr(observability, "generate_latest", slow_render)
+
+    async def scenario() -> None:
+        nonlocal business_completed
+        messages: list[MutableMapping[str, Any]] = []
+
+        async def downstream(
+            _scope: MutableMapping[str, Any],
+            _receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+            send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+        ) -> None:
+            nonlocal business_completed
+            business_completed = True
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        async def receive() -> MutableMapping[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: MutableMapping[str, Any]) -> None:
+            messages.append(message)
+
+        application = observability.InstrumentedApplication(
+            downstream,
+            observability.IsolatedMetricsApplication(),
+        )
+        monkeypatch.setenv("MANAGEMENT_NETWORK_CIDR", "10.231.58.0/24")
+        metrics_task = asyncio.create_task(
+            application(
+                {
+                    "type": "http",
+                    "path": observability.METRICS_PATH,
+                    "method": "GET",
+                    "client": ("10.231.58.20", 43120),
+                },
+                receive,
+                send,
+            )
+        )
+        for _ in range(100):
+            if render_started.is_set():
+                break
+            await asyncio.sleep(0.001)
+        assert render_started.is_set()
+        await application(
+            {
+                "type": "http",
+                "path": "/projects",
+                "method": "GET",
+                "client": ("127.0.0.1", 43121),
+            },
+            receive,
+            send,
+        )
+        assert business_completed is True
+        release_render.set()
+        await metrics_task
+
+    asyncio.run(scenario())
 
 
 def test_metrics_failure_returns_bounded_503_without_calling_business_application(

@@ -117,6 +117,7 @@ class PackageBuildArtifact:
     package_id: str
     lease_id: str
     storage_path: str
+    canonical_path: str
     sha256: str
     storage_bytes: int
     device: int
@@ -1262,14 +1263,22 @@ class SqlAlchemyReviewRepository:
             raise not_found()
         return item
 
-    def _get_version(self, project_ref_id: str, review_item_id: str, version_id: str) -> ReviewVersionModel:
-        version = self.session.scalar(
-            select(ReviewVersionModel).where(
+    def _get_version(
+        self,
+        project_ref_id: str,
+        review_item_id: str,
+        version_id: str,
+        *,
+        for_update: bool = False,
+    ) -> ReviewVersionModel:
+        statement = select(ReviewVersionModel).where(
                 ReviewVersionModel.id == version_id,
                 ReviewVersionModel.project_ref_id == project_ref_id,
                 ReviewVersionModel.review_item_id == review_item_id,
             )
-        )
+        if for_update:
+            statement = statement.with_for_update()
+        version = self.session.scalar(statement)
         if not version:
             raise not_found()
         return version
@@ -2086,7 +2095,10 @@ class SqlAlchemyReviewRepository:
                 select(FinalCutPackageSnapshotModel)
                 .where(
                     FinalCutPackageSnapshotModel.project_ref_id == project.id,
-                    FinalCutPackageSnapshotModel.status.in_(("preparing", "ready")),
+                    FinalCutPackageSnapshotModel.status.in_(
+                        ("preparing", "ready", "failed", "expired")
+                    ),
+                    FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
                 )
                 .order_by(FinalCutPackageSnapshotModel.created_at, FinalCutPackageSnapshotModel.id)
                 .with_for_update()
@@ -2573,6 +2585,7 @@ class SqlAlchemyReviewRepository:
                 package_id=claim.package_id,
                 lease_id=claim.lease_id,
                 storage_path=str(staging_path),
+                canonical_path=claim.storage_path,
                 sha256=package_sha256,
                 storage_bytes=actual_storage_bytes,
                 device=created_identity[0],
@@ -2738,6 +2751,12 @@ class SqlAlchemyReviewRepository:
             return "skipped"
         expected_path = contained_path(Path(f"{snapshot.id}.zip"), self.settings.package_root)
         artifact_path = contained_path(artifact.storage_path, self.settings.package_root)
+        artifact_canonical_path = contained_path(
+            artifact.canonical_path,
+            self.settings.package_root,
+        )
+        if artifact_canonical_path != expected_path:
+            return "artifact_invalid"
         expected_staging_path = package_build_staging_path(
             self.settings.package_root,
             snapshot.id,
@@ -3805,6 +3824,66 @@ class SqlAlchemyReviewRepository:
         if file is None or not self._playback_file_is_ready(file):
             raise ReviewError("PLAYBACK_NOT_READY", "媒体衍生文件尚未就绪")
         return file
+
+    def requeue_missing_ready_derivative(
+        self,
+        project_ref_id: str,
+        review_item_id: str,
+        version_id: str,
+        kind: str,
+    ) -> bool:
+        """Idempotently repair DB-ready/physical-missing derivative drift.
+
+        Keep the immutable version pointer in place (including on finalized
+        items), but return the task to the worker queue.  Locks follow the
+        project -> item -> version -> task order shared by upload/delete and
+        media publication.
+        """
+
+        self._get_project(project_ref_id, for_update=True)
+        self._get_item(project_ref_id, review_item_id, for_update=True)
+        version = self._get_version(
+            project_ref_id,
+            review_item_id,
+            version_id,
+            for_update=True,
+        )
+        task = self.session.scalar(
+            select(MediaDerivativeTaskModel)
+            .where(
+                MediaDerivativeTaskModel.project_ref_id == project_ref_id,
+                MediaDerivativeTaskModel.review_item_id == review_item_id,
+                MediaDerivativeTaskModel.version_id == version_id,
+                MediaDerivativeTaskModel.kind == kind,
+            )
+            .with_for_update()
+        )
+        asset_id = (
+            version.playback_asset_id
+            if kind == "playback_faststart"
+            else version.thumbnail_asset_id
+        )
+        if (
+            task is None
+            or task.status != "ready"
+            or asset_id is None
+            or task.output_file_id != asset_id
+        ):
+            return False
+        file = self.session.get(FileObjectModel, asset_id)
+        if self._playback_file_is_ready(file):
+            return False
+        now = utcnow()
+        task.status = "queued"
+        task.attempts = 0
+        task.next_attempt_at = now
+        task.lease_id = None
+        task.lease_expires_at = None
+        task.error_code = "MEDIA_DERIVATIVE_ARTIFACT_MISSING"
+        task.failure_details = {"stage": "authenticated_delivery_repair"}
+        task.updated_at = now
+        self.session.flush()
+        return True
 
     def get_file_for_finalization(self, project_ref_id: str, review_item_id: str) -> tuple[FinalizationRecordModel, FileObjectModel]:
         self._assert_project_visible(self._get_project(project_ref_id))

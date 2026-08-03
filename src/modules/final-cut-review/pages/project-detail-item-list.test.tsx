@@ -167,6 +167,16 @@ describe('ProjectDetailItemList summary rendering', () => {
     expect(screen.getByText('首帧生成失败')).toBeInTheDocument();
     expect(screen.queryAllByRole('img')).toHaveLength(0);
   });
+
+  it('replaces a broken ready thumbnail with an explicit regeneration state', () => {
+    const item = summaryItem('broken-ready');
+    renderList({ items: [item] });
+
+    fireEvent.error(screen.getByTestId('item-row-thumbnail-broken-ready'));
+
+    expect(screen.getByText('首帧重新生成中')).toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
 });
 
 describe('ProjectDetailItemList server-authoritative selection', () => {
@@ -488,6 +498,28 @@ describe('ProjectDetailItemList status and finalization revocation', () => {
     expect(onRevokeFinalization).toHaveBeenCalledWith(finalized);
     expect(await screen.findByText('撤回结果确认中')).toBeInTheDocument();
     expect(revoke).toBeDisabled();
+  });
+
+  it('shows the pending revoke state while the authoritative request is unresolved', async () => {
+    const finalized = summaryItem('pending-revoke', {
+      episode: '14',
+      status: 'finalized',
+      activeFinalizationId: 'fin-pending-revoke',
+      finalization: { id: 'fin-pending-revoke', status: 'active', revokedAt: null },
+      bulkDelete: { eligible: false, locked: false, reason: 'FINALIZED' },
+    });
+    const onRevokeFinalization = vi.fn(
+      () => new Promise<FinalizationRevocation>(() => undefined),
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderList({ items: [finalized], entryMode: 'review', onRevokeFinalization });
+
+    const revoke = screen.getByRole('button', { name: '撤销第14集定稿' });
+    await userEvent.click(revoke);
+
+    expect(revoke).toBeDisabled();
+    expect(revoke).toHaveAttribute('aria-busy', 'true');
+    expect(within(revoke).getByText('撤销中')).toBeVisible();
   });
 
   it('shows authoritative cleanup pending and failed states without restoring finalized status', () => {

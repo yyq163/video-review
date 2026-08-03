@@ -988,6 +988,23 @@ def test_protected_thumbnail_requires_current_ready_derivative(
     assert response.headers["cache-control"] == "private, no-cache, max-age=0, must-revalidate"
     assert response.content == thumbnail_bytes
 
+    thumbnail_path.unlink()
+    missing = client.get(thumbnail_route)
+    assert missing.status_code == 409
+    assert api_error(missing)["code"] == "PLAYBACK_NOT_READY"
+    with SessionLocal() as session:
+        task = session.scalar(
+            select(MediaDerivativeTaskModel).where(
+                MediaDerivativeTaskModel.version_id == item["current_version_id"],
+                MediaDerivativeTaskModel.kind == "thumbnail",
+            )
+        )
+        assert task is not None
+        assert task.status == "queued"
+        assert task.output_file_id == thumbnail_id
+        assert task.attempts == 0
+        assert task.error_code == "MEDIA_DERIVATIVE_ARTIFACT_MISSING"
+
     create_issue(client, project["project_ref_id"], item, content="request v2")
     current_item = api_data(
         client.get(
@@ -1178,6 +1195,58 @@ def test_revoke_preparing_package_blocks_late_worker_publish(
         )
         publish_session.commit()
     Path(artifact.storage_path).unlink()
+
+
+def test_revoke_tracks_failed_package_until_physical_storage_is_reclaimed(
+    client: TestClient,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FinalCutPackageSnapshotModel,
+    )
+
+    project, item = create_project_item(client, "REVFAILED")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    package, _ = prepare_ready_package(client, project["project_ref_id"])
+    with SessionLocal.begin() as session:
+        snapshot = session.get(FinalCutPackageSnapshotModel, package["id"])
+        assert snapshot is not None
+        snapshot.status = "failed"
+        snapshot.failure_details = {"error_code": "SYNTHETIC_DELETE_FAILURE"}
+        snapshot.storage_reclaimed_at = None
+
+    current_item = api_data(
+        client.get(
+            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
+            f"/items/{item['id']}"
+        )
+    )
+    revoke = command(
+        "RevokeFinalization",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "confirmed": True,
+        },
+    )
+    response = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        f"/items/{item['id']}/finalization/revoke",
+        json=revoke,
+        headers={
+            "Idempotency-Key": revoke["command_id"],
+            "If-Match": str(current_item["lock_version"]),
+        },
+    )
+    assert response.status_code == 200, response.text
+    revoked = api_data(response)
+    assert revoked["cleanup_status"] == "pending"
+    assert revoked["invalidated_package_ids"] == [package["id"]]
+    with SessionLocal() as session:
+        snapshot = session.get(FinalCutPackageSnapshotModel, package["id"])
+        assert snapshot is not None
+        assert snapshot.status == "invalidated"
+        assert snapshot.storage_reclaimed_at is None
 
 
 def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
@@ -5057,6 +5126,19 @@ def test_package_worker_keeps_newer_canonical_when_stale_lease_publishes_and_cle
         assert snapshot.build_lease_id is None
         assert snapshot.build_lease_expires_at is None
         assert snapshot.sha256 == second_artifact.sha256
+
+    orphan_canonical = settings.package_root / "orphaned-after-rename.zip"
+    orphan_canonical.write_bytes(first_payload)
+    orphan_metadata = orphan_canonical.stat()
+    renamed_artifact = replace(
+        first_artifact,
+        storage_path=str(settings.package_root / "already-renamed.staging.zip"),
+        canonical_path=str(orphan_canonical),
+        device=orphan_metadata.st_dev,
+        inode=orphan_metadata.st_ino,
+    )
+    assert _discard_artifact(renamed_artifact) is True
+    assert not orphan_canonical.exists()
 
 
 def test_package_publish_preserves_storage_unavailable_failure_semantics(

@@ -1403,6 +1403,64 @@ def _seed_item(session: Session, prefix: str) -> tuple[ProjectRefModel, ReviewIt
     return project, item, version, file
 
 
+def test_postgresql_media_claim_uses_project_item_version_task_lock_order() -> None:
+    from backend.app.media_derivatives import _claim_task
+
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url)
+    SessionLocal = sessionmaker(bind=engine)
+    try:
+        with SessionLocal() as seed:
+            prefix = _suffix()
+            project, item, version, _file_model = _seed_item(seed, prefix)
+            task_id = f"mdt_{prefix}_lock_order"
+            seed.add(
+                MediaDerivativeTaskModel(
+                    id=task_id,
+                    project_ref_id=project.id,
+                    review_item_id=item.id,
+                    version_id=version.id,
+                    kind="thumbnail",
+                    status="queued",
+                    attempts=0,
+                )
+            )
+            seed.commit()
+
+        with SessionLocal() as claimant:
+            statements: list[str] = []
+
+            @event.listens_for(claimant.connection(), "before_cursor_execute")
+            def record_statement(
+                _connection,
+                _cursor,
+                statement,
+                _parameters,
+                _context,
+                _executemany,
+            ) -> None:
+                statements.append(" ".join(statement.split()))
+
+            status, claim = _claim_task(claimant, get_settings(), task_id)
+            assert status == "claimed"
+            assert claim is not None
+            claimant.commit()
+
+        lock_statements = [
+            statement
+            for statement in statements
+            if "FOR UPDATE" in statement
+        ]
+        project_lock = next(i for i, sql in enumerate(lock_statements) if "FROM project_refs" in sql)
+        item_lock = next(i for i, sql in enumerate(lock_statements) if "FROM review_items" in sql)
+        version_lock = next(i for i, sql in enumerate(lock_statements) if "FROM review_versions" in sql)
+        task_lock = next(i for i, sql in enumerate(lock_statements) if "FROM media_derivative_tasks" in sql)
+        assert project_lock < item_lock < version_lock < task_lock
+    finally:
+        engine.dispose()
+
+
 def test_postgresql_delete_review_item_detaches_outbox_and_removes_file() -> None:
     database_url = _postgres_database_url()
     _prepare_postgresql_schema(database_url)

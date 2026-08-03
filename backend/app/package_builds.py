@@ -30,7 +30,6 @@ from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCu
 from backend.app.safe_files import (
     UnsafeFilePathError,
     pin_regular_file,
-    unlink_regular_file_if_identity,
 )
 from backend.app.settings import Settings, get_database_settings
 from backend.app.telemetry_metrics import (
@@ -108,20 +107,33 @@ def _package_staging_absent(claim: PackageBuildClaim) -> bool:
 
 def _discard_artifact(artifact: PackageBuildArtifact) -> bool:
     settings = get_database_settings()
-    try:
-        unlink_regular_file_if_identity(
-            artifact.storage_path,
-            settings.package_root,
-            device=artifact.device,
-            inode=artifact.inode,
-        )
-    except (OSError, UnsafeFilePathError):
-        return False
-    try:
-        with pin_regular_file(artifact.storage_path, settings.package_root) as pinned:
-            return pinned is None or not pinned.exists
-    except (OSError, UnsafeFilePathError):
-        return False
+    # Atomic publication renames staging to canonical before the final identity
+    # check and directory fsync.  A failure after that rename must therefore
+    # clean either location by the captured inode before capacity can be
+    # reported as reclaimed.
+    for path in (artifact.storage_path, artifact.canonical_path):
+        try:
+            with pin_regular_file(path, settings.package_root) as pinned:
+                if pinned is None or not pinned.exists:
+                    continue
+                if pinned.device != artifact.device or pinned.inode != artifact.inode:
+                    continue
+                pinned.unlink(missing_ok=True)
+        except (OSError, UnsafeFilePathError):
+            return False
+    for path in (artifact.storage_path, artifact.canonical_path):
+        try:
+            with pin_regular_file(path, settings.package_root) as pinned:
+                if (
+                    pinned is not None
+                    and pinned.exists
+                    and pinned.device == artifact.device
+                    and pinned.inode == artifact.inode
+                ):
+                    return False
+        except (OSError, UnsafeFilePathError):
+            return False
+    return True
 
 
 def _record_build_failure(
