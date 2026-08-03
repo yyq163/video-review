@@ -9,7 +9,7 @@ import type {
 } from '../contracts/types';
 import { normalizedPathToCanvasPath, normalizedVideoPointToCanvasPoint } from '../core/coordinates';
 import { formatTimestampTimecode } from '../core/timecode';
-import { useVersionIssues } from '../entry/use-review-queries';
+import { useVersionIssues, useVersionStatus } from '../entry/use-review-queries';
 
 interface VersionComparePanelProps {
   entryMode: EntryMode;
@@ -134,6 +134,7 @@ function ComparePane({
   issues,
   onPlaybackEvent,
   onVideoElement,
+  onPlaybackAssetError,
   issuesLoading,
   issuesError,
 }: {
@@ -142,13 +143,19 @@ function ComparePane({
   issues: ReviewIssue[];
   onPlaybackEvent: (side: 'left' | 'right', event: 'play' | 'pause' | 'seek' | 'timeupdate') => void;
   onVideoElement: (element: HTMLVideoElement | null) => void;
+  onPlaybackAssetError: () => Promise<unknown>;
   issuesLoading: boolean;
   issuesError: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const recoveryRequestedUrlRef = useRef<string | null>(null);
+  const [mediaElementAttempt, setMediaElementAttempt] = useState(0);
   const [playbackState, setPlaybackState] = useState<ComparePlaybackState>('loading');
   const shapes = issues.flatMap((issue) => issue.currentAnnotationSet?.shapes ?? []);
   const playbackReady = version.playbackStatus === 'ready' && Boolean(version.playbackUrl);
+  useEffect(() => {
+    if (!playbackReady) recoveryRequestedUrlRef.current = null;
+  }, [playbackReady]);
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !playbackReady || !version.playbackUrl) {
@@ -165,7 +172,7 @@ function ComparePane({
       video.removeAttribute('src');
       video.load();
     };
-  }, [onVideoElement, playbackReady, version.playbackUrl, version.versionId]);
+  }, [mediaElementAttempt, onVideoElement, playbackReady, version.playbackUrl, version.versionId]);
 
   return (
     <article className="fj-review-compare-pane" data-testid={`version-compare-${side}`}>
@@ -176,14 +183,22 @@ function ComparePane({
       <div className="fj-review-compare-frame">
         {playbackReady ? (
           <video
-            key={version.versionId}
+            key={`${version.versionId}:${version.playbackUrl ?? 'none'}:${mediaElementAttempt}`}
             ref={videoRef}
             controls
             crossOrigin="use-credentials"
             preload="metadata"
             aria-label={`${side === 'left' ? '左侧' : '右侧'}版本播放器 ${version.label}`}
             onCanPlay={() => setPlaybackState('ready')}
-            onError={() => setPlaybackState('error')}
+            onError={() => {
+              setPlaybackState('error');
+              const failedPlaybackUrl = version.playbackUrl;
+              if (!failedPlaybackUrl || recoveryRequestedUrlRef.current === failedPlaybackUrl) return;
+              recoveryRequestedUrlRef.current = failedPlaybackUrl;
+              void onPlaybackAssetError()
+                .catch(() => undefined)
+                .finally(() => setMediaElementAttempt((current) => current + 1));
+            }}
             onLoadStart={() => setPlaybackState('loading')}
             onPause={() => {
               setPlaybackState('paused');
@@ -279,6 +294,9 @@ function VersionCompareBody(
   const [leftVersionId, setLeftVersionId] = useState(sortedVersions[0]?.versionId ?? props.currentVersionId);
   const [rightVersionId, setRightVersionId] = useState(props.currentVersionId);
   const [syncPlayback, setSyncPlayback] = useState(false);
+  const [recoveryVersionIds, setRecoveryVersionIds] = useState<Set<VersionId>>(
+    () => new Set(),
+  );
   const leftRef = useRef<HTMLVideoElement | null>(null);
   const rightRef = useRef<HTMLVideoElement | null>(null);
   const applyingSyncRef = useRef(false);
@@ -313,6 +331,40 @@ function VersionCompareBody(
         ? props.workspaceIssues
         : undefined,
   });
+  const leftStatus = useVersionStatus(
+    props.entryMode,
+    {
+      projectRefId: props.projectRefId,
+      reviewItemId: props.reviewItemId,
+      versionId: leftVersion.versionId,
+    },
+    recoveryVersionIds.has(leftVersion.versionId),
+  );
+  const rightStatus = useVersionStatus(
+    props.entryMode,
+    {
+      projectRefId: props.projectRefId,
+      reviewItemId: props.reviewItemId,
+      versionId: rightVersion.versionId,
+    },
+    recoveryVersionIds.has(rightVersion.versionId),
+  );
+  const effectiveLeftVersion =
+    leftStatus.data?.versionId === leftVersion.versionId ? leftStatus.data : leftVersion;
+  const effectiveRightVersion =
+    rightStatus.data?.versionId === rightVersion.versionId ? rightStatus.data : rightVersion;
+  const recoverPlaybackAsset = (
+    versionId: VersionId,
+    refetch: typeof leftStatus.refetch,
+  ) => {
+    setRecoveryVersionIds((current) => {
+      if (current.has(versionId)) return current;
+      const next = new Set(current);
+      next.add(versionId);
+      return next;
+    });
+    return refetch({ cancelRefetch: false });
+  };
 
   const syncPeer = (side: 'left' | 'right', event: 'play' | 'pause' | 'seek' | 'timeupdate') => {
     if (!syncPlayback || applyingSyncRef.current) return;
@@ -382,20 +434,22 @@ function VersionCompareBody(
       <div className="fj-review-compare-grid">
         <ComparePane
           side="left"
-          version={leftVersion}
+          version={effectiveLeftVersion}
           issues={leftIssues.data ?? []}
           issuesLoading={leftIssues.isLoading}
           issuesError={leftIssues.isError}
           onVideoElement={setLeftVideoElement}
+          onPlaybackAssetError={() => recoverPlaybackAsset(leftVersion.versionId, leftStatus.refetch)}
           onPlaybackEvent={syncPeer}
         />
         <ComparePane
           side="right"
-          version={rightVersion}
+          version={effectiveRightVersion}
           issues={rightIssues.data ?? []}
           issuesLoading={rightIssues.isLoading}
           issuesError={rightIssues.isError}
           onVideoElement={setRightVideoElement}
+          onPlaybackAssetError={() => recoverPlaybackAsset(rightVersion.versionId, rightStatus.refetch)}
           onPlaybackEvent={syncPeer}
         />
       </div>

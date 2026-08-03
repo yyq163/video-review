@@ -5,7 +5,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query';
-import type { EntryMode, IssueId, Project, ProjectRefId, ReviewIssue, ReviewItemId, ReviewWorkspace, VersionId } from '../contracts/types';
+import type { EntryMode, IssueId, Project, ProjectRefId, ReviewIssue, ReviewItemId, ReviewVersion, ReviewWorkspace, VersionId } from '../contracts/types';
 import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
 import {
   clearRevokeFinalizationOperation,
@@ -216,6 +216,34 @@ export function useProjectSummary(mode: EntryMode, projectRefId: ProjectRefId) {
     ...summary,
     data: summary.data ? maskProtectedSummary(summary.data) : summary.data,
   };
+}
+
+export function useVersionStatus(
+  mode: EntryMode,
+  input: {
+    projectRefId: ProjectRefId;
+    reviewItemId: ReviewItemId;
+    versionId: VersionId;
+  },
+  enabled: boolean,
+) {
+  const api = useReviewApi(mode);
+  return useQuery<ReviewVersion>({
+    queryKey: reviewKeys.versionStatus(
+      input.projectRefId,
+      input.reviewItemId,
+      input.versionId,
+    ),
+    queryFn: ({ signal }) => api.getVersion(input, { signal }),
+    enabled,
+    retry: (failureCount, error) => !isAbortError(error) && failureCount < 2,
+    staleTime: 5_000,
+    refetchInterval: (query) =>
+      query.state.data?.playbackStatus === 'pending' ||
+      query.state.data?.thumbnailStatus === 'pending'
+        ? 5_000
+        : false,
+  });
 }
 
 export function useWorkspace(mode: EntryMode, input: { projectRefId: ProjectRefId; reviewItemId: ReviewItemId; versionId?: VersionId }) {

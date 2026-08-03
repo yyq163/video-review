@@ -51,6 +51,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const [projectActionMessage, setProjectActionMessage] = useState<string | null>(null);
   const [bulkActionsHost, setBulkActionsHost] = useState<HTMLSpanElement | null>(null);
   const v1ListRefreshSequenceRef = useRef(0);
+  const thumbnailAuthorityRefreshRef = useRef<Promise<unknown> | null>(null);
   const activeV1UploadCountRef = useRef(0);
   const [activeV1UploadCount, setActiveV1UploadCount] = useState(0);
   const [v1ListProtectionState, setV1ListProtectionState] = useState(() => props.entryMode === 'edit' ? getV1ListProtectionState(projectRefId) : 'clear');
@@ -63,6 +64,20 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   );
   const [revocationAuthorityRequiredIds, setRevocationAuthorityRequiredIds] =
     useState(() => new Set<string>());
+  const refreshThumbnailAuthority = useCallback(() => {
+    if (thumbnailAuthorityRefreshRef.current) {
+      return thumbnailAuthorityRefreshRef.current;
+    }
+    const refreshPromise = detail
+      .refetch({ throwOnError: true, cancelRefetch: false })
+      .finally(() => {
+        if (thumbnailAuthorityRefreshRef.current === refreshPromise) {
+          thumbnailAuthorityRefreshRef.current = null;
+        }
+      });
+    thumbnailAuthorityRefreshRef.current = refreshPromise;
+    return refreshPromise;
+  }, [detail]);
   const revocationAuthorityRequiredIdsRef = useRef(
     revocationAuthorityRequiredIds,
   );
@@ -704,6 +719,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
           bulkActionHost={bulkActionsHost}
           onBulkDeleteReviewItems={bulkDeleteReviewItems}
           onDeleteReviewItem={(item) => void deleteReviewItem(item)}
+          onThumbnailLoadError={refreshThumbnailAuthority}
           onRevokeFinalization={revokeFinalization}
           onUpdateReviewItemMetadata={updateReviewItemMetadata}
           projectRefId={projectRefId}

@@ -315,6 +315,9 @@ describe('VersionComparePanel media lifecycle', () => {
       playbackUrl: 'blob:episode-28-v3',
     };
     const runtime = createReviewRuntime();
+    const getVersionSpy = vi
+      .spyOn(runtime.getApi('review'), 'getVersion')
+      .mockResolvedValue(seed.versions[0]);
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -350,9 +353,20 @@ describe('VersionComparePanel media lifecycle', () => {
     expect(screen.getByTestId('version-compare-left-playback-status')).toHaveTextContent('V1 正在定位');
     fireEvent.seeked(oldLeft);
     expect(screen.getByTestId('version-compare-left-playback-status')).toHaveTextContent('V1 可播放');
+    const loadCallsBeforeRecovery = loadSpy.mock.calls.length;
     fireEvent.error(oldLeft);
     expect(screen.getByTestId('version-compare-left-playback-status')).toHaveTextContent('V1 播放失败');
     expect(screen.getByTestId('version-compare-left-playback-status')).toHaveAttribute('role', 'alert');
+    await waitFor(() => {
+      expect(getVersionSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ versionId: 'ver_ep28_v1' }),
+        expect.any(Object),
+      );
+      const recoveredLeft = screen.getByLabelText('左侧版本播放器 V1');
+      expect(recoveredLeft).not.toBe(oldLeft);
+      expect(recoveredLeft).toHaveAttribute('src', seed.versions[0].playbackUrl);
+      expect(loadSpy.mock.calls.length).toBeGreaterThan(loadCallsBeforeRecovery);
+    });
 
     result.rerender(renderCompare([seed.versions[1], v3]));
 
@@ -2651,6 +2665,42 @@ describe('ReviewPlayer component', () => {
     );
 
     expect(container.querySelector('video')).toHaveAttribute('crossorigin', 'use-credentials');
+  });
+
+  it('refetches playback authority and retries the same media URL once after an error', async () => {
+    const seed = createSeedData();
+    let finishRefresh: (() => void) | undefined;
+    const refresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const onPlaybackAssetError = vi.fn(() => refresh);
+    const onPlaybackError = vi.fn();
+    const { container } = render(
+      <ReviewPlayer
+        version={seed.versions[1]}
+        issues={[]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={onPlaybackError}
+        onPlaybackAssetError={onPlaybackAssetError}
+      />,
+    );
+    const failedVideo = container.querySelector('video');
+    expect(failedVideo).not.toBeNull();
+    fireEvent.error(failedVideo as HTMLVideoElement);
+    expect(onPlaybackAssetError).toHaveBeenCalledTimes(1);
+
+    await act(async () => finishRefresh?.());
+    const retriedVideo = container.querySelector('video');
+    expect(retriedVideo).not.toBeNull();
+    expect(retriedVideo).not.toBe(failedVideo);
+    fireEvent.canPlay(retriedVideo as HTMLVideoElement);
+    expect(onPlaybackError).toHaveBeenLastCalledWith(null);
+
+    fireEvent.error(retriedVideo as HTMLVideoElement);
+    expect(onPlaybackAssetError).toHaveBeenCalledTimes(1);
   });
 
   it('draws a real draft shape and supports undo/redo', async () => {

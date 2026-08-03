@@ -69,6 +69,7 @@ function renderList(input: {
   onRevokeFinalization?: (
     item: ReviewProjectSummaryItem,
   ) => Promise<FinalizationRevocation>;
+  onThumbnailLoadError?: (item: ReviewProjectSummaryItem) => Promise<unknown>;
 }) {
   const runtime = createReviewRuntime();
   activeRuntimes.push(runtime);
@@ -92,6 +93,7 @@ function renderList(input: {
             itemActionPending={itemActionPending}
             onBulkDeleteReviewItems={input.onBulkDeleteReviewItems}
             onDeleteReviewItem={onDeleteReviewItem}
+            onThumbnailLoadError={input.onThumbnailLoadError ?? vi.fn(async () => undefined)}
             onRevokeFinalization={input.onRevokeFinalization}
             onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
             projectRefId="prj_seed_final_cut"
@@ -168,14 +170,30 @@ describe('ProjectDetailItemList summary rendering', () => {
     expect(screen.queryAllByRole('img')).toHaveLength(0);
   });
 
-  it('replaces a broken ready thumbnail with an explicit regeneration state', () => {
+  it('confirms authority and retries a broken ready thumbnail once without a page refresh', async () => {
     const item = summaryItem('broken-ready');
-    renderList({ items: [item] });
+    let finishRefresh: (() => void) | undefined;
+    const refresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const onThumbnailLoadError = vi.fn(() => refresh);
+    renderList({ items: [item], onThumbnailLoadError });
 
-    fireEvent.error(screen.getByTestId('item-row-thumbnail-broken-ready'));
+    const failedImage = screen.getByTestId('item-row-thumbnail-broken-ready');
+    fireEvent.error(failedImage);
 
-    expect(screen.getByText('首帧重新生成中')).toBeInTheDocument();
+    expect(onThumbnailLoadError).toHaveBeenCalledWith(item);
+    expect(screen.getByText('首帧状态确认中')).toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
+
+    await act(async () => finishRefresh?.());
+    const retriedImage = screen.getByTestId('item-row-thumbnail-broken-ready');
+    expect(retriedImage).toHaveAttribute('src', '/thumbnail/broken-ready');
+    expect(retriedImage).not.toBe(failedImage);
+
+    fireEvent.error(retriedImage);
+    expect(onThumbnailLoadError).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('首帧加载失败')).toBeInTheDocument();
   });
 });
 

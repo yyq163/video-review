@@ -56,6 +56,7 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
             onDraftChange={controller.setDraftShapes}
             onSelectIssue={playback.selectIssue}
             onPlaybackError={playback.setPlaybackError}
+            onPlaybackAssetError={props.refetchWorkspace}
             onCreateIssueShortcut={() => actions.createIssue('快捷键创建当前时间码意见')}
           />
           {controller.toast && (

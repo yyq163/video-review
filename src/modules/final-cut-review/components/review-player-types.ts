@@ -32,6 +32,7 @@ export interface ReviewPlayerProps {
   onDraftChange(shapes: ReviewAnnotationShape[]): void;
   onSelectIssue(issue: ReviewIssue): void;
   onPlaybackError(error: string | null): void;
+  onPlaybackAssetError?(): Promise<unknown>;
   onCreateIssueShortcut?(): void;
 }
 

@@ -1249,6 +1249,114 @@ def test_revoke_tracks_failed_package_until_physical_storage_is_reclaimed(
         assert snapshot.storage_reclaimed_at is None
 
 
+def test_each_finalization_in_an_invalidated_multi_item_package_tracks_pending_cleanup(
+    client: TestClient,
+) -> None:
+    from sqlalchemy import select
+
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FinalCutPackageSnapshotModel,
+        FinalizationPackageInvalidationModel,
+    )
+
+    project = create_project(client, "REVMULTI")
+    first_item = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, seed=b"first"),
+        "REV-MULTI-1",
+    )
+    second_item = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, seed=b"second"),
+        "REV-MULTI-2",
+    )
+    first_finalization = finalize(client, project["project_ref_id"], first_item)
+    second_finalization = finalize(client, project["project_ref_id"], second_item)
+    package, _ = prepare_ready_package(client, project["project_ref_id"])
+
+    def revoke(item: dict[str, Any], command_id: str) -> dict[str, Any]:
+        current = api_data(
+            client.get(
+                f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
+                f"/items/{item['id']}"
+            )
+        )
+        body = command(
+            "RevokeFinalization",
+            {
+                "project_ref_id": project["project_ref_id"],
+                "review_item_id": item["id"],
+                "confirmed": True,
+            },
+            command_id=command_id,
+        )
+        response = client.post(
+            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+            f"/items/{item['id']}/finalization/revoke",
+            json=body,
+            headers={
+                "Idempotency-Key": body["command_id"],
+                "If-Match": str(current["lock_version"]),
+            },
+        )
+        assert response.status_code == 200, response.text
+        return api_data(response)
+
+    first_revoked = revoke(first_item, "revoke-multi-first")
+    second_revoked = revoke(second_item, "revoke-multi-second")
+    assert first_revoked["cleanup_status"] == "pending"
+    assert second_revoked["cleanup_status"] == "pending"
+    assert first_revoked["invalidated_package_ids"] == [package["id"]]
+    assert second_revoked["invalidated_package_ids"] == [package["id"]]
+
+    with SessionLocal() as session:
+        snapshot = session.get(FinalCutPackageSnapshotModel, package["id"])
+        assert snapshot is not None
+        assert snapshot.status == "invalidated"
+        assert snapshot.storage_reclaimed_at is None
+        assert snapshot.failure_details == {
+            "error_code": "PACKAGE_INVALIDATED_BY_FINALIZATION_REVOKE",
+            "finalization_id": first_finalization["id"],
+        }
+        invalidations = list(
+            session.scalars(
+                select(FinalizationPackageInvalidationModel)
+                .where(FinalizationPackageInvalidationModel.package_id == package["id"])
+                .order_by(FinalizationPackageInvalidationModel.created_at)
+            )
+        )
+        assert [entry.finalization_id for entry in invalidations] == [
+            first_finalization["id"],
+            second_finalization["id"],
+        ]
+        assert {entry.cleanup_status for entry in invalidations} == {"pending"}
+
+    refinalize = command(
+        "FinalizeVersion",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": second_item["id"],
+            "version_id": second_item["current_version_id"],
+            "confirmed": True,
+        },
+        command_id="refinalize-multi-cleanup-pending",
+    )
+    blocked = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        f"/items/{second_item['id']}/versions/{second_item['current_version_id']}/finalize",
+        json=refinalize,
+        headers={
+            "Idempotency-Key": refinalize["command_id"],
+            "If-Match": str(second_revoked["review_item"]["lock_version"]),
+        },
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert api_error(blocked)["code"] == "RESOURCE_STATE_CONFLICT"
+
+
 def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -5116,7 +5224,7 @@ def test_package_worker_keeps_newer_canonical_when_stale_lease_publishes_and_cle
         assert stale_repository.publish_prepared_package(first_artifact, context) == "skipped"
         stale_publish_session.commit()
     assert canonical_path.read_bytes() == second_payload
-    assert _discard_artifact(first_artifact) is True
+    assert _discard_artifact(first_artifact) is False
     assert not first_artifact_path.exists()
     assert canonical_path.read_bytes() == second_payload
 
@@ -5141,6 +5249,33 @@ def test_package_worker_keeps_newer_canonical_when_stale_lease_publishes_and_cle
     assert not orphan_canonical.exists()
 
 
+def test_package_build_path_check_keeps_capacity_reserved_while_canonical_remains(
+    client: TestClient,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+    from backend.app.package_builds import _package_build_paths_absent, _worker_context
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="PBUILDPATHS")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    package = request_package(client, project["project_ref_id"])
+    settings = get_settings()
+    with SessionLocal() as claim_session:
+        repository = SqlAlchemyReviewRepository(claim_session, settings)
+        status, claim = repository.claim_package_build(
+            package["id"],
+            _worker_context(project["project_ref_id"]),
+        )
+        claim_session.commit()
+    assert status == "claimed" and claim is not None
+    canonical_path = Path(claim.storage_path)
+    canonical_path.write_bytes(b"renamed-before-worker-crash")
+
+    assert not Path(claim.staging_path).exists()
+    assert _package_build_paths_absent(claim) is False
+
+
 def test_package_publish_preserves_storage_unavailable_failure_semantics(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -5159,6 +5294,8 @@ def test_package_publish_preserves_storage_unavailable_failure_semantics(
     package = request_package(client, project["project_ref_id"])
     settings = get_settings()
     monkeypatch.setattr(package_builds, "get_database_settings", lambda: settings)
+    canonical_path = settings.package_root / f"{package['id']}.zip"
+    canonical_path.write_bytes(b"previous-post-rename-worker-output")
 
     def fail_storage_check(*_args: object, **_kwargs: object) -> None:
         raise ReviewError("STORAGE_UNAVAILABLE", "synthetic shared storage failure")
@@ -5172,9 +5309,12 @@ def test_package_publish_preserves_storage_unavailable_failure_semantics(
             "error_code": "STORAGE_UNAVAILABLE",
             "attempt": 1,
             "retryable": False,
-            "storage_reclaimed": True,
+            "storage_reclaimed": False,
         }
-        assert not Path(snapshot.storage_path).exists()
+        assert snapshot.storage_reclaimed_at is None
+        assert snapshot.storage_bytes > 0
+        assert Path(snapshot.storage_path) == canonical_path
+        assert canonical_path.read_bytes() == b"previous-post-rename-worker-output"
 
 
 def test_package_download_lease_blocks_concurrent_integrity_scan(client: TestClient) -> None:

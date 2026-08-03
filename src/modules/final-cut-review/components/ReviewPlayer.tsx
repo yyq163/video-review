@@ -1,8 +1,10 @@
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { frameFromPlaybackPosition } from '../core/timecode';
@@ -23,6 +25,9 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const resetDraftRef = useRef<(() => void) | null>(null);
+  const recoveryRequestedUrlRef = useRef<string | null>(null);
+  const playbackErrorReportedRef = useRef(false);
+  const [mediaElementAttempt, setMediaElementAttempt] = useState(0);
   const playback = useReviewPlayerPlayback({
     videoRef,
     version: props.version,
@@ -63,6 +68,12 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
     },
     [annotations.textInputRef],
   );
+
+  useEffect(() => {
+    if (props.version.playbackStatus !== 'ready') {
+      recoveryRequestedUrlRef.current = null;
+    }
+  }, [props.version.playbackStatus]);
 
   useImperativeHandle(
     ref,
@@ -175,6 +186,7 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
             annotationReadonly={annotationReadonly}
             muted={playback.muted}
             mediaState={playback.mediaState}
+            mediaElementKey={`${props.version.versionId}:${props.version.playbackUrl ?? 'none'}:${mediaElementAttempt}`}
             containedMediaStyle={stage.containedMediaStyle}
             annotationLayerStyle={stage.annotationLayerStyle}
             displayVideoWidth={stage.displayVideoWidth}
@@ -212,15 +224,40 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
                 Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : props.version.durationMs,
               );
               playback.setMediaState('ready');
+              if (playbackErrorReportedRef.current) {
+                playbackErrorReportedRef.current = false;
+                props.onPlaybackError(null);
+              }
             }}
-            onCanPlay={() => playback.setMediaState('ready')}
+            onCanPlay={() => {
+              playback.setMediaState('ready');
+              if (playbackErrorReportedRef.current) {
+                playbackErrorReportedRef.current = false;
+                props.onPlaybackError(null);
+              }
+            }}
             onWaiting={() => playback.setMediaState('loading')}
             onSeeked={(video) => {
               if (video.readyState >= video.HAVE_CURRENT_DATA) playback.setMediaState('ready');
             }}
             onError={() => {
               playback.setMediaState('error');
+              playbackErrorReportedRef.current = true;
               props.onPlaybackError('媒体加载失败');
+              const failedPlaybackUrl = props.version.playbackUrl;
+              if (
+                !failedPlaybackUrl ||
+                !props.onPlaybackAssetError ||
+                recoveryRequestedUrlRef.current === failedPlaybackUrl
+              ) {
+                return;
+              }
+              recoveryRequestedUrlRef.current = failedPlaybackUrl;
+              void props.onPlaybackAssetError()
+                .catch(() => undefined)
+                .finally(() => {
+                  setMediaElementAttempt((current) => current + 1);
+                });
             }}
             onPlay={() => playback.setPlaying(true)}
             onPause={playback.handleMediaPause}

@@ -51,6 +51,7 @@ interface ReviewPlayerStageProps {
   annotationReadonly: boolean;
   muted: boolean;
   mediaState: PlayerMediaState;
+  mediaElementKey: string;
   containedMediaStyle: CSSProperties;
   annotationLayerStyle: CSSProperties;
   displayVideoWidth: number;
@@ -87,6 +88,7 @@ export function ReviewPlayerStage({
   annotationReadonly,
   muted,
   mediaState,
+  mediaElementKey,
   containedMediaStyle,
   annotationLayerStyle,
   displayVideoWidth,
@@ -136,6 +138,7 @@ export function ReviewPlayerStage({
       >
         {playbackReady ? (
           <video
+            key={mediaElementKey}
             ref={videoRef}
             src={version.playbackUrl}
             crossOrigin="use-credentials"

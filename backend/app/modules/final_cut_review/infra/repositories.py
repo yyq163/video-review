@@ -2096,7 +2096,7 @@ class SqlAlchemyReviewRepository:
                 .where(
                     FinalCutPackageSnapshotModel.project_ref_id == project.id,
                     FinalCutPackageSnapshotModel.status.in_(
-                        ("preparing", "ready", "failed", "expired")
+                        ("preparing", "ready", "failed", "expired", "invalidated")
                     ),
                     FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
                 )
@@ -2112,20 +2112,21 @@ class SqlAlchemyReviewRepository:
                 for package_item in package.items
             ):
                 continue
-            package.status = "invalidated"
-            package.expires_at = now - timedelta(microseconds=1)
-            package.next_build_attempt_at = None
-            package.build_lease_id = None
-            package.build_lease_expires_at = None
-            package.download_session_hash = None
-            package.download_session_expires_at = None
-            package.download_lease_id = None
-            package.download_lease_expires_at = None
-            package.failure_details = {
-                "error_code": "PACKAGE_INVALIDATED_BY_FINALIZATION_REVOKE",
-                "finalization_id": finalization.id,
-            }
-            package.updated_at = now
+            if package.status != "invalidated":
+                package.status = "invalidated"
+                package.expires_at = now - timedelta(microseconds=1)
+                package.next_build_attempt_at = None
+                package.build_lease_id = None
+                package.build_lease_expires_at = None
+                package.download_session_hash = None
+                package.download_session_expires_at = None
+                package.download_lease_id = None
+                package.download_lease_expires_at = None
+                package.failure_details = {
+                    "error_code": "PACKAGE_INVALIDATED_BY_FINALIZATION_REVOKE",
+                    "finalization_id": finalization.id,
+                }
+                package.updated_at = now
             invalidated_package_ids.append(package.id)
             self.session.add(
                 FinalizationPackageInvalidationModel(

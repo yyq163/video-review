@@ -96,13 +96,16 @@ def _package_build_lock(bind_source: Engine | Session) -> Iterator[bool]:
                 lock_connection.rollback()
 
 
-def _package_staging_absent(claim: PackageBuildClaim) -> bool:
+def _package_build_paths_absent(claim: PackageBuildClaim) -> bool:
     settings = get_database_settings()
-    try:
-        with pin_regular_file(claim.staging_path, settings.package_root) as pinned:
-            return pinned is None or not pinned.exists
-    except (OSError, UnsafeFilePathError):
-        return False
+    for path in (claim.staging_path, claim.storage_path):
+        try:
+            with pin_regular_file(path, settings.package_root) as pinned:
+                if pinned is not None and pinned.exists:
+                    return False
+        except (OSError, UnsafeFilePathError):
+            return False
+    return True
 
 
 def _discard_artifact(artifact: PackageBuildArtifact) -> bool:
@@ -124,12 +127,11 @@ def _discard_artifact(artifact: PackageBuildArtifact) -> bool:
     for path in (artifact.storage_path, artifact.canonical_path):
         try:
             with pin_regular_file(path, settings.package_root) as pinned:
-                if (
-                    pinned is not None
-                    and pinned.exists
-                    and pinned.device == artifact.device
-                    and pinned.inode == artifact.inode
-                ):
+                # A different inode at either package-owned path is still
+                # physical package storage.  Be conservative and keep the DB
+                # reservation so maintenance can reconcile it instead of
+                # claiming capacity was reclaimed while bytes remain.
+                if pinned is not None and pinned.exists:
                     return False
         except (OSError, UnsafeFilePathError):
             return False
@@ -194,7 +196,7 @@ def _process_package_snapshot(package_id: str, settings: Settings) -> str:
                 context,
                 "PACKAGE_BUILD_TIMEOUT",
                 retryable=True,
-                storage_reclaimed=_package_staging_absent(claim),
+                storage_reclaimed=_package_build_paths_absent(claim),
             )
             if timeout_status == "failed":
                 return observed("failed", "PACKAGE_BUILD_TIMEOUT")
@@ -207,7 +209,7 @@ def _process_package_snapshot(package_id: str, settings: Settings) -> str:
                 context,
                 error_code,
                 retryable=False,
-                storage_reclaimed=_package_staging_absent(claim),
+                storage_reclaimed=_package_build_paths_absent(claim),
             )
             return observed(status, error_code)
         except Exception as exc:
@@ -220,7 +222,7 @@ def _process_package_snapshot(package_id: str, settings: Settings) -> str:
                 context,
                 "PACKAGE_BUILD_FAILED",
                 retryable=True,
-                storage_reclaimed=_package_staging_absent(claim),
+                storage_reclaimed=_package_build_paths_absent(claim),
             )
             status = "failed" if failure_status == "failed" else "skipped"
             return observed(status, "PACKAGE_BUILD_FAILED")

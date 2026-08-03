@@ -46,6 +46,7 @@ interface ProjectDetailItemListProps {
     uncertainIds: string[];
   }>;
   onDeleteReviewItem: (item: ReviewItem) => void;
+  onThumbnailLoadError: (item: ReviewProjectSummaryItem) => Promise<unknown>;
   onRevokeFinalization?: (item: ReviewProjectSummaryItem) => Promise<FinalizationRevocation>;
   revocationUncertainIds?: ReadonlySet<string>;
   onUpdateReviewItemMetadata: (
@@ -80,9 +81,23 @@ function deleteUnavailableReason(
   return '当前不可删除';
 }
 
-function ItemThumbnail({ item }: { item: ReviewProjectSummaryItem }) {
+function ItemThumbnail({
+  item,
+  onLoadError,
+}: {
+  item: ReviewProjectSummaryItem;
+  onLoadError(): Promise<unknown>;
+}) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [confirmingUrl, setConfirmingUrl] = useState<string | null>(null);
+  const recoveryRequestedUrlRef = useRef<string | null>(null);
   const loadFailed = failedUrl !== null && item.currentVersion.thumbnailUrl === failedUrl;
+
+  useEffect(() => {
+    if (item.currentVersion.thumbnailStatus !== 'ready') {
+      recoveryRequestedUrlRef.current = null;
+    }
+  }, [item.currentVersion.thumbnailStatus]);
 
   if (
     item.currentVersion.thumbnailStatus === 'ready' &&
@@ -95,7 +110,19 @@ function ItemThumbnail({ item }: { item: ReviewProjectSummaryItem }) {
         className="fj-review-item-thumbnail"
         data-testid={`item-row-thumbnail-${item.reviewItemId}`}
         loading="lazy"
-        onError={() => setFailedUrl(item.currentVersion.thumbnailUrl)}
+        onError={() => {
+          const failedThumbnailUrl = item.currentVersion.thumbnailUrl;
+          setFailedUrl(failedThumbnailUrl);
+          if (recoveryRequestedUrlRef.current === failedThumbnailUrl) return;
+          recoveryRequestedUrlRef.current = failedThumbnailUrl;
+          setConfirmingUrl(failedThumbnailUrl);
+          void onLoadError()
+            .catch(() => undefined)
+            .finally(() => {
+              setConfirmingUrl((current) => current === failedThumbnailUrl ? null : current);
+              setFailedUrl((current) => current === failedThumbnailUrl ? null : current);
+            });
+        }}
         src={item.currentVersion.thumbnailUrl}
       />
     );
@@ -106,7 +133,9 @@ function ItemThumbnail({ item }: { item: ReviewProjectSummaryItem }) {
       data-testid={`item-row-thumbnail-${item.reviewItemId}`}
     >
       {loadFailed
-        ? '首帧重新生成中'
+        ? confirmingUrl === item.currentVersion.thumbnailUrl
+          ? '首帧状态确认中'
+          : '首帧加载失败'
         : item.currentVersion.thumbnailStatus === 'failed'
           ? '首帧生成失败'
           : '首帧生成中'}
@@ -122,6 +151,7 @@ export function ProjectDetailItemList({
   bulkActionHost,
   onBulkDeleteReviewItems,
   onDeleteReviewItem,
+  onThumbnailLoadError,
   onRevokeFinalization,
   revocationUncertainIds,
   onUpdateReviewItemMetadata,
@@ -449,6 +479,7 @@ export function ProjectDetailItemList({
               <ItemThumbnail
                 key={`${item.reviewItemId}:${item.currentVersion.thumbnailStatus}:${item.currentVersion.thumbnailUrl ?? 'none'}`}
                 item={item}
+                onLoadError={() => onThumbnailLoadError(item)}
               />
             </div>
             <div className="fj-review-item-summary">
