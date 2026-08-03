@@ -113,6 +113,22 @@ export function CreateItemUploadPanel({
     (row) => row.status === 'ready' && !conflictsWithExisting(row),
   );
   const recoverableRows = rows.filter((row) => row.status === 'failed' || row.status === 'uncertain');
+  const uploadDisabled = disabled || !readyRows.length || missingRequired;
+  const uploadDisabledReason = uploadDisabled
+    ? blockedForListConfirmation
+      ? '上一笔 V1 结果不确定，请先核对待审列表'
+      : uploading || pending
+        ? '当前批次正在上传，请等待上传完成'
+        : !rows.length
+          ? '请先选择原片文件'
+          : missingRequired
+            ? '请补齐每一条成片的标题和集数'
+            : rows.some((row) => conflictsWithExisting(row))
+              ? '集数与已上传成片或当前队列重复，请修改集数'
+              : recoverableRows.length
+                ? '当前没有可上传条目，请先处理失败或结果不确定项'
+                : '当前没有可上传的条目'
+    : null;
   const updateRow = (id: string, patch: Partial<Pick<CreateItemUploadRow, 'title' | 'episode'>>) => {
     setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
     setBatchError(null);
@@ -282,13 +298,21 @@ export function CreateItemUploadPanel({
         >
           选择文件
         </button>
-        <button
-          className="fj-review-primary"
-          type="submit"
-          disabled={disabled || !readyRows.length || missingRequired}
+        <span
+          aria-label={uploadDisabledReason ?? undefined}
+          className="fj-review-disabled-action-tooltip"
+          data-tooltip={uploadDisabledReason ?? undefined}
+          tabIndex={uploadDisabledReason ? 0 : undefined}
+          title={uploadDisabledReason ?? undefined}
         >
-          {blockedForListConfirmation ? '请先确认列表' : uploading || pending ? '上传中...' : '上传 V1'}
-        </button>
+          <button
+            className="fj-review-primary"
+            type="submit"
+            disabled={uploadDisabled}
+          >
+            {blockedForListConfirmation ? '请先确认列表' : uploading || pending ? '上传中...' : '上传 V1'}
+          </button>
+        </span>
       </div>
       {rows.length ? (
         <div className="fj-review-upload-rows" data-testid="create-item-upload-rows" id="create-item-upload-queue">

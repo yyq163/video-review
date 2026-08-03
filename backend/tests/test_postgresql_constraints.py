@@ -31,6 +31,7 @@ from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     FileObjectModel,
     FinalizationRecordModel,
     IdempotencyRecordModel,
+    MediaDerivativeTaskModel,
     OutboxEventModel,
     ProjectRefModel,
     ReviewIssueModel,
@@ -2423,6 +2424,91 @@ def test_postgresql_deferrable_current_revision_and_finalization_constraints() -
         session.commit()
         assert positive_item_reloaded.active_finalization_id == current_finalization_id
         assert positive_item_reloaded.current_version_id == positive_version.id
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_postgresql_finalized_version_accepts_only_ready_task_backed_thumbnail() -> None:
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url)
+    SessionLocal = sessionmaker(bind=engine)
+    session = SessionLocal()
+    try:
+        prefix = _suffix()
+        project, item, version, source = _seed_item(session, prefix)
+        version.playback_asset_id = None
+        task = MediaDerivativeTaskModel(
+            id=f"mdt_{uuid.uuid4().hex}",
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            kind="thumbnail",
+            status="queued",
+            attempts=0,
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add(task)
+        session.commit()
+
+        finalization = FinalizationRecordModel(
+            id=f"fin_{prefix}_derivative",
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            version_no=version.version_no,
+            original_file_id=source.id,
+            original_filename=version.original_filename,
+            mime_type=version.mime_type,
+            file_size=version.file_size,
+            sha256=version.sha256,
+            duration_ms=version.duration_ms,
+            width=version.width,
+            height=version.height,
+            fps_num=version.fps_num,
+            fps_den=version.fps_den,
+            media_probe_version=version.media_probe_version,
+            status="active",
+        )
+        session.add(finalization)
+        session.commit()
+        item.active_finalization_id = finalization.id
+        item.workflow_status = "finalized"
+        session.commit()
+
+        unauthorized = _file(f"file_{uuid.uuid4().hex}")
+        unauthorized.mime_type = "image/jpeg"
+        unauthorized.width = 320
+        unauthorized.height = 180
+        session.add(unauthorized)
+        session.flush()
+        version.thumbnail_asset_id = unauthorized.id
+        with pytest.raises(DBAPIError, match="finalized review item is frozen"):
+            session.commit()
+        session.rollback()
+
+        thumbnail = _file(f"file_{uuid.uuid4().hex}")
+        thumbnail.mime_type = "image/jpeg"
+        thumbnail.width = 320
+        thumbnail.height = 180
+        session.add(thumbnail)
+        session.flush()
+        task = session.get(MediaDerivativeTaskModel, task.id)
+        version = session.get(ReviewVersionModel, version.id)
+        assert task is not None and version is not None
+        task.status = "ready"
+        task.output_file_id = thumbnail.id
+        task.updated_at = utcnow()
+        session.flush()
+        version.thumbnail_asset_id = thumbnail.id
+        session.commit()
+        assert version.thumbnail_asset_id == thumbnail.id
+
+        version.sha256 = "f" * 64
+        with pytest.raises(DBAPIError, match="finalized review item is frozen"):
+            session.commit()
     finally:
         session.close()
         engine.dispose()

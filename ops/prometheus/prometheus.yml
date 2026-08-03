@@ -44,9 +44,15 @@ scrape_configs:
       - targets:
           - cadvisor:8080
     metric_relabel_configs:
-      - action: labeldrop
-        regex: "container_label_.*|id|image"
       - source_labels:
-          - name
-        regex: "fj-final-cut-review-(backend|package-worker|media-worker|postgres)-.*"
+          - container_label_com_docker_compose_service
+        regex: "backend|package-worker|media-worker|postgres"
         action: keep
+      - source_labels:
+          - container_label_com_docker_compose_service
+        regex: "(backend|package-worker|media-worker|postgres)"
+        target_label: service
+        replacement: "$1"
+        action: replace
+      - action: labeldrop
+        regex: "container_label_.*|id|image|name"

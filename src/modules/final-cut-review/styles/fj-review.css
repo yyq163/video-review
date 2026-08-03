@@ -488,7 +488,8 @@
   justify-content: flex-end;
 }
 
-.fj-review-upload-actions > .fj-review-primary {
+.fj-review-upload-actions > .fj-review-primary,
+.fj-review-upload-actions > .fj-review-disabled-action-tooltip > .fj-review-primary {
   min-height: 36px;
   white-space: nowrap;
 }

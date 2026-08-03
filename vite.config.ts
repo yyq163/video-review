@@ -31,7 +31,7 @@ function createMetaPolicy(apiOrigin: string | undefined, isDevelopmentServer: bo
     "object-src 'none'",
     `script-src ${scriptSources}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    `img-src 'self' data: blob:${apiSource}`,
     "font-src 'self' data:",
     `connect-src 'self'${apiSource}${developmentSocketSources}`,
     `media-src 'self' blob:${apiSource}`,

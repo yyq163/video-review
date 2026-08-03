@@ -62,7 +62,12 @@ try {
     }
   }
 
-  for (const directiveName of ['connect-src', 'media-src']) {
+  const configuredApiBaseUrl = process.env.VITE_FINAL_CUT_REVIEW_API_BASE_URL?.trim();
+  const configuredApiOrigin = configuredApiBaseUrl
+    ? new URL(configuredApiBaseUrl).origin
+    : null;
+
+  for (const directiveName of ['connect-src', 'media-src', 'img-src']) {
     const directive = headerPolicy
       .split(';')
       .map((value) => value.trim())
@@ -73,6 +78,9 @@ try {
     const sources = directive.split(/\s+/).slice(1);
     if (sources.includes('https:') || sources.includes('http:') || sources.some((source) => source.includes('*'))) {
       throw new Error(`${directiveName} contains a scheme-wide or wildcard source`);
+    }
+    if (configuredApiOrigin && !sources.includes(configuredApiOrigin)) {
+      throw new Error(`${directiveName} is missing the configured API origin`);
     }
   }
 

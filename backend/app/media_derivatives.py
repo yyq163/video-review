@@ -1135,10 +1135,6 @@ def _publish_database(
             or file.fps_den != prepared.fps_den
         ):
             raise MediaDerivativeError("MEDIA_DERIVATIVE_FILE_ID_CONFLICT", "publish", retryable=False)
-        if claim.kind == "playback_faststart":
-            version.playback_asset_id = file.id
-        else:
-            version.thumbnail_asset_id = file.id
         now = utcnow()
         task.status = "ready"
         task.output_file_id = file.id
@@ -1148,6 +1144,16 @@ def _publish_database(
         task.error_code = None
         task.failure_details = None
         task.updated_at = now
+        # Persist the ready task authority before publishing its pointer on a
+        # finalized version.  The database freeze trigger permits only this
+        # exact, task-backed derivative transition; every original-media field
+        # and all unrelated version state remain immutable.
+        session.flush()
+        if claim.kind == "playback_faststart":
+            version.playback_asset_id = file.id
+        else:
+            version.thumbnail_asset_id = file.id
+        session.flush()
         session.commit()
         return "ready"
 

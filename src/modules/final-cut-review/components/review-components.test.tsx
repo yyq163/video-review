@@ -1517,8 +1517,39 @@ describe('AppendVersionPanel component', () => {
     render(<CreateItemUploadPanel onSubmit={onSubmit} />);
 
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: '上传 V1' })).toBeDisabled();
+    const upload = screen.getByRole('button', { name: '上传 V1' });
+    expect(upload).toBeDisabled();
+    expect(upload.parentElement).toHaveAttribute('data-tooltip', '请先选择原片文件');
+    expect(upload.parentElement).toHaveAttribute('tabindex', '0');
     expect(screen.getByTestId('create-item-file')).toHaveAttribute('multiple');
+  });
+
+  it('explains the exact reason while the V1 upload button is disabled', async () => {
+    const { rerender } = render(<CreateItemUploadPanel onSubmit={vi.fn()} />);
+
+    await userEvent.upload(
+      screen.getByTestId('create-item-file'),
+      new File(['v1'], 'missing-episode.mp4', { type: 'video/mp4' }),
+    );
+    let upload = screen.getByRole('button', { name: '上传 V1' });
+    expect(upload).toBeDisabled();
+    expect(upload.parentElement).toHaveAttribute(
+      'data-tooltip',
+      '请补齐每一条成片的标题和集数',
+    );
+
+    rerender(
+      <CreateItemUploadPanel
+        blockedForListConfirmation
+        onSubmit={vi.fn()}
+      />,
+    );
+    upload = screen.getByRole('button', { name: '请先确认列表' });
+    expect(upload).toBeDisabled();
+    expect(upload.parentElement).toHaveAttribute(
+      'data-tooltip',
+      '上一笔 V1 结果不确定，请先核对待审列表',
+    );
   });
 
   it('uses adjacent matching custom actions while keeping the native file input visually hidden', () => {
@@ -1527,7 +1558,7 @@ describe('AppendVersionPanel component', () => {
     const choose = screen.getByRole('button', { name: '选择文件' });
     const upload = screen.getByRole('button', { name: '上传 V1' });
     const nativeInput = screen.getByTestId('create-item-file');
-    expect(choose.parentElement).toBe(upload.parentElement);
+    expect(choose.parentElement).toBe(upload.parentElement?.parentElement);
     expect(choose).toHaveClass('fj-review-primary');
     expect(upload).toHaveClass('fj-review-primary');
     expect(nativeInput).toHaveClass('fj-review-sr-only');

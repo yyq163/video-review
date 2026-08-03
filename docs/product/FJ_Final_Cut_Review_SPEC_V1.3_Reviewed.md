@@ -2079,7 +2079,6 @@ PATCH /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_it
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/messages
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/resolve
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/reopen
-POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/request-changes
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/finalize
 POST  /api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages
 GET   /api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}

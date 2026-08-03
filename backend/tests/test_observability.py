@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from backend.app import observability
 
 
@@ -54,6 +56,43 @@ def test_pg_statements_queries_expose_bounded_hotspots_without_query_text() -> N
     for statement in (aggregate, hotspots):
         assert " query," not in statement
         assert " query " not in statement
+
+
+def test_cadvisor_uses_stable_compose_service_labels_and_drops_runtime_identity() -> None:
+    prometheus_path = (
+        Path(__file__).resolve().parents[2]
+        / "ops"
+        / "prometheus"
+        / "prometheus.yml"
+    )
+    configuration = yaml.safe_load(prometheus_path.read_text(encoding="utf-8"))
+    job = next(
+        item
+        for item in configuration["scrape_configs"]
+        if item["job_name"] == "fj-final-cut-review-cadvisor"
+    )
+    relabels = job["metric_relabel_configs"]
+    keep, replace, labeldrop = relabels
+    service_label = "container_label_com_docker_compose_service"
+    assert keep == {
+        "source_labels": [service_label],
+        "regex": "backend|package-worker|media-worker|postgres",
+        "action": "keep",
+    }
+    assert replace == {
+        "source_labels": [service_label],
+        "regex": "(backend|package-worker|media-worker|postgres)",
+        "target_label": "service",
+        "replacement": "$1",
+        "action": "replace",
+    }
+    assert labeldrop["action"] == "labeldrop"
+    assert set(labeldrop["regex"].split("|")) == {
+        "container_label_.*",
+        "id",
+        "image",
+        "name",
+    }
 
 
 def test_shared_io_hotspot_ranking_excludes_cache_hits() -> None:
