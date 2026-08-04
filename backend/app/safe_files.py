@@ -332,6 +332,13 @@ class PinnedRegularFile:
                 raise UnsafeFilePathError("delete quarantine target changed before final unlink")
             os.unlink(DELETE_QUARANTINE_TARGET, dir_fd=quarantine_fd)
             moved = False
+            # NFS keeps an unlinked-but-open file alive as a hidden .nfs* entry.
+            # Release the pinned descriptor before removing its quarantine
+            # directory so a successful physical delete is not reported as
+            # ENOTEMPTY and retried forever.
+            descriptor_to_close = target_fd
+            target_fd = -1
+            os.close(descriptor_to_close)
             os.unlink(DELETE_QUARANTINE_MANIFEST, dir_fd=quarantine_fd)
             os.fsync(quarantine_fd)
             os.close(quarantine_fd)

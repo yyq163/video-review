@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -582,6 +583,86 @@ def test_pinned_regular_file_rejects_same_inode_content_change_after_quarantine_
     assert target.read_bytes() == changed_content
     quarantine = tmp_path / ".fcr-delete-quarantine"
     assert not quarantine.exists() or not list(quarantine.iterdir())
+
+
+def test_pinned_regular_file_closes_target_before_removing_quarantine_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app import safe_files
+
+    target = tmp_path / "package.zip"
+    target.write_bytes(b"package-content")
+    original_open = safe_files.os.open
+    original_close = safe_files.os.close
+    original_rmdir = safe_files.os.rmdir
+    target_fd = -1
+    target_closed = False
+
+    def observe_open(path: str | bytes, flags: int, *args: Any, **kwargs: Any) -> int:
+        nonlocal target_fd
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if path == target.name and kwargs.get("dir_fd") is not None:
+            target_fd = descriptor
+        return descriptor
+
+    def observe_close(descriptor: int) -> None:
+        nonlocal target_closed
+        if descriptor == target_fd:
+            target_closed = True
+        original_close(descriptor)
+
+    def simulate_nfs_rmdir(path: str | bytes, *args: Any, **kwargs: Any) -> None:
+        if isinstance(path, str) and len(path) == 32 and not target_closed:
+            raise OSError(errno.ENOTEMPTY, "simulated NFS .nfs placeholder")
+        original_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(safe_files.os, "open", observe_open)
+    monkeypatch.setattr(safe_files.os, "close", observe_close)
+    monkeypatch.setattr(safe_files.os, "rmdir", simulate_nfs_rmdir)
+
+    assert safe_files.unlink_regular_file(target, tmp_path) is True
+    assert target_closed is True
+    assert not target.exists()
+    quarantine = tmp_path / safe_files.DELETE_QUARANTINE_DIRECTORY
+    assert not quarantine.exists() or not list(quarantine.iterdir())
+
+
+def test_pinned_regular_file_does_not_retry_ambiguous_target_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app import safe_files
+
+    target = tmp_path / "package.zip"
+    target.write_bytes(b"package-content")
+    original_open = safe_files.os.open
+    original_close = safe_files.os.close
+    target_fd = -1
+    target_close_calls = 0
+
+    def observe_open(path: str | bytes, flags: int, *args: Any, **kwargs: Any) -> int:
+        nonlocal target_fd
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if path == target.name and kwargs.get("dir_fd") is not None:
+            target_fd = descriptor
+        return descriptor
+
+    def fail_after_target_close(descriptor: int) -> None:
+        nonlocal target_close_calls
+        original_close(descriptor)
+        if descriptor == target_fd:
+            target_close_calls += 1
+            raise OSError(errno.EINTR, "simulated ambiguous close result")
+
+    monkeypatch.setattr(safe_files.os, "open", observe_open)
+    monkeypatch.setattr(safe_files.os, "close", fail_after_target_close)
+
+    with pytest.raises(OSError, match="ambiguous close result"):
+        safe_files.unlink_regular_file(target, tmp_path)
+
+    assert target_close_calls == 1
+    assert not target.exists()
 
 
 def test_delete_quarantine_recovers_after_process_exit_between_rename_and_unlink(tmp_path: Path) -> None:
