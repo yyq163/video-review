@@ -308,6 +308,7 @@ class MediaDerivativeTaskModel(Base):
     output_file_id: Mapped[str | None] = mapped_column(String(64))
     error_code: Mapped[str | None] = mapped_column(String(64))
     failure_details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    result_details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 

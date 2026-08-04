@@ -44,6 +44,12 @@ from backend.app.telemetry_metrics import (
     observe_media_task,
     start_worker_metrics_server,
 )
+from backend.app.thumbnail_similarity import (
+    THUMBNAIL_FALLBACK_FRAME_MS,
+    THUMBNAIL_FRAME_ZERO_MS,
+    normalize_thumbnail_result_details,
+    reconcile_project_thumbnail_groups,
+)
 
 LOGGER = logging.getLogger(__name__)
 SUPPORTED_KINDS = frozenset({"playback_faststart", "thumbnail"})
@@ -90,6 +96,8 @@ class MediaDerivativeClaim:
     height: int
     fps_num: int
     fps_den: int
+    thumbnail_frame_ms: int = THUMBNAIL_FRAME_ZERO_MS
+    thumbnail_signature: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +119,8 @@ class PreparedDerivative:
     fps_num: int
     fps_den: int
     mime_type: str
+    thumbnail_frame_ms: int = THUMBNAIL_FRAME_ZERO_MS
+    thumbnail_signature: str | None = None
     published_new: bool = False
 
 
@@ -120,6 +130,7 @@ class _ProcessOutputState:
     total: int = 0
     too_large: bool = False
     failed: bool = False
+    stdout: bytearray = field(default_factory=bytearray)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -130,8 +141,13 @@ def _worker_session() -> Iterator[Session]:
         yield session
 
 
-def _output_file_id(task_id: str, kind: str) -> str:
-    digest = hashlib.sha256(f"media-derivative-v1\0{task_id}\0{kind}".encode()).hexdigest()
+def _output_file_id(
+    task_id: str,
+    kind: str,
+    thumbnail_frame_ms: int = THUMBNAIL_FRAME_ZERO_MS,
+) -> str:
+    variant = "" if kind != "thumbnail" or thumbnail_frame_ms == 0 else f"\0frame-ms={thumbnail_frame_ms}"
+    digest = hashlib.sha256(f"media-derivative-v1\0{task_id}\0{kind}{variant}".encode()).hexdigest()
     return f"media_{digest[:32]}"
 
 
@@ -310,12 +326,23 @@ def _ffmpeg_command(
         ]
     if claim.kind == "thumbnail":
         width = settings.media_thumbnail_width
+        seek = (
+            ["-ss", f"{claim.thumbnail_frame_ms / 1000:.3f}"]
+            if claim.thumbnail_frame_ms == THUMBNAIL_FALLBACK_FRAME_MS
+            else []
+        )
+        selection = (
+            f"scale=min({width}\\,iw):-2"
+            if seek
+            else f"select=eq(n\\,0),scale=min({width}\\,iw):-2"
+        )
         return [
             *common,
+            *seek,
             "-map",
             "0:v:0",
             "-vf",
-            f"select=eq(n\\,0),scale=min({width}\\,iw):-2",
+            selection,
             "-frames:v",
             "1",
             "-c:v",
@@ -327,6 +354,45 @@ def _ffmpeg_command(
             str(output_path),
         ]
     raise MediaDerivativeError("MEDIA_DERIVATIVE_KIND_INVALID", "transform", retryable=False)
+
+
+def _ffmpeg_signature_command(
+    settings: Settings,
+    source_descriptor: int,
+) -> list[str]:
+    return [
+        settings.media_transform_command,
+        "-hide_banner",
+        "-nostdin",
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        "fd,file,pipe",
+        "-fd",
+        str(source_descriptor),
+        "-i",
+        "fd:",
+        "-map",
+        "0:v:0",
+        "-vf",
+        "select=eq(n\\,0),scale=9:8:flags=area,format=gray",
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]
+
+
+def _thumbnail_dhash(raw_frame: bytes) -> str:
+    if len(raw_frame) != 72:
+        raise MediaDerivativeError("MEDIA_THUMBNAIL_SIGNATURE_INVALID", "transform", retryable=True)
+    signature = 0
+    for row in range(8):
+        offset = row * 9
+        for column in range(8):
+            signature = (signature << 1) | int(raw_frame[offset + column] > raw_frame[offset + column + 1])
+    return f"{signature:016x}"
 
 
 def _signal_process_group(process: subprocess.Popen[bytes], signum: int) -> None:
@@ -343,6 +409,7 @@ def _read_process_output(
     stream: BinaryIO,
     process: subprocess.Popen[bytes],
     state: _ProcessOutputState,
+    capture_stdout: bool = False,
 ) -> None:
     try:
         while True:
@@ -355,19 +422,28 @@ def _read_process_output(
                     state.too_large = True
                     _signal_process_group(process, signal.SIGKILL)
                     return
+                if capture_stdout:
+                    state.stdout.extend(chunk)
     except (OSError, ValueError):
         with state.lock:
             state.failed = True
         _signal_process_group(process, signal.SIGKILL)
 
 
-def _run_ffmpeg(
+def _run_ffmpeg_process(
     command: list[str],
     settings: Settings,
     source_descriptor: int,
-    output_descriptor: int,
+    output_descriptor: int | None,
     renew_lease: Callable[[], bool],
-) -> None:
+    *,
+    capture_stdout: bool,
+) -> bytes:
+    pass_fds = (
+        (source_descriptor, output_descriptor)
+        if output_descriptor is not None
+        else (source_descriptor,)
+    )
     try:
         process = subprocess.Popen(
             command,
@@ -376,7 +452,7 @@ def _run_ffmpeg(
             stderr=subprocess.PIPE,
             shell=False,
             close_fds=True,
-            pass_fds=(source_descriptor, output_descriptor),
+            pass_fds=pass_fds,
             start_new_session=True,
         )
     except OSError:
@@ -390,7 +466,7 @@ def _run_ffmpeg(
     readers = [
         threading.Thread(
             target=_read_process_output,
-            args=(stream, process, state),
+            args=(stream, process, state, capture_stdout and name == "stdout"),
             daemon=True,
             name=f"media-transform-{name}",
         )
@@ -454,6 +530,40 @@ def _run_ffmpeg(
         raise MediaDerivativeError("MEDIA_TRANSFORM_OUTPUT_LIMIT", "transform", retryable=True)
     if process.returncode != 0:
         raise MediaDerivativeError("MEDIA_TRANSFORM_FAILED", "transform", retryable=True)
+    return bytes(state.stdout)
+
+
+def _run_ffmpeg(
+    command: list[str],
+    settings: Settings,
+    source_descriptor: int,
+    output_descriptor: int,
+    renew_lease: Callable[[], bool],
+) -> None:
+    _run_ffmpeg_process(
+        command,
+        settings,
+        source_descriptor,
+        output_descriptor,
+        renew_lease,
+        capture_stdout=False,
+    )
+
+
+def _run_ffmpeg_capture(
+    command: list[str],
+    settings: Settings,
+    source_descriptor: int,
+    renew_lease: Callable[[], bool],
+) -> bytes:
+    return _run_ffmpeg_process(
+        command,
+        settings,
+        source_descriptor,
+        None,
+        renew_lease,
+        capture_stdout=True,
+    )
 
 
 def _claim_task(
@@ -599,6 +709,20 @@ def _claim_task(
     task.error_code = None
     task.failure_details = None
     task.updated_at = now
+    thumbnail_details = normalize_thumbnail_result_details(
+        task.result_details,
+        existing_output_file_id=(task.output_file_id if task.kind == "thumbnail" else None),
+    )
+    thumbnail_frame_ms = (
+        int(thumbnail_details["desired_frame_ms"])
+        if task.kind == "thumbnail"
+        else THUMBNAIL_FRAME_ZERO_MS
+    )
+    thumbnail_signature = (
+        thumbnail_details.get("frame_signature")
+        if task.kind == "thumbnail"
+        else None
+    )
     session.flush()
     return (
         "claimed",
@@ -622,6 +746,10 @@ def _claim_task(
             height=source.height,
             fps_num=source.fps_num,
             fps_den=source.fps_den,
+            thumbnail_frame_ms=thumbnail_frame_ms,
+            thumbnail_signature=(
+                thumbnail_signature if isinstance(thumbnail_signature, str) else None
+            ),
         ),
     )
 
@@ -717,6 +845,8 @@ def _prepared_from_descriptor(
     storage_path: Path,
     staging_path: Path | None,
     source_av_streams: tuple[tuple[str, str, int, int], ...],
+    thumbnail_frame_ms: int,
+    thumbnail_signature: str | None,
 ) -> PreparedDerivative:
     metadata = os.fstat(descriptor)
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0:
@@ -745,6 +875,8 @@ def _prepared_from_descriptor(
         fps_num=fps_num,
         fps_den=fps_den,
         mime_type="video/mp4" if claim.kind == "playback_faststart" else "image/jpeg",
+        thumbnail_frame_ms=thumbnail_frame_ms,
+        thumbnail_signature=thumbnail_signature,
     )
 
 
@@ -754,6 +886,7 @@ def _reuse_published_derivative(
     output_file_id: str,
     output_path: Path,
     source_av_streams: tuple[tuple[str, str, int, int], ...],
+    thumbnail_signature: str | None,
 ) -> PreparedDerivative | None:
     with pin_regular_file(output_path, settings.storage_root) as pinned:
         if pinned is None or not pinned.exists:
@@ -767,12 +900,18 @@ def _reuse_published_derivative(
                 storage_path=output_path,
                 staging_path=None,
                 source_av_streams=source_av_streams,
+                thumbnail_frame_ms=claim.thumbnail_frame_ms,
+                thumbnail_signature=thumbnail_signature,
             )
 
 
 def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> PreparedDerivative:
     file_root = ensure_private_directory(settings.storage_root, "files")
-    output_file_id = _output_file_id(claim.task_id, claim.kind)
+    output_file_id = _output_file_id(
+        claim.task_id,
+        claim.kind,
+        claim.thumbnail_frame_ms,
+    )
     output_path = contained_path(Path("files") / output_file_id, settings.storage_root)
     source_path = _canonical_source_path(claim, settings)
     with pin_regular_file(source_path, settings.storage_root) as source:
@@ -788,6 +927,7 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
             ):
                 raise MediaDerivativeError("MEDIA_DERIVATIVE_SOURCE_HASH_MISMATCH", "source", retryable=False)
             source_av_streams: tuple[tuple[str, str, int, int], ...] = ()
+            thumbnail_signature = claim.thumbnail_signature
             if claim.kind == "playback_faststart":
                 try:
                     source_probe = probe_media(source_handle.fileno(), settings)
@@ -804,12 +944,21 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                         retryable=False,
                     )
                 source_av_streams = source_probe.av_streams
+            elif thumbnail_signature is None:
+                raw_frame = _run_ffmpeg_capture(
+                    _ffmpeg_signature_command(settings, source_handle.fileno()),
+                    settings,
+                    source_handle.fileno(),
+                    lambda: _renew_lease(claim, settings),
+                )
+                thumbnail_signature = _thumbnail_dhash(raw_frame)
             existing = _reuse_published_derivative(
                 claim,
                 settings,
                 output_file_id,
                 output_path,
                 source_av_streams,
+                thumbnail_signature,
             )
             if existing is not None:
                 if (
@@ -838,6 +987,10 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                         source_handle.fileno(),
                         staging_path,
                     )
+                    # The fd protocol shares the inherited regular-file offset.
+                    # Signature extraction may have consumed the same descriptor,
+                    # so every transform must start from the source beginning.
+                    os.lseek(source_handle.fileno(), 0, os.SEEK_SET)
                     _run_ffmpeg(
                         command,
                         settings,
@@ -870,6 +1023,8 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                         storage_path=output_path,
                         staging_path=staging_path,
                         source_av_streams=source_av_streams,
+                        thumbnail_frame_ms=claim.thumbnail_frame_ms,
+                        thumbnail_signature=thumbnail_signature,
                     )
                     if (
                         _hash_descriptor(
@@ -1068,6 +1223,8 @@ def _publish_file(
         fps_num=prepared.fps_num,
         fps_den=prepared.fps_den,
         mime_type=prepared.mime_type,
+        thumbnail_frame_ms=prepared.thumbnail_frame_ms,
+        thumbnail_signature=prepared.thumbnail_signature,
         published_new=published_new,
     )
 
@@ -1175,11 +1332,36 @@ def _publish_database(
         ):
             raise MediaDerivativeError("MEDIA_DERIVATIVE_FILE_ID_CONFLICT", "publish", retryable=False)
         now = utcnow()
-        task.status = "ready"
-        task.output_file_id = file.id
+        prior_output_file_id = task.output_file_id
+        authoritative_file_id = file.id
+        if claim.kind == "thumbnail":
+            details = normalize_thumbnail_result_details(
+                task.result_details,
+                existing_output_file_id=prior_output_file_id,
+            )
+            details["variants"][str(prepared.thumbnail_frame_ms)] = file.id
+            if prepared.thumbnail_signature is not None:
+                details["frame_signature"] = prepared.thumbnail_signature
+            task.result_details = details
+            desired_frame_ms = details["desired_frame_ms"]
+            authoritative_file_id = details["variants"].get(str(desired_frame_ms))
+            if authoritative_file_id is None:
+                # A group change can supersede a running transform. Keep the
+                # completed file as a cached variant, then queue the currently
+                # desired variant instead of publishing the stale claim.
+                task.status = "queued"
+                task.attempts = 0
+                task.next_attempt_at = None
+            else:
+                task.status = "ready"
+                task.output_file_id = authoritative_file_id
+                task.next_attempt_at = None
+        else:
+            task.status = "ready"
+            task.output_file_id = authoritative_file_id
+            task.next_attempt_at = None
         task.lease_id = None
         task.lease_expires_at = None
-        task.next_attempt_at = None
         task.error_code = None
         task.failure_details = None
         task.updated_at = now
@@ -1190,11 +1372,26 @@ def _publish_database(
         session.flush()
         if claim.kind == "playback_faststart":
             version.playback_asset_id = file.id
-        else:
-            version.thumbnail_asset_id = file.id
+        elif authoritative_file_id is not None:
+            version.thumbnail_asset_id = authoritative_file_id
         session.flush()
+        if claim.kind == "thumbnail":
+            if prepared.thumbnail_frame_ms == THUMBNAIL_FRAME_ZERO_MS:
+                # Frame-zero publication introduces one new similarity signal.
+                # Compare it incrementally with the already-reconciled current
+                # graph; frame-three publication never changes membership.
+                reconcile_project_thumbnail_groups(
+                    session,
+                    claim.project_ref_id,
+                    discover_legacy_signatures=True,
+                    changed_task_id=task.id,
+                )
+                session.flush()
+            result = task.status
+        else:
+            result = "ready"
         session.commit()
-        return "ready"
+        return result
 
 
 def _publication_database_state(
@@ -1247,18 +1444,31 @@ def _publication_database_state(
                     else version.thumbnail_asset_id
                 )
             )
-            return bool(
+            base_committed = bool(
                 project is not None
                 and item is not None
                 and version is not None
                 and task is not None
-                and task.status == "ready"
-                and task.output_file_id == prepared.output_file_id
                 and file is not None
                 and file.sha256 == prepared.sha256
                 and file.file_size == prepared.size
                 and file.storage_path == str(prepared.storage_path)
-                and asset_id == prepared.output_file_id
+            )
+            if not base_committed or task is None:
+                return False
+            if claim.kind == "playback_faststart":
+                return bool(
+                    task.status == "ready"
+                    and task.output_file_id == prepared.output_file_id
+                    and asset_id == prepared.output_file_id
+                )
+            details = normalize_thumbnail_result_details(
+                getattr(task, "result_details", None),
+                existing_output_file_id=task.output_file_id,
+            )
+            return bool(
+                details["variants"].get(str(prepared.thumbnail_frame_ms))
+                == prepared.output_file_id
             )
     except Exception as exc:
         LOGGER.warning(

@@ -5,6 +5,7 @@ import io
 import os
 import sys
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,11 +23,13 @@ from backend.app.media_derivatives import (
     _assert_faststart,
     _claim_task,
     _ffmpeg_command,
+    _ffmpeg_signature_command,
     _jpeg_dimensions,
     _output_file_id,
     _prepare_derivative,
     _publish_file,
     _run_ffmpeg,
+    _thumbnail_dhash,
     run_media_worker_loop,
 )
 from backend.app.modules.final_cut_review.infra.database import Base
@@ -152,6 +155,44 @@ def test_fixed_ffmpeg_argv_preserves_playback_streams_and_selects_true_first_fra
         str(thumbnail_output),
     ]
     assert "-ss" not in thumbnail
+
+
+def test_similar_group_fallback_uses_exact_three_second_thumbnail_variant(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path, media_transform_command="/usr/bin/ffmpeg")
+    fallback_claim = replace(_claim(tmp_path), thumbnail_frame_ms=3_000)
+    fallback = _ffmpeg_command(fallback_claim, settings, 10, tmp_path / "fallback.jpg")
+
+    assert fallback[fallback.index("-i") + 2 : fallback.index("-map")] == ["-ss", "3.000"]
+    assert fallback[fallback.index("-vf") + 1] == "scale=min(320\\,iw):-2"
+    assert "select=eq(n\\,0)" not in fallback
+    assert _output_file_id(fallback_claim.task_id, fallback_claim.kind, 3_000) != _output_file_id(
+        fallback_claim.task_id,
+        fallback_claim.kind,
+    )
+
+
+def test_first_frame_signature_command_and_dhash_are_deterministic(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, media_transform_command="/usr/bin/ffmpeg")
+    command = _ffmpeg_signature_command(settings, 12)
+
+    assert command[command.index("-protocol_whitelist") + 1] == "fd,file,pipe"
+    assert command[-7:] == [
+        "-vf",
+        "select=eq(n\\,0),scale=9:8:flags=area,format=gray",
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]
+    increasing = bytes(value for _row in range(8) for value in range(9))
+    decreasing = bytes(value for _row in range(8) for value in reversed(range(9)))
+    assert _thumbnail_dhash(increasing) == "0000000000000000"
+    assert _thumbnail_dhash(decreasing) == "ffffffffffffffff"
+    with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_THUMBNAIL_SIGNATURE_INVALID"):
+        _thumbnail_dhash(b"short")
 
 
 def test_transform_process_is_shell_free_session_isolated_and_fd_pinned(
@@ -293,12 +334,23 @@ def test_prepare_and_atomic_publish_preserve_original_and_cleanup_staging(
         renew_lease: Any,
     ) -> None:
         del command, current_settings
+        assert os.lseek(source_descriptor, 0, os.SEEK_CUR) == 0
         assert os.pread(source_descriptor, len(original), 0) == original
         assert renew_lease() is True
         os.ftruncate(output_descriptor, 0)
         os.pwrite(output_descriptor, _jpeg(320, 180), 0)
 
+    def fake_signature(
+        _command: list[str],
+        _settings: Settings,
+        source_descriptor: int,
+        _renew_lease: Any,
+    ) -> bytes:
+        os.lseek(source_descriptor, 0, os.SEEK_END)
+        return bytes(range(72))
+
     monkeypatch.setattr(media_derivatives, "_run_ffmpeg", fake_transform)
+    monkeypatch.setattr(media_derivatives, "_run_ffmpeg_capture", fake_signature)
     monkeypatch.setattr(media_derivatives, "_renew_lease", lambda *_args: True)
 
     prepared = _prepare_derivative(claim, settings)
@@ -687,6 +739,156 @@ def test_thumbnail_publish_is_rejected_after_current_version_switch(
         stale_version = session.get(ReviewVersionModel, "ver_1")
         assert stale_version is not None and stale_version.thumbnail_asset_id is None
         assert session.get(FileObjectModel, prepared.output_file_id) is None
+
+
+def test_stale_running_fallback_is_cached_without_overriding_current_frame_zero(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(engine)
+    now = utcnow()
+    claim = replace(_claim(tmp_path), thumbnail_frame_ms=3_000)
+    frame_zero_id = "media_frame_zero"
+    with Session(engine) as session:
+        project = ProjectRefModel(
+            id=claim.project_ref_id,
+            project_code="MEDIA-STALE-FALLBACK",
+            project_name="Media stale fallback",
+        )
+        source = FileObjectModel(
+            id=claim.source_file_id,
+            original_filename=claim.source_filename,
+            mime_type=claim.source_mime_type,
+            file_size=claim.source_size,
+            sha256=claim.source_sha256,
+            storage_path=claim.source_storage_path,
+            owner_principal_id=claim.source_owner_id,
+            owner_principal_kind=claim.source_owner_kind,
+            duration_ms=claim.duration_ms,
+            width=claim.width,
+            height=claim.height,
+            fps_num=claim.fps_num,
+            fps_den=claim.fps_den,
+            media_probe_version="test",
+        )
+        frame_zero = FileObjectModel(
+            id=frame_zero_id,
+            original_filename="frame-zero.jpg",
+            mime_type="image/jpeg",
+            file_size=16,
+            sha256="0" * 64,
+            storage_path=str(tmp_path / "storage" / "files" / frame_zero_id),
+            owner_principal_id=claim.source_owner_id,
+            owner_principal_kind=claim.source_owner_kind,
+            duration_ms=claim.duration_ms,
+            width=320,
+            height=180,
+            fps_num=claim.fps_num,
+            fps_den=claim.fps_den,
+            media_probe_version="test",
+        )
+        item = ReviewItemModel(
+            id=claim.review_item_id,
+            project_ref_id=claim.project_ref_id,
+            item_code="MEDIA-1",
+            episode_no=1,
+            title="Media item",
+            workflow_status="in_review",
+        )
+        session.add_all([project, source, frame_zero, item])
+        session.flush()
+        version = ReviewVersionModel(
+            id=claim.version_id,
+            project_ref_id=claim.project_ref_id,
+            review_item_id=claim.review_item_id,
+            previous_version_id=None,
+            version_no=1,
+            version_label="V1",
+            is_current=True,
+            original_file_id=claim.source_file_id,
+            original_filename=claim.source_filename,
+            mime_type=claim.source_mime_type,
+            file_size=claim.source_size,
+            sha256=claim.source_sha256,
+            duration_ms=claim.duration_ms,
+            width=claim.width,
+            height=claim.height,
+            fps_num=claim.fps_num,
+            fps_den=claim.fps_den,
+            media_probe_version="test",
+            thumbnail_asset_id=frame_zero_id,
+        )
+        session.add(version)
+        session.flush()
+        item.current_version_id = version.id
+        task = MediaDerivativeTaskModel(
+            id=claim.task_id,
+            project_ref_id=claim.project_ref_id,
+            review_item_id=claim.review_item_id,
+            version_id=claim.version_id,
+            kind="thumbnail",
+            status="running",
+            attempts=1,
+            output_file_id=frame_zero_id,
+            lease_id=claim.lease_id,
+            lease_expires_at=now + timedelta(minutes=5),
+            result_details={
+                "frame_signature": "0000000000000000",
+                "variants": {"0": frame_zero_id},
+                "desired_frame_ms": 0,
+            },
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(task)
+        session.commit()
+
+    @contextmanager
+    def worker_session() -> Any:
+        with Session(engine) as session:
+            yield session
+
+    monkeypatch.setattr(media_derivatives, "_worker_session", worker_session)
+    output = tmp_path / "storage" / "files" / "media_stale_fallback"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(_jpeg(320, 180))
+    metadata = output.stat()
+    prepared = media_derivatives.PreparedDerivative(
+        task_id=claim.task_id,
+        lease_id=claim.lease_id,
+        kind=claim.kind,
+        output_file_id="media_stale_fallback",
+        storage_path=output,
+        staging_path=None,
+        sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
+        size=metadata.st_size,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        ctime_ns=metadata.st_ctime_ns,
+        duration_ms=claim.duration_ms,
+        width=320,
+        height=180,
+        fps_num=claim.fps_num,
+        fps_den=claim.fps_den,
+        mime_type="image/jpeg",
+        thumbnail_frame_ms=3_000,
+        published_new=True,
+    )
+
+    assert media_derivatives._publish_database(claim, prepared) == "ready"
+    with Session(engine) as session:
+        task = session.get(MediaDerivativeTaskModel, claim.task_id)
+        version = session.get(ReviewVersionModel, claim.version_id)
+        assert task is not None and version is not None
+        assert task.status == "ready"
+        assert task.output_file_id == frame_zero_id
+        assert version.thumbnail_asset_id == frame_zero_id
+        assert task.result_details["variants"] == {
+            "0": frame_zero_id,
+            "3000": prepared.output_file_id,
+        }
+        assert task.result_details["desired_frame_ms"] == 0
 
 
 def test_database_publish_exception_reconciles_before_cleanup(

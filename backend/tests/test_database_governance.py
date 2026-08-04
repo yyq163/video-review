@@ -939,7 +939,9 @@ def test_repair_runtime_upgrade_preserves_legacy_current_version_assets_without_
         assert card["current_version"]["playback_status"] == "ready"
         assert card["current_version"]["playback_url"].endswith("/stream")
         assert card["current_version"]["thumbnail_status"] == "ready"
-        assert card["current_version"]["thumbnail_url"].endswith("/thumbnail")
+        assert card["current_version"]["thumbnail_url"].endswith(
+            f"/thumbnail?asset={thumbnail_id}"
+        )
     finally:
         engine.dispose()
 
@@ -1087,11 +1089,184 @@ def test_sqlite_finalized_version_accepts_only_ready_task_backed_thumbnail(
             session.commit()
             assert version.thumbnail_asset_id == thumbnail.id
 
+            fallback = file_object(
+                "file_66666666666666666666666666666666",
+                "image/jpeg",
+                "derivative-owner",
+            )
+            session.add(fallback)
+            session.flush()
+            task.output_file_id = fallback.id
+            task.updated_at = utcnow()
+            session.flush()
+            version.thumbnail_asset_id = fallback.id
+            session.commit()
+            assert version.thumbnail_asset_id == fallback.id
+
             version.original_filename = "mutated-after-finalize.mp4"
             with pytest.raises((DBAPIError, IntegrityError), match="finalized review item is frozen"):
                 session.commit()
     finally:
         engine.dispose()
+
+
+def test_thumbnail_similarity_downgrade_restores_frame_zero_before_old_trigger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "thumbnail-similarity-downgrade.db"
+    _set_migration_env(db_path, tmp_path, monkeypatch)
+    cfg = _alembic_config(root)
+    alembic_command.upgrade(cfg, "head")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    LocalSession = sessionmaker(bind=engine)
+    project_id = "prj_thumbnail_downgrade"
+    item_id = "item_thumbnail_downgrade"
+    version_id = "ver_thumbnail_downgrade"
+    source_id = "file_77777777777777777777777777777777"
+    frame_zero_id = "file_88888888888888888888888888888888"
+    fallback_id = "file_99999999999999999999999999999999"
+    task_id = "mdt_77777777777777777777777777777777"
+
+    def file_object(file_id: str, mime_type: str, sha_char: str) -> FileObjectModel:
+        return FileObjectModel(
+            id=file_id,
+            original_filename=f"{file_id}.bin",
+            mime_type=mime_type,
+            file_size=16,
+            sha256=sha_char * 64,
+            storage_path=str(tmp_path / "storage" / "files" / file_id),
+            owner_principal_id="thumbnail-downgrade-owner",
+            owner_principal_kind="system",
+            duration_ms=10_000,
+            width=1920 if mime_type == "video/mp4" else 320,
+            height=1080 if mime_type == "video/mp4" else 180,
+            fps_num=25,
+            fps_den=1,
+            media_probe_version="migration-test",
+        )
+
+    try:
+        with LocalSession() as session:
+            project = ProjectRefModel(
+                id=project_id,
+                project_code="THUMBNAIL-DOWNGRADE",
+                project_name="Thumbnail downgrade",
+            )
+            item = ReviewItemModel(
+                id=item_id,
+                project_ref_id=project_id,
+                item_code="THUMBNAIL-001",
+                title="Thumbnail fallback selected",
+            )
+            source = file_object(source_id, "video/mp4", "7")
+            frame_zero = file_object(frame_zero_id, "image/jpeg", "8")
+            fallback = file_object(fallback_id, "image/jpeg", "9")
+            session.add_all([project, item, source, frame_zero, fallback])
+            session.flush()
+            version = ReviewVersionModel(
+                id=version_id,
+                project_ref_id=project_id,
+                review_item_id=item_id,
+                version_no=1,
+                version_label="V1",
+                is_current=True,
+                original_file_id=source_id,
+                original_filename="source.mp4",
+                mime_type="video/mp4",
+                file_size=source.file_size,
+                sha256=source.sha256,
+                duration_ms=source.duration_ms,
+                width=source.width,
+                height=source.height,
+                fps_num=source.fps_num,
+                fps_den=source.fps_den,
+                media_probe_version=source.media_probe_version,
+                thumbnail_asset_id=fallback_id,
+            )
+            session.add(version)
+            session.flush()
+            item.current_version_id = version_id
+            task = MediaDerivativeTaskModel(
+                id=task_id,
+                project_ref_id=project_id,
+                review_item_id=item_id,
+                version_id=version_id,
+                kind="thumbnail",
+                status="ready",
+                attempts=1,
+                output_file_id=fallback_id,
+                result_details={
+                    "frame_signature": "0000000000000000",
+                    "variants": {"0": frame_zero_id, "3000": fallback_id},
+                    "desired_frame_ms": 3000,
+                },
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+            session.add(task)
+            session.commit()
+            finalization = FinalizationRecordModel(
+                id="fin_thumbnail_downgrade",
+                project_ref_id=project_id,
+                review_item_id=item_id,
+                version_id=version_id,
+                version_no=1,
+                original_file_id=source_id,
+                original_filename=version.original_filename,
+                mime_type=version.mime_type,
+                file_size=version.file_size,
+                sha256=version.sha256,
+                duration_ms=version.duration_ms,
+                width=version.width,
+                height=version.height,
+                fps_num=version.fps_num,
+                fps_den=version.fps_den,
+                media_probe_version=version.media_probe_version,
+                status="active",
+            )
+            session.add(finalization)
+            session.commit()
+            item.active_finalization_id = finalization.id
+            item.workflow_status = "finalized"
+            session.commit()
+    finally:
+        engine.dispose()
+
+    alembic_command.downgrade(cfg, "20260803_0021")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            task_row = connection.execute(
+                text(
+                    "SELECT status, output_file_id FROM media_derivative_tasks "
+                    "WHERE id = :task_id"
+                ),
+                {"task_id": task_id},
+            ).one()
+            version_thumbnail_id = connection.scalar(
+                text(
+                    "SELECT thumbnail_asset_id FROM review_versions "
+                    "WHERE id = :version_id"
+                ),
+                {"version_id": version_id},
+            )
+            fallback_count = connection.scalar(
+                text("SELECT COUNT(*) FROM file_objects WHERE id = :file_id"),
+                {"file_id": fallback_id},
+            )
+        assert task_row == ("ready", frame_zero_id)
+        assert version_thumbnail_id == frame_zero_id
+        assert fallback_count == 1
+        assert "result_details" not in {
+            column["name"] for column in inspect(engine).get_columns("media_derivative_tasks")
+        }
+    finally:
+        engine.dispose()
+
+    alembic_command.upgrade(cfg, "head")
 
 
 def test_repair_runtime_downgrade_restores_previous_finalization_constraints(

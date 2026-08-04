@@ -102,7 +102,7 @@ export function versionFromDto(dto: ReviewVersionDTO, baseUrl: string, item?: Re
         : dto.thumbnail_status,
     thumbnailAssetId: dto.thumbnail_asset_id ?? null,
     thumbnailUrl: dto.thumbnail_status === 'ready' && dto.thumbnail_asset_id
-      ? `${baseUrl}/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.review_item_id}/versions/${dto.id}/thumbnail`
+      ? `${baseUrl}/api/v1/final-cut-review/projects/${dto.project_ref_id}/items/${dto.review_item_id}/versions/${dto.id}/thumbnail?asset=${encodeURIComponent(dto.thumbnail_asset_id)}`
       : null,
     status: versionStatus(dto, item),
     versionNote: dto.version_note ?? null,

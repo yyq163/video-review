@@ -139,7 +139,7 @@ describe('ProjectDetailItemList summary rendering', () => {
       'src',
       '/api/v1/final-cut-review/projects/p/items/i/versions/v/thumbnail',
     );
-    expect(thumbnail).toHaveAttribute('alt', '第07集 V4 首帧');
+    expect(thumbnail).toHaveAttribute('alt', '第07集 V4 缩略图');
     expect(screen.getByTestId('item-row-version-watermark-item-current')).toHaveTextContent('V4');
     expect(screen.getByTestId('item-row-count-watermark-item-current')).toHaveTextContent('3');
     expect(screen.queryByRole('checkbox', { name: /选择第/ })).not.toBeInTheDocument();
@@ -165,8 +165,8 @@ describe('ProjectDetailItemList summary rendering', () => {
     });
     renderList({ items: [pending, failed] });
 
-    expect(screen.getByText('首帧生成中')).toBeInTheDocument();
-    expect(screen.getByText('首帧生成失败')).toBeInTheDocument();
+    expect(screen.getByText('缩略图生成中')).toBeInTheDocument();
+    expect(screen.getByText('缩略图生成失败')).toBeInTheDocument();
     expect(screen.queryAllByRole('img')).toHaveLength(0);
   });
 
@@ -183,7 +183,7 @@ describe('ProjectDetailItemList summary rendering', () => {
     fireEvent.error(failedImage);
 
     expect(onThumbnailLoadError).toHaveBeenCalledWith(item);
-    expect(screen.getByText('首帧状态确认中')).toBeInTheDocument();
+    expect(screen.getByText('缩略图状态确认中')).toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
 
     await act(async () => finishRefresh?.());
@@ -193,7 +193,7 @@ describe('ProjectDetailItemList summary rendering', () => {
 
     fireEvent.error(retriedImage);
     expect(onThumbnailLoadError).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('首帧加载失败')).toBeInTheDocument();
+    expect(screen.getByText('缩略图加载失败')).toBeInTheDocument();
   });
 });
 

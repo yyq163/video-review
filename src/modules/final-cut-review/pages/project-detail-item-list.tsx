@@ -106,7 +106,7 @@ function ItemThumbnail({
   ) {
     return (
       <img
-        alt={`第${formatEpisodeDisplayValue(item.episode)}集 ${item.currentVersion.versionLabel} 首帧`}
+        alt={`第${formatEpisodeDisplayValue(item.episode)}集 ${item.currentVersion.versionLabel} 缩略图`}
         className="fj-review-item-thumbnail"
         data-testid={`item-row-thumbnail-${item.reviewItemId}`}
         loading="lazy"
@@ -134,11 +134,11 @@ function ItemThumbnail({
     >
       {loadFailed
         ? confirmingUrl === item.currentVersion.thumbnailUrl
-          ? '首帧状态确认中'
-          : '首帧加载失败'
+          ? '缩略图状态确认中'
+          : '缩略图加载失败'
         : item.currentVersion.thumbnailStatus === 'failed'
-          ? '首帧生成失败'
-          : '首帧生成中'}
+          ? '缩略图生成失败'
+          : '缩略图生成中'}
     </span>
   );
 }

@@ -40,6 +40,7 @@ def test_telemetry_metric_label_sets_are_bounded() -> None:
         "ready",
         telemetry_metrics.TASK_OUTCOMES,
     ) == "ready"
+    assert "MEDIA_THUMBNAIL_SIGNATURE_INVALID" in telemetry_metrics.MEDIA_FAILURE_CODES
 
 
 def test_telemetry_failure_never_blocks_business_callers(monkeypatch) -> None:

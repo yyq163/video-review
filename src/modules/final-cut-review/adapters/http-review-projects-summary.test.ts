@@ -44,7 +44,7 @@ describe('HTTP project summary adapter', () => {
             playback_status: 'ready',
             playback_url: '/api/v1/final-cut-review/projects/project-summary/items/item-ready/versions/version-ready/stream',
             thumbnail_status: 'ready',
-            thumbnail_url: '/api/v1/final-cut-review/projects/project-summary/items/item-ready/versions/version-ready/thumbnail',
+            thumbnail_url: '/api/v1/final-cut-review/projects/project-summary/items/item-ready/versions/version-ready/thumbnail?asset=media_0123456789abcdef0123456789abcdef',
           },
           unresolved_current_version_count: 2,
           finalization: null,
@@ -145,7 +145,7 @@ describe('HTTP project summary adapter', () => {
         playbackUrl:
           'https://review.example/api/v1/final-cut-review/projects/project-summary/items/item-ready/versions/version-ready/stream',
         thumbnailUrl:
-          'https://review.example/api/v1/final-cut-review/projects/project-summary/items/item-ready/versions/version-ready/thumbnail',
+          'https://review.example/api/v1/final-cut-review/projects/project-summary/items/item-ready/versions/version-ready/thumbnail?asset=media_0123456789abcdef0123456789abcdef',
       },
     });
     expect(

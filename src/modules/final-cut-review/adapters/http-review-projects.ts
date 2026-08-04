@@ -73,9 +73,15 @@ function protectedMediaUrl(
   url: string | null,
   ready: boolean,
   expectedPath: string,
+  allowThumbnailRevision = false,
 ): string | null {
-  if (!ready || url !== expectedPath) return null;
-  return `${baseUrl.replace(/\/+$/, '')}${expectedPath}`;
+  if (!ready || url === null) return null;
+  const revisionPrefix = `${expectedPath}?asset=`;
+  const validRevision = allowThumbnailRevision
+    && url.startsWith(revisionPrefix)
+    && /^[A-Za-z0-9_-]{1,64}$/.test(url.slice(revisionPrefix.length));
+  if (url !== expectedPath && !validRevision) return null;
+  return `${baseUrl.replace(/\/+$/, '')}${url}`;
 }
 
 function summaryItemFromDto(
@@ -105,6 +111,7 @@ function summaryItemFromDto(
     dto.current_version.thumbnail_url,
     dto.current_version.thumbnail_status === 'ready',
     thumbnailPath,
+    true,
   );
   return {
     reviewItemId: dto.id,

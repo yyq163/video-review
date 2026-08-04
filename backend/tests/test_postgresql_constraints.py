@@ -2564,6 +2564,19 @@ def test_postgresql_finalized_version_accepts_only_ready_task_backed_thumbnail()
         session.commit()
         assert version.thumbnail_asset_id == thumbnail.id
 
+        fallback = _file(f"file_{uuid.uuid4().hex}")
+        fallback.mime_type = "image/jpeg"
+        fallback.width = 320
+        fallback.height = 180
+        session.add(fallback)
+        session.flush()
+        task.output_file_id = fallback.id
+        task.updated_at = utcnow()
+        session.flush()
+        version.thumbnail_asset_id = fallback.id
+        session.commit()
+        assert version.thumbnail_asset_id == fallback.id
+
         version.sha256 = "f" * 64
         with pytest.raises(DBAPIError, match="finalized review item is frozen"):
             session.commit()

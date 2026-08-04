@@ -57,6 +57,10 @@ from backend.app.safe_files import (
     unlink_regular_file_if_identity,
     write_private_file,
 )
+from backend.app.thumbnail_similarity import (
+    reconcile_project_thumbnail_groups,
+    thumbnail_variant_file_ids,
+)
 from backend.app.settings import Settings, estimate_zip_stored_storage_bytes
 
 from .sqlalchemy_models import (
@@ -1521,6 +1525,9 @@ class SqlAlchemyReviewRepository:
             if file_id
         }
         file_ids.update(task.output_file_id for task in derivative_tasks if task.output_file_id)
+        for task in derivative_tasks:
+            if task.kind == "thumbnail":
+                file_ids.update(thumbnail_variant_file_ids(task.result_details))
         item.lock_version += 1
         item.updated_at = utcnow()
         deleted = self.item_dto(item)
@@ -1547,6 +1554,12 @@ class SqlAlchemyReviewRepository:
             self.session.delete(version)
         self.session.flush()
         self.session.delete(item)
+        self.session.flush()
+        reconcile_project_thumbnail_groups(
+            self.session,
+            project.id,
+            discover_legacy_signatures=False,
+        )
         self.session.flush()
         for file_id in file_ids:
             self._delete_file_object_if_unreferenced(file_id)
@@ -1683,6 +1696,17 @@ class SqlAlchemyReviewRepository:
         item.workflow_status = "pending_review"
         item.lock_version += 1
         item.updated_at = utcnow()
+        # Switching the current version changes project-level similarity group
+        # membership before the new thumbnail has a signature. Reconcile while
+        # the project lock is still held so surviving members immediately
+        # return to frame 0 when the superseded version leaves its group.
+        self.session.flush()
+        reconcile_project_thumbnail_groups(
+            self.session,
+            project.id,
+            discover_legacy_signatures=False,
+        )
+        self.session.flush()
         self._event(
             "review.version.uploaded", context, project.id, "review_version", version.id, version.lock_version, review_item_id=item.id, version_id=version.id
         )
@@ -3256,7 +3280,7 @@ class SqlAlchemyReviewRepository:
             )
             thumbnail_url = (
                 f"/api/v1/final-cut-review/projects/{project_ref_id}/items/{item.id}"
-                f"/versions/{version.id}/thumbnail"
+                f"/versions/{version.id}/thumbnail?asset={version.thumbnail_asset_id}"
                 if thumbnail_status == "ready"
                 else None
             )
