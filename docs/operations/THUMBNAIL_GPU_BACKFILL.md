@@ -6,6 +6,7 @@
 
 - 基础 Compose 固定 `MEDIA_THUMBNAIL_HWACCEL=none`。只有受支持的交付包装器收到 `FCR_MEDIA_GPU_ENABLED=1` 时，才会叠加仓库内固定的 `docker-compose.gpu.yml`。
 - GPU 叠加层只预约 NVIDIA 设备 `0`，不使用 `privileged`、任意宿主设备映射或任意 Compose 文件。
+- GPU 叠加层显式镜像生产 media-worker 既有的 `128m` 内存预留，以兼容 Docker Compose 2.26 对 `mem_reservation` 与 `deploy.resources.reservations` 的一致性校验；这不是涨配额。
 - Worker 仅在 ffprobe 确认视频编码为 `h264` 或 `hevc` 时尝试 CUDA；`prores` 与其他编码不尝试 GPU。
 - CUDA 进程失败只允许同一任务内降级一次 CPU。超时、租约丢失、输出越界、路径或原片哈希异常继续 fail closed。
 - 回填只选择 `project.deleted_at IS NULL`、`item.current_version_id = version.id`、`version.is_current = true`、`thumbnail_asset_id IS NULL` 且没有既有 thumbnail task 的行。不创建 playback/faststart 任务。

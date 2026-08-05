@@ -8,6 +8,7 @@ services:
     deploy:
       resources:
         reservations:
+          memory: 128m
           devices:
             - driver: nvidia
               device_ids:

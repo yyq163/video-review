@@ -172,7 +172,9 @@ def test_media_worker_gpu_overlay_is_explicit_codec_scoped_and_unprivileged() ->
         "NVIDIA_VISIBLE_DEVICES": "0",
         "NVIDIA_DRIVER_CAPABILITIES": "compute,video,utility",
     }
-    device = gpu_worker["deploy"]["resources"]["reservations"]["devices"][0]
+    reservations = gpu_worker["deploy"]["resources"]["reservations"]
+    assert reservations["memory"] == "128m"
+    device = reservations["devices"][0]
     assert device == {"driver": "nvidia", "device_ids": ["0"], "capabilities": ["gpu"]}
     assert "privileged" not in gpu_worker
     assert "devices" not in gpu_worker
