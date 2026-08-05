@@ -60,6 +60,7 @@ PROCESS_TERMINATE_GRACE_SECONDS = 1.0
 HASH_CHUNK_BYTES = 1024 * 1024
 HASH_LEASE_REFRESH_SECONDS = 30.0
 WORKER_HEARTBEAT_REFRESH_SECONDS = 30.0
+CUDA_THUMBNAIL_CODECS = frozenset({"h264", "hevc"})
 
 
 class MediaDerivativeError(RuntimeError):
@@ -121,6 +122,8 @@ class PreparedDerivative:
     mime_type: str
     thumbnail_frame_ms: int = THUMBNAIL_FRAME_ZERO_MS
     thumbnail_signature: str | None = None
+    source_video_codec_class: str | None = None
+    thumbnail_decode_acceleration: str | None = None
     published_new: bool = False
 
 
@@ -289,12 +292,76 @@ def _probe_matches_source(probe: MediaProbeResult, claim: MediaDerivativeClaim) 
     )
 
 
+def _thumbnail_video_codec(probe: MediaProbeResult) -> str:
+    for stream_type, codec_name, _channels, _sample_rate in probe.av_streams:
+        if stream_type == "video":
+            return codec_name.lower()
+    raise MediaDerivativeError(
+        "MEDIA_DERIVATIVE_SOURCE_METADATA_MISMATCH",
+        "source",
+        retryable=False,
+    )
+
+
+def _thumbnail_codec_class(codec_name: str) -> str:
+    normalized = codec_name.lower()
+    if normalized in CUDA_THUMBNAIL_CODECS or normalized == "prores":
+        return normalized
+    return "other"
+
+
+def _thumbnail_cuda_enabled(
+    settings: Settings,
+    source_video_codec: str | None,
+    *,
+    use_hardware_acceleration: bool,
+) -> bool:
+    return bool(
+        use_hardware_acceleration
+        and settings.media_thumbnail_hwaccel == "cuda"
+        and source_video_codec is not None
+        and source_video_codec.lower() in CUDA_THUMBNAIL_CODECS
+    )
+
+
+def _thumbnail_input_options(
+    settings: Settings,
+    source_video_codec: str | None,
+    *,
+    use_hardware_acceleration: bool,
+) -> list[str]:
+    if not _thumbnail_cuda_enabled(
+        settings,
+        source_video_codec,
+        use_hardware_acceleration=use_hardware_acceleration,
+    ):
+        return []
+    return [
+        "-hwaccel",
+        "cuda",
+        "-hwaccel_device",
+        str(settings.media_thumbnail_hwaccel_device),
+    ]
+
+
 def _ffmpeg_command(
     claim: MediaDerivativeClaim,
     settings: Settings,
     source_descriptor: int,
     output_path: Path,
+    *,
+    source_video_codec: str | None = None,
+    use_hardware_acceleration: bool = True,
 ) -> list[str]:
+    input_options = (
+        _thumbnail_input_options(
+            settings,
+            source_video_codec,
+            use_hardware_acceleration=use_hardware_acceleration,
+        )
+        if claim.kind == "thumbnail"
+        else []
+    )
     common = [
         settings.media_transform_command,
         "-hide_banner",
@@ -302,6 +369,7 @@ def _ffmpeg_command(
         "-v",
         "error",
         "-y",
+        *input_options,
         "-protocol_whitelist",
         "fd,file",
         "-fd",
@@ -359,6 +427,9 @@ def _ffmpeg_command(
 def _ffmpeg_signature_command(
     settings: Settings,
     source_descriptor: int,
+    *,
+    source_video_codec: str | None = None,
+    use_hardware_acceleration: bool = True,
 ) -> list[str]:
     return [
         settings.media_transform_command,
@@ -366,6 +437,11 @@ def _ffmpeg_signature_command(
         "-nostdin",
         "-v",
         "error",
+        *_thumbnail_input_options(
+            settings,
+            source_video_codec,
+            use_hardware_acceleration=use_hardware_acceleration,
+        ),
         "-protocol_whitelist",
         "fd,file,pipe",
         "-fd",
@@ -564,6 +640,109 @@ def _run_ffmpeg_capture(
         renew_lease,
         capture_stdout=True,
     )
+
+
+def _cuda_fallback_allowed(error: MediaDerivativeError) -> bool:
+    return error.code in {
+        "MEDIA_TRANSFORM_FAILED",
+        "MEDIA_THUMBNAIL_SIGNATURE_INVALID",
+    }
+
+
+def _capture_thumbnail_signature(
+    settings: Settings,
+    source_descriptor: int,
+    source_video_codec: str | None,
+    renew_lease: Callable[[], bool],
+) -> tuple[str, str]:
+    prefer_cuda = _thumbnail_cuda_enabled(
+        settings,
+        source_video_codec,
+        use_hardware_acceleration=True,
+    )
+    attempts = (True, False) if prefer_cuda else (False,)
+    for use_hardware_acceleration in attempts:
+        os.lseek(source_descriptor, 0, os.SEEK_SET)
+        try:
+            raw_frame = _run_ffmpeg_capture(
+                _ffmpeg_signature_command(
+                    settings,
+                    source_descriptor,
+                    source_video_codec=source_video_codec,
+                    use_hardware_acceleration=use_hardware_acceleration,
+                ),
+                settings,
+                source_descriptor,
+                renew_lease,
+            )
+            acceleration = (
+                "cuda"
+                if use_hardware_acceleration
+                else ("cpu_fallback" if prefer_cuda else "cpu")
+            )
+            return _thumbnail_dhash(raw_frame), acceleration
+        except MediaDerivativeError as error:
+            if not (
+                use_hardware_acceleration
+                and _cuda_fallback_allowed(error)
+            ):
+                raise
+            LOGGER.warning("media_thumbnail_cuda_signature_fallback")
+    raise AssertionError("thumbnail signature attempts must not be empty")
+
+
+def _run_thumbnail_transform(
+    claim: MediaDerivativeClaim,
+    settings: Settings,
+    source_descriptor: int,
+    output_descriptor: int,
+    output_path: Path,
+    source_video_codec: str | None,
+    renew_lease: Callable[[], bool],
+    *,
+    force_cpu: bool,
+) -> str:
+    cuda_eligible = _thumbnail_cuda_enabled(
+        settings,
+        source_video_codec,
+        use_hardware_acceleration=True,
+    )
+    prefer_cuda = not force_cpu and cuda_eligible
+    attempts = (True, False) if prefer_cuda else (False,)
+    for use_hardware_acceleration in attempts:
+        # Both inherited fd: input and the named staging output are reused
+        # across a bounded CUDA -> CPU retry. Reset them before every attempt.
+        os.lseek(source_descriptor, 0, os.SEEK_SET)
+        os.ftruncate(output_descriptor, 0)
+        os.lseek(output_descriptor, 0, os.SEEK_SET)
+        try:
+            _run_ffmpeg(
+                _ffmpeg_command(
+                    claim,
+                    settings,
+                    source_descriptor,
+                    output_path,
+                    source_video_codec=source_video_codec,
+                    use_hardware_acceleration=use_hardware_acceleration,
+                ),
+                settings,
+                source_descriptor,
+                output_descriptor,
+                renew_lease,
+            )
+            return (
+                "cuda"
+                if use_hardware_acceleration
+                else ("cpu_fallback" if cuda_eligible else "cpu")
+            )
+        except MediaDerivativeError as error:
+            if not (
+                use_hardware_acceleration
+                and _cuda_fallback_allowed(error)
+            ):
+                raise
+            LOGGER.warning("media_thumbnail_cuda_transform_fallback")
+    raise AssertionError("thumbnail transform attempts must not be empty")
 
 
 def _claim_task(
@@ -847,6 +1026,8 @@ def _prepared_from_descriptor(
     source_av_streams: tuple[tuple[str, str, int, int], ...],
     thumbnail_frame_ms: int,
     thumbnail_signature: str | None,
+    source_video_codec_class: str | None = None,
+    thumbnail_decode_acceleration: str | None = None,
 ) -> PreparedDerivative:
     metadata = os.fstat(descriptor)
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0:
@@ -877,6 +1058,8 @@ def _prepared_from_descriptor(
         mime_type="video/mp4" if claim.kind == "playback_faststart" else "image/jpeg",
         thumbnail_frame_ms=thumbnail_frame_ms,
         thumbnail_signature=thumbnail_signature,
+        source_video_codec_class=source_video_codec_class,
+        thumbnail_decode_acceleration=thumbnail_decode_acceleration,
     )
 
 
@@ -887,6 +1070,7 @@ def _reuse_published_derivative(
     output_path: Path,
     source_av_streams: tuple[tuple[str, str, int, int], ...],
     thumbnail_signature: str | None,
+    source_video_codec_class: str | None,
 ) -> PreparedDerivative | None:
     with pin_regular_file(output_path, settings.storage_root) as pinned:
         if pinned is None or not pinned.exists:
@@ -902,6 +1086,10 @@ def _reuse_published_derivative(
                 source_av_streams=source_av_streams,
                 thumbnail_frame_ms=claim.thumbnail_frame_ms,
                 thumbnail_signature=thumbnail_signature,
+                source_video_codec_class=source_video_codec_class,
+                thumbnail_decode_acceleration=(
+                    "existing" if claim.kind == "thumbnail" else None
+                ),
             )
 
 
@@ -928,7 +1116,14 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                 raise MediaDerivativeError("MEDIA_DERIVATIVE_SOURCE_HASH_MISMATCH", "source", retryable=False)
             source_av_streams: tuple[tuple[str, str, int, int], ...] = ()
             thumbnail_signature = claim.thumbnail_signature
-            if claim.kind == "playback_faststart":
+            source_video_codec: str | None = None
+            source_video_codec_class: str | None = None
+            signature_acceleration: str | None = None
+            should_probe_source = claim.kind == "playback_faststart" or (
+                claim.kind == "thumbnail"
+                and settings.media_thumbnail_hwaccel == "cuda"
+            )
+            if should_probe_source:
                 try:
                     source_probe = probe_media(source_handle.fileno(), settings)
                 except Exception:
@@ -944,14 +1139,16 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                         retryable=False,
                     )
                 source_av_streams = source_probe.av_streams
-            elif thumbnail_signature is None:
-                raw_frame = _run_ffmpeg_capture(
-                    _ffmpeg_signature_command(settings, source_handle.fileno()),
+                if claim.kind == "thumbnail":
+                    source_video_codec = _thumbnail_video_codec(source_probe)
+                    source_video_codec_class = _thumbnail_codec_class(source_video_codec)
+            if claim.kind == "thumbnail" and thumbnail_signature is None:
+                thumbnail_signature, signature_acceleration = _capture_thumbnail_signature(
                     settings,
                     source_handle.fileno(),
+                    source_video_codec,
                     lambda: _renew_lease(claim, settings),
                 )
-                thumbnail_signature = _thumbnail_dhash(raw_frame)
             existing = _reuse_published_derivative(
                 claim,
                 settings,
@@ -959,6 +1156,7 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                 output_path,
                 source_av_streams,
                 thumbnail_signature,
+                source_video_codec_class,
             )
             if existing is not None:
                 if (
@@ -981,23 +1179,33 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                     output_metadata = os.fstat(output_descriptor)
                     if not stat.S_ISREG(output_metadata.st_mode):
                         raise MediaDerivativeError("MEDIA_DERIVATIVE_OUTPUT_INVALID", "transform", retryable=False)
-                    command = _ffmpeg_command(
-                        claim,
-                        settings,
-                        source_handle.fileno(),
-                        staging_path,
-                    )
-                    # The fd protocol shares the inherited regular-file offset.
-                    # Signature extraction may have consumed the same descriptor,
-                    # so every transform must start from the source beginning.
-                    os.lseek(source_handle.fileno(), 0, os.SEEK_SET)
-                    _run_ffmpeg(
-                        command,
-                        settings,
-                        source_handle.fileno(),
-                        output_descriptor,
-                        lambda: _renew_lease(claim, settings),
-                    )
+                    thumbnail_decode_acceleration: str | None = None
+                    if claim.kind == "thumbnail":
+                        thumbnail_decode_acceleration = _run_thumbnail_transform(
+                            claim,
+                            settings,
+                            source_handle.fileno(),
+                            output_descriptor,
+                            staging_path,
+                            source_video_codec,
+                            lambda: _renew_lease(claim, settings),
+                            force_cpu=signature_acceleration == "cpu_fallback",
+                        )
+                    else:
+                        command = _ffmpeg_command(
+                            claim,
+                            settings,
+                            source_handle.fileno(),
+                            staging_path,
+                        )
+                        os.lseek(source_handle.fileno(), 0, os.SEEK_SET)
+                        _run_ffmpeg(
+                            command,
+                            settings,
+                            source_handle.fileno(),
+                            output_descriptor,
+                            lambda: _renew_lease(claim, settings),
+                        )
                     named_metadata = os.stat(
                         staging_name,
                         dir_fd=root_fd,
@@ -1025,6 +1233,8 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                         source_av_streams=source_av_streams,
                         thumbnail_frame_ms=claim.thumbnail_frame_ms,
                         thumbnail_signature=thumbnail_signature,
+                        source_video_codec_class=source_video_codec_class,
+                        thumbnail_decode_acceleration=thumbnail_decode_acceleration,
                     )
                     if (
                         _hash_descriptor(
@@ -1225,6 +1435,8 @@ def _publish_file(
         mime_type=prepared.mime_type,
         thumbnail_frame_ms=prepared.thumbnail_frame_ms,
         thumbnail_signature=prepared.thumbnail_signature,
+        source_video_codec_class=prepared.source_video_codec_class,
+        thumbnail_decode_acceleration=prepared.thumbnail_decode_acceleration,
         published_new=published_new,
     )
 
@@ -1342,6 +1554,12 @@ def _publish_database(
             details["variants"][str(prepared.thumbnail_frame_ms)] = file.id
             if prepared.thumbnail_signature is not None:
                 details["frame_signature"] = prepared.thumbnail_signature
+            if prepared.source_video_codec_class is not None:
+                details["source_video_codec_class"] = prepared.source_video_codec_class
+            if prepared.thumbnail_decode_acceleration is not None:
+                details["decode_acceleration_by_frame"][
+                    str(prepared.thumbnail_frame_ms)
+                ] = prepared.thumbnail_decode_acceleration
             task.result_details = details
             desired_frame_ms = details["desired_frame_ms"]
             authoritative_file_id = details["variants"].get(str(desired_frame_ms))

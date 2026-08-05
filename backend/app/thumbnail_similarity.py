@@ -19,6 +19,8 @@ THUMBNAIL_FALLBACK_FRAME_MS = 3_000
 THUMBNAIL_SIGNATURE_HEX_LENGTH = 16
 THUMBNAIL_SIGNATURE_BITS = THUMBNAIL_SIGNATURE_HEX_LENGTH * 4
 THUMBNAIL_STRICT_SIMILARITY_PERCENT = 85
+THUMBNAIL_DECODE_ACCELERATIONS = frozenset({"cuda", "cpu", "cpu_fallback", "existing"})
+THUMBNAIL_CODEC_CLASSES = frozenset({"h264", "hevc", "prores", "other"})
 
 
 def thumbnail_signatures_are_similar(left: str, right: str) -> bool:
@@ -49,6 +51,21 @@ def normalize_thumbnail_result_details(
     existing_output_file_id: str | None = None,
 ) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
+    backfill_operation_id = (
+        details.get("backfill_operation_id")
+        if isinstance(details, Mapping)
+        else None
+    )
+    if (
+        isinstance(backfill_operation_id, str)
+        and 1 <= len(backfill_operation_id) <= 64
+        and all(
+            character.isascii()
+            and (character.isalnum() or character in {"-", "_"})
+            for character in backfill_operation_id
+        )
+    ):
+        normalized["backfill_operation_id"] = backfill_operation_id
     signature = details.get("frame_signature") if isinstance(details, Mapping) else None
     if isinstance(signature, str) and _valid_signature(signature):
         normalized["frame_signature"] = signature.lower()
@@ -64,6 +81,25 @@ def normalize_thumbnail_result_details(
         # first frame, so their authoritative output is the frame-zero variant.
         variants[str(THUMBNAIL_FRAME_ZERO_MS)] = existing_output_file_id
     normalized["variants"] = variants
+    decode_acceleration_by_frame: dict[str, str] = {}
+    source_acceleration = (
+        details.get("decode_acceleration_by_frame")
+        if isinstance(details, Mapping)
+        else None
+    )
+    if isinstance(source_acceleration, Mapping):
+        for frame_ms in (THUMBNAIL_FRAME_ZERO_MS, THUMBNAIL_FALLBACK_FRAME_MS):
+            value = source_acceleration.get(str(frame_ms))
+            if value in THUMBNAIL_DECODE_ACCELERATIONS:
+                decode_acceleration_by_frame[str(frame_ms)] = str(value)
+    normalized["decode_acceleration_by_frame"] = decode_acceleration_by_frame
+    source_codec_class = (
+        details.get("source_video_codec_class")
+        if isinstance(details, Mapping)
+        else None
+    )
+    if source_codec_class in THUMBNAIL_CODEC_CLASSES:
+        normalized["source_video_codec_class"] = source_codec_class
     desired = details.get("desired_frame_ms") if isinstance(details, Mapping) else None
     normalized["desired_frame_ms"] = (
         desired

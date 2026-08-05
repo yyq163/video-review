@@ -17,6 +17,7 @@ from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
 )
 from backend.app.thumbnail_similarity import (
     THUMBNAIL_FALLBACK_FRAME_MS,
+    normalize_thumbnail_result_details,
     reconcile_project_thumbnail_groups,
     thumbnail_signatures_are_similar,
     thumbnail_variant_file_ids,
@@ -130,6 +131,30 @@ def test_similarity_is_strictly_over_eighty_five_percent() -> None:
     assert thumbnail_signatures_are_similar("0000000000000000", f"{(1 << 9) - 1:016x}")
     assert not thumbnail_signatures_are_similar("0000000000000000", f"{(1 << 10) - 1:016x}")
     assert not thumbnail_signatures_are_similar("not-a-signature", "0000000000000000")
+
+
+def test_thumbnail_result_metadata_is_allowlisted_for_audit() -> None:
+    normalized = normalize_thumbnail_result_details(
+        {
+            "backfill_operation_id": "thumb-20260805-abc123-canary",
+            "decode_acceleration_by_frame": {
+                "0": "cuda",
+                str(THUMBNAIL_FALLBACK_FRAME_MS): "cpu_fallback",
+                "9000": "cuda",
+            },
+            "source_video_codec_class": "hevc",
+        }
+    )
+
+    assert normalized["backfill_operation_id"] == "thumb-20260805-abc123-canary"
+    assert normalized["decode_acceleration_by_frame"] == {
+        "0": "cuda",
+        str(THUMBNAIL_FALLBACK_FRAME_MS): "cpu_fallback",
+    }
+    assert normalized["source_video_codec_class"] == "hevc"
+    assert "backfill_operation_id" not in normalize_thumbnail_result_details(
+        {"backfill_operation_id": "contains spaces and / paths"}
+    )
 
 
 def test_project_reconciliation_uses_fallback_for_similar_current_group_only() -> None:

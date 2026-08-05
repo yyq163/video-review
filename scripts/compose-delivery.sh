@@ -12,6 +12,8 @@ compose_project_directory=$project_root
 compose_project=${FCR_COMPOSE_PROJECT:-fj-final-cut-review}
 compose_base_file="$project_root/docker-compose.yml"
 compose_delivery_file="$project_root/docker-compose.delivery.yml"
+compose_gpu_file="$project_root/docker-compose.gpu.yml"
+media_gpu_enabled=${FCR_MEDIA_GPU_ENABLED:-0}
 docker_daemon_timeout_seconds=${FCR_DOCKER_DAEMON_TIMEOUT_SECONDS:-30}
 docker_command_timeout_seconds=${FCR_DOCKER_COMMAND_TIMEOUT_SECONDS:-1800}
 docker_timeout_exit_code=75
@@ -40,6 +42,13 @@ require_positive_timeout() {
 
 require_positive_timeout FCR_DOCKER_DAEMON_TIMEOUT_SECONDS "$docker_daemon_timeout_seconds"
 require_positive_timeout FCR_DOCKER_COMMAND_TIMEOUT_SECONDS "$docker_command_timeout_seconds"
+case "$media_gpu_enabled" in
+    (0|1) ;;
+    (*)
+        printf '%s\n' 'FCR_MEDIA_GPU_ENABLED must be exactly 0 or 1' >&2
+        exit 2
+        ;;
+esac
 case "$compose_project" in
     (''|[!a-z0-9]*|*[!a-z0-9_-]*|????????????????????????????????????????????????????????????????*)
         printf '%s\n' 'FCR_COMPOSE_PROJECT must be a lowercase Compose project identifier of at most 63 characters' >&2
@@ -267,9 +276,20 @@ compose_requires_daemon() {
     esac
 }
 
-if resolved_environment=$(run_with_timeout "$docker_daemon_timeout_seconds" \
-    docker compose --env-file "$compose_env_file" --project-directory "$compose_project_directory" \
-    -p "$compose_project" -f "$compose_base_file" -f "$compose_delivery_file" config --environment)
+resolve_compose_environment() {
+    if [ "$media_gpu_enabled" = 1 ]; then
+        run_with_timeout "$docker_daemon_timeout_seconds" \
+            docker compose --env-file "$compose_env_file" --project-directory "$compose_project_directory" \
+            -p "$compose_project" -f "$compose_base_file" -f "$compose_delivery_file" \
+            -f "$compose_gpu_file" config --environment
+    else
+        run_with_timeout "$docker_daemon_timeout_seconds" \
+            docker compose --env-file "$compose_env_file" --project-directory "$compose_project_directory" \
+            -p "$compose_project" -f "$compose_base_file" -f "$compose_delivery_file" config --environment
+    fi
+}
+
+if resolved_environment=$(resolve_compose_environment)
 then
     :
 else
@@ -280,6 +300,21 @@ else
     fi
     exit "$environment_status"
 fi
+
+run_delivery_compose() {
+    command_timeout_seconds=$1
+    shift
+    if [ "$media_gpu_enabled" = 1 ]; then
+        run_docker_bounded "$command_timeout_seconds" \
+            compose --env-file "$compose_env_file" --project-directory "$compose_project_directory" \
+            -p "$compose_project" -f "$compose_base_file" -f "$compose_delivery_file" \
+            -f "$compose_gpu_file" "$@"
+    else
+        run_docker_bounded "$command_timeout_seconds" \
+            compose --env-file "$compose_env_file" --project-directory "$compose_project_directory" \
+            -p "$compose_project" -f "$compose_base_file" -f "$compose_delivery_file" "$@"
+    fi
+}
 resolved_or_default() {
     variable_name=$1
     default_value=$2
@@ -552,12 +587,8 @@ sh "$script_dir/validate-delivery-image-ref.sh" >/dev/null
 if compose_requires_daemon "$@"; then
     probe_docker_daemon
     preflight_legacy_volumes "$compose_subcommand"
-    run_docker_bounded "$docker_command_timeout_seconds" \
-        compose --env-file "$compose_env_file" --project-directory "$compose_project_directory" \
-        -p "$compose_project" -f "$compose_base_file" -f "$compose_delivery_file" "$@"
+    run_delivery_compose "$docker_command_timeout_seconds" "$@"
     exit $?
 fi
 
-run_docker_bounded "$docker_daemon_timeout_seconds" \
-    compose --env-file "$compose_env_file" --project-directory "$compose_project_directory" \
-    -p "$compose_project" -f "$compose_base_file" -f "$compose_delivery_file" "$@"
+run_delivery_compose "$docker_daemon_timeout_seconds" "$@"
