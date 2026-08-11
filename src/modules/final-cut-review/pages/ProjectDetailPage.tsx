@@ -43,7 +43,10 @@ function revocationSuccessMessage(
   return `第 ${item.episode} 集已撤回定稿；关联包已失效，物理清理正在进行。`;
 }
 
-type ProjectActionMessage = string | { kind: 'package-download' };
+type ProjectActionMessage = string | {
+  display: 'compact' | 'prominent';
+  kind: 'package-download';
+};
 
 export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const navigate = useNavigate();
@@ -590,7 +593,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
             onSuccess={() => {
               mutations.createProjectFinalizedPackage.reset();
               setProjectActionError(null);
-              setProjectActionMessage({ kind: 'package-download' });
+              setProjectActionMessage({ display: 'prominent', kind: 'package-download' });
             }}
           />
           {isArchived ? (
@@ -642,22 +645,33 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
           && projectActionMessage.kind === 'package-download' ? (
           <section
             aria-live="polite"
-            className="fj-review-notice fj-review-download-feedback"
+            className={`fj-review-notice fj-review-download-feedback${projectActionMessage.display === 'compact' ? ' is-compact' : ''}`}
+            data-display={projectActionMessage.display}
             data-testid="package-download-feedback"
             role="status"
           >
-            <span aria-hidden="true" className="fj-review-download-feedback-indicator" />
+            <span
+              aria-hidden="true"
+              className="fj-review-download-feedback-dots"
+              data-testid="package-download-wait-dots"
+            >
+              {Array.from({ length: 6 }, (_, dotIndex) => (
+                <span className="fj-review-download-feedback-dot" key={dotIndex} />
+              ))}
+            </span>
             <span className="fj-review-download-feedback-copy">
               <strong>下载已向浏览器发起</strong>
               <span>首次下载会在发送文件前校验整包完整性；保存窗口或下载任务可能稍后出现。</span>
             </span>
-            <button
-              className="fj-review-secondary"
-              onClick={() => setProjectActionMessage(null)}
-              type="button"
-            >
-              关闭提示
-            </button>
+            {projectActionMessage.display === 'prominent' ? (
+              <button
+                className="fj-review-secondary"
+                onClick={() => setProjectActionMessage({ display: 'compact', kind: 'package-download' })}
+                type="button"
+              >
+                关闭提示
+              </button>
+            ) : null}
           </section>
         ) : typeof projectActionMessage === 'string' ? (
           <div className="fj-review-notice">{projectActionMessage}</div>
