@@ -22,7 +22,15 @@ from backend.app.modules.review_access.policies import SHARED_CODE_MAX_LENGTH, C
 from backend.app.modules.review_contracts.generated import COMMAND_CAPABILITIES, IDEMPOTENT_COMMANDS, CommandEnvelope, ErrorEnvelope
 from backend.app.settings import get_settings
 
-from .context_dependencies import build_context, get_command_bus, get_request_id, get_repository, session_dependency, trusted_request_scheme, write_guard_attempt_key
+from .context_dependencies import (
+    build_context,
+    get_command_bus,
+    get_request_id,
+    get_repository,
+    session_dependency,
+    trusted_request_scheme,
+    write_guard_attempt_key,
+)
 from .envelope import ok
 
 LOGGER = logging.getLogger(__name__)
@@ -47,6 +55,7 @@ COMMAND_ROUTE_TYPES = {
     "review_soft_delete_issue": "SoftDeleteReviewIssue",
     "review_finalize": "FinalizeVersion",
     "review_revoke_finalization": "RevokeFinalization",
+    "review_retry_finalization_cleanup": "RetryFinalizationCleanup",
     "review_prepare_package": "PrepareFinalizedPackage",
 }
 
@@ -135,6 +144,7 @@ LOCK_REQUIRED_COMMANDS = {
     "SoftDeleteReviewIssue",
     "FinalizeVersion",
     "RevokeFinalization",
+    "RetryFinalizationCleanup",
 }
 
 
@@ -388,103 +398,324 @@ def _execute(
 
 
 @router.post("/edit/projects")
-def edit_create_project(response: Response, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")) -> dict[str, Any]:
+def edit_create_project(
+    response: Response,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
     return _execute("edit", "CreateProject", envelope, {}, deps, idempotency_key, None, response=response, success_status=201)
 
 
 @router.patch("/edit/projects/{project_ref_id}")
-def edit_update_project(project_ref_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+def edit_update_project(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
     return _execute("edit", "UpdateProject", envelope, {"project_ref_id": project_ref_id}, deps, None, if_match)
 
 
 @router.post("/review/projects/{project_ref_id}/archive")
-def review_archive_project(project_ref_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+def review_archive_project(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
     return _execute("review", "ArchiveProject", envelope, {"project_ref_id": project_ref_id}, deps, None, if_match)
 
 
 @router.post("/review/projects/{project_ref_id}/restore")
-def review_restore_project(project_ref_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+def review_restore_project(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
     return _execute("review", "RestoreProject", envelope, {"project_ref_id": project_ref_id}, deps, None, if_match)
 
 
 @router.post("/review/projects/{project_ref_id}/soft-delete")
-def review_soft_delete_project(project_ref_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+def review_soft_delete_project(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
     return _execute("review", "SoftDeleteProject", envelope, {"project_ref_id": project_ref_id}, deps, None, if_match)
 
 
 @router.post("/edit/projects/{project_ref_id}/items")
-def edit_create_item(project_ref_id: str, response: Response, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")) -> dict[str, Any]:
-    return _execute("edit", "CreateReviewItem", envelope, {"project_ref_id": project_ref_id}, deps, idempotency_key, None, response=response, success_status=201)
+def edit_create_item(
+    project_ref_id: str,
+    response: Response,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    return _execute(
+        "edit", "CreateReviewItem", envelope, {"project_ref_id": project_ref_id}, deps, idempotency_key, None, response=response, success_status=201
+    )
 
 
 @router.patch("/edit/projects/{project_ref_id}/items/{review_item_id}")
-def edit_update_item(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+def edit_update_item(
+    project_ref_id: str,
+    review_item_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
     return _execute("edit", "UpdateReviewItem", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, None, if_match)
 
 
 @router.post("/edit/projects/{project_ref_id}/items/{review_item_id}/delete")
-def edit_delete_item(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+def edit_delete_item(
+    project_ref_id: str,
+    review_item_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
     return _execute("edit", "DeleteReviewItem", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match)
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/delete")
-def review_delete_item(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("review", "DeleteReviewItem", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match)
+def review_delete_item(
+    project_ref_id: str,
+    review_item_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review", "DeleteReviewItem", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match
+    )
 
 
 @router.post("/edit/projects/{project_ref_id}/items/{review_item_id}/versions")
-def edit_upload_version(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("edit", "UploadReviewVersion", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match)
+def edit_upload_version(
+    project_ref_id: str,
+    review_item_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "edit", "UploadReviewVersion", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match
+    )
 
 
 @router.post("/edit/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/resolve")
-def edit_resolve_issue(project_ref_id: str, review_item_id: str, version_id: str, issue_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("edit", "ResolveReviewIssue", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id}, deps, None, if_match)
+def edit_resolve_issue(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    issue_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "edit",
+        "ResolveReviewIssue",
+        envelope,
+        {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id},
+        deps,
+        None,
+        if_match,
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/start")
-def review_start(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
+def review_start(
+    project_ref_id: str,
+    review_item_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
     return _execute("review", "StartReview", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, None, if_match)
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues")
-def review_create_issue(project_ref_id: str, review_item_id: str, version_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("review", "CreateReviewIssue", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id}, deps, idempotency_key, if_match)
+def review_create_issue(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "CreateReviewIssue",
+        envelope,
+        {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id},
+        deps,
+        idempotency_key,
+        if_match,
+    )
 
 
 @router.patch("/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}")
-def review_update_issue(project_ref_id: str, review_item_id: str, version_id: str, issue_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("review", "UpdateReviewIssue", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id}, deps, None, if_match)
+def review_update_issue(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    issue_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "UpdateReviewIssue",
+        envelope,
+        {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id},
+        deps,
+        None,
+        if_match,
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/messages")
-def review_add_message(project_ref_id: str, review_item_id: str, version_id: str, issue_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")) -> dict[str, Any]:
-    return _execute("review", "AddReviewMessage", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id}, deps, idempotency_key, None)
+def review_add_message(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    issue_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "AddReviewMessage",
+        envelope,
+        {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id},
+        deps,
+        idempotency_key,
+        None,
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/resolve")
-def review_resolve_issue(project_ref_id: str, review_item_id: str, version_id: str, issue_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("review", "ResolveReviewIssue", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id}, deps, None, if_match)
+def review_resolve_issue(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    issue_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "ResolveReviewIssue",
+        envelope,
+        {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id},
+        deps,
+        None,
+        if_match,
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/reopen")
-def review_reopen_issue(project_ref_id: str, review_item_id: str, version_id: str, issue_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("review", "ReopenReviewIssue", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id}, deps, None, if_match)
+def review_reopen_issue(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    issue_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "ReopenReviewIssue",
+        envelope,
+        {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id},
+        deps,
+        None,
+        if_match,
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/issues/{issue_id}/soft-delete")
-def review_soft_delete_issue(project_ref_id: str, review_item_id: str, version_id: str, issue_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("review", "SoftDeleteReviewIssue", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id}, deps, None, if_match)
+def review_soft_delete_issue(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    issue_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "SoftDeleteReviewIssue",
+        envelope,
+        {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id, "issue_id": issue_id},
+        deps,
+        None,
+        if_match,
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/versions/{version_id}/finalize")
-def review_finalize(project_ref_id: str, review_item_id: str, version_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("review", "FinalizeVersion", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id}, deps, idempotency_key, if_match)
+def review_finalize(
+    project_ref_id: str,
+    review_item_id: str,
+    version_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "FinalizeVersion",
+        envelope,
+        {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id},
+        deps,
+        idempotency_key,
+        if_match,
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/items/{review_item_id}/finalization/revoke")
-def review_revoke_finalization(project_ref_id: str, review_item_id: str, envelope: CommandEnvelope, deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"), if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$')) -> dict[str, Any]:
-    return _execute("review", "RevokeFinalization", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match)
+def review_revoke_finalization(
+    project_ref_id: str,
+    review_item_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review", "RevokeFinalization", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match
+    )
+
+
+@router.post("/review/projects/{project_ref_id}/items/{review_item_id}/finalization/cleanup/retry")
+def review_retry_finalization_cleanup(
+    project_ref_id: str,
+    review_item_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review", "RetryFinalizationCleanup", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/finalized-originals/packages")

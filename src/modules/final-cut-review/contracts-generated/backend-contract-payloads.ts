@@ -14,6 +14,12 @@ export interface RevokeFinalizationPayload {
   confirmed: true;
 }
 
+export interface RetryFinalizationCleanupPayload {
+  project_ref_id: string;
+  review_item_id: string;
+  confirmed: true;
+}
+
 export interface StartReviewPayload {
   project_ref_id: string;
   review_item_id: string;

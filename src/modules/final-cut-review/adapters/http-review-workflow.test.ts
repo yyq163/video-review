@@ -167,4 +167,45 @@ describe('HTTP finalization revocation idempotency', () => {
     expect(retryOptions.commandId).toBe(firstOptions.commandId);
     expect(getRevokeFinalizationProtectionState(PROJECT_ID, ITEM_ID)).toBe('clear');
   });
+
+  it('retries cleanup with the authoritative item lock and review-only command contract', async () => {
+    const command = vi.fn().mockResolvedValue({
+      project_ref_id: PROJECT_ID,
+      review_item_id: ITEM_ID,
+      cleanup_status: 'pending',
+      requeued_package_ids: ['package-retry'],
+    });
+    const assertWriteContext = vi.fn();
+    const transport = {
+      assertWriteContext,
+      command,
+      baseUrl: 'https://review.example',
+    } as unknown as HttpReviewTransport;
+    const workflow = new HttpReviewWorkflow(transport);
+
+    await expect(workflow.retryFinalizationCleanup({
+      projectRefId: PROJECT_ID,
+      reviewItemId: ITEM_ID,
+      lockVersion: 17,
+    }, context())).resolves.toEqual({
+      projectRefId: PROJECT_ID,
+      reviewItemId: ITEM_ID,
+      cleanupStatus: 'pending',
+      requeuedPackageIds: ['package-retry'],
+    });
+
+    expect(assertWriteContext).toHaveBeenCalledWith(expect.any(Object), ['review']);
+    expect(command).toHaveBeenCalledWith(
+      `/api/v1/final-cut-review/review/projects/${PROJECT_ID}/items/${ITEM_ID}/finalization/cleanup/retry`,
+      'RetryFinalizationCleanup',
+      {
+        project_ref_id: PROJECT_ID,
+        review_item_id: ITEM_ID,
+        confirmed: true,
+      },
+      expect.any(Object),
+      17,
+      { idempotent: true },
+    );
+  });
 });

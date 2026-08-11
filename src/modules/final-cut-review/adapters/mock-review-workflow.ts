@@ -1,7 +1,10 @@
 import type { ReviewApiPort } from '../ports';
 import type { MockReviewContext } from './mock-review-context';
 
-type WorkflowApi = Pick<ReviewApiPort, 'startReview' | 'finalizeCurrentVersion' | 'revokeFinalization'>;
+type WorkflowApi = Pick<
+  ReviewApiPort,
+  'startReview' | 'finalizeCurrentVersion' | 'revokeFinalization' | 'retryFinalizationCleanup'
+>;
 
 export class MockReviewWorkflow implements WorkflowApi {
   constructor(private readonly context: MockReviewContext) {}
@@ -29,5 +32,14 @@ export class MockReviewWorkflow implements WorkflowApi {
     this.context.assertContext(executionContext, 'review.finalization.revoke');
     if (input.confirmed !== true) throw new Error('撤销定稿必须二次确认');
     return this.context.repository.revokeFinalization(input);
+  };
+
+  readonly retryFinalizationCleanup: ReviewApiPort['retryFinalizationCleanup'] = async (
+    input,
+    executionContext,
+  ) => {
+    await this.context.ready();
+    this.context.assertContext(executionContext, 'review.finalization.revoke');
+    return this.context.repository.retryFinalizationCleanup(input);
   };
 }

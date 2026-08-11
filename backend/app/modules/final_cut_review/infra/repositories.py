@@ -88,9 +88,7 @@ POST_COMMIT_PACKAGE_DELETIONS_KEY = "final_cut_review_post_commit_package_deleti
 AUDIT_EXECUTION_IDENTITY_KEY = "final_cut_review_audit_execution_identity"
 PACKAGE_QUEUE_ADVISORY_LOCK_KEY = 5064946991358883141
 STORAGE_ADMISSION_ADVISORY_LOCK_KEY = int.from_bytes(b"FCRSTOR1", "big")
-PACKAGE_BUILD_STAGING_RE = re.compile(
-    r"^(pkg_[0-9a-f]{32})\.(build_[0-9a-f]{32})\.staging\.zip$"
-)
+PACKAGE_BUILD_STAGING_RE = re.compile(r"^(pkg_[0-9a-f]{32})\.(build_[0-9a-f]{32})\.staging\.zip$")
 PACKAGE_IO_SYNC_INTERVAL_BYTES = 64 * 1024 * 1024
 LOGGER = logging.getLogger(__name__)
 
@@ -146,9 +144,7 @@ def storage_roots_share_filesystem(settings: Settings) -> bool:
 def active_package_storage_reservation_bytes(session: Session) -> int:
     return int(
         session.scalar(
-            select(func.coalesce(func.sum(FinalCutPackageSnapshotModel.storage_bytes), 0)).where(
-                FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None)
-            )
+            select(func.coalesce(func.sum(FinalCutPackageSnapshotModel.storage_bytes), 0)).where(FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None))
         )
         or 0
     )
@@ -170,11 +166,7 @@ def pending_package_storage_reservation_bytes(
 
 def active_upload_storage_reservation_bytes(session: Session) -> int:
     return int(
-        session.scalar(
-            select(func.coalesce(func.sum(UploadSessionModel.reserved_bytes), 0)).where(
-                UploadSessionModel.parts_cleanup_confirmed_at.is_(None)
-            )
-        )
+        session.scalar(select(func.coalesce(func.sum(UploadSessionModel.reserved_bytes), 0)).where(UploadSessionModel.parts_cleanup_confirmed_at.is_(None)))
         or 0
     )
 
@@ -193,12 +185,7 @@ def ensure_package_filesystem_headroom(
     except OSError as exc:
         raise ReviewError("STORAGE_UNAVAILABLE", "无法检查临时包存储可用空间") from exc
     low_watermark = settings.upload_storage_low_watermark_bytes if shared_filesystem else 0
-    conservatively_available = (
-        free_bytes
-        - package_future_reserved_bytes
-        - upload_reserved_bytes
-        - requested_bytes
-    )
+    conservatively_available = free_bytes - package_future_reserved_bytes - upload_reserved_bytes - requested_bytes
     if conservatively_available < low_watermark:
         raise ReviewError("STORAGE_UNAVAILABLE", "临时包存储已达到低水位保护线")
 
@@ -234,11 +221,7 @@ def user_agent_fingerprint(value: str | None) -> str | None:
 def release_file_cache(descriptor: int, length: int) -> None:
     posix_fadvise = getattr(os, "posix_fadvise", None)
     dontneed = getattr(os, "POSIX_FADV_DONTNEED", None)
-    if (
-        length <= 0
-        or not callable(posix_fadvise)
-        or not isinstance(dontneed, int)
-    ):
+    if length <= 0 or not callable(posix_fadvise) or not isinstance(dontneed, int):
         return
     try:
         posix_fadvise(descriptor, 0, length, dontneed)
@@ -329,11 +312,7 @@ def add_file_to_archive(
                 if handle.read(1):
                     raise ReviewError("FILE_HASH_MISMATCH", "定稿原片大小不匹配")
                 final_metadata = os.fstat(handle.fileno())
-                if (
-                    bytes_read != expected_size
-                    or final_metadata.st_size != expected_size
-                    or final_metadata.st_mtime_ns != pinned.mtime_ns
-                ):
+                if bytes_read != expected_size or final_metadata.st_size != expected_size or final_metadata.st_mtime_ns != pinned.mtime_ns:
                     raise ReviewError("FILE_HASH_MISMATCH", "定稿原片大小不匹配")
     except UnsafeFilePathError as exc:
         raise ReviewError("STORAGE_UNAVAILABLE", "包源文件路径非法") from exc
@@ -456,21 +435,12 @@ def package_problem_summary(problem: dict[str, Any]) -> str:
     title = json.dumps(str(problem.get("title", "")), ensure_ascii=False)
     review_item_id = str(problem.get("review_item_id", ""))
     episode_no = problem.get("episode_no")
-    episode_label = (
-        str(episode_no)
-        if isinstance(episode_no, int) and not isinstance(episode_no, bool) and episode_no > 0
-        else "缺失或无效"
-    )
+    episode_label = str(episode_no) if isinstance(episode_no, int) and not isinstance(episode_no, bool) and episode_no > 0 else "缺失或无效"
     reasons = problem.get("reasons")
-    reason_labels = [
-        PACKAGE_PROBLEM_REASON_LABELS.get(reason, str(reason))
-        for reason in reasons
-        if isinstance(reason, str)
-    ] if isinstance(reasons, list) else []
-    return (
-        f"{item_code}（标题 {title}，条目 {review_item_id}，实际集数 {episode_label}，"
-        f"{'、'.join(reason_labels) or '信息冲突'}）"
+    reason_labels = (
+        [PACKAGE_PROBLEM_REASON_LABELS.get(reason, str(reason)) for reason in reasons if isinstance(reason, str)] if isinstance(reasons, list) else []
     )
+    return f"{item_code}（标题 {title}，条目 {review_item_id}，实际集数 {episode_label}，{'、'.join(reason_labels) or '信息冲突'}）"
 
 
 def _media_from_version(version: ReviewVersionModel) -> OriginalMediaSnapshotDTO:
@@ -601,9 +571,7 @@ class SqlAlchemyReviewRepository:
             storage_path,
             file_id,
         )
-        self._post_commit_file_deletions().append(
-            (storage_path, tombstone, device, inode, ctime_ns, size)
-        )
+        self._post_commit_file_deletions().append((storage_path, tombstone, device, inode, ctime_ns, size))
 
     def _queue_post_commit_package_deletion(
         self,
@@ -765,6 +733,7 @@ class SqlAlchemyReviewRepository:
             "SoftDeleteReviewIssue": self.soft_delete_issue,
             "FinalizeVersion": self.finalize_version,
             "RevokeFinalization": self.revoke_finalization,
+            "RetryFinalizationCleanup": self.retry_finalization_cleanup,
             "PrepareFinalizedPackage": self.prepare_package,
         }
         self.session.info[AUDIT_EXECUTION_IDENTITY_KEY] = stable_hash(
@@ -1077,17 +1046,8 @@ class SqlAlchemyReviewRepository:
                 )
             ).all()
         }
-        asset_ids = {
-            asset_id
-            for asset_id in (version.playback_asset_id, version.thumbnail_asset_id)
-            if asset_id
-        }
-        files = {
-            file.id: file
-            for file in self.session.scalars(
-                select(FileObjectModel).where(FileObjectModel.id.in_(asset_ids))
-            ).all()
-        } if asset_ids else {}
+        asset_ids = {asset_id for asset_id in (version.playback_asset_id, version.thumbnail_asset_id) if asset_id}
+        files = {file.id: file for file in self.session.scalars(select(FileObjectModel).where(FileObjectModel.id.in_(asset_ids))).all()} if asset_ids else {}
         return self._version_dto(
             version,
             playback_status=self._version_derivative_status(
@@ -1137,19 +1097,11 @@ class SqlAlchemyReviewRepository:
         task: MediaDerivativeTaskModel | None,
         file: FileObjectModel | None,
     ) -> str:
-        asset_id = (
-            version.playback_asset_id
-            if kind == "playback_faststart"
-            else version.thumbnail_asset_id
-        )
+        asset_id = version.playback_asset_id if kind == "playback_faststart" else version.thumbnail_asset_id
         if task is not None:
             if task.status in {"queued", "running"}:
                 return "processing"
-            if (
-                task.status != "ready"
-                or task.output_file_id is None
-                or task.output_file_id != asset_id
-            ):
+            if task.status != "ready" or task.output_file_id is None or task.output_file_id != asset_id:
                 return "failed"
         if asset_id is None or file is None or file.id != asset_id:
             return "failed"
@@ -1350,10 +1302,10 @@ class SqlAlchemyReviewRepository:
         for_update: bool = False,
     ) -> ReviewVersionModel:
         statement = select(ReviewVersionModel).where(
-                ReviewVersionModel.id == version_id,
-                ReviewVersionModel.project_ref_id == project_ref_id,
-                ReviewVersionModel.review_item_id == review_item_id,
-            )
+            ReviewVersionModel.id == version_id,
+            ReviewVersionModel.project_ref_id == project_ref_id,
+            ReviewVersionModel.review_item_id == review_item_id,
+        )
         if for_update:
             statement = statement.with_for_update()
         version = self.session.scalar(statement)
@@ -2193,9 +2145,7 @@ class SqlAlchemyReviewRepository:
                 select(FinalCutPackageSnapshotModel)
                 .where(
                     FinalCutPackageSnapshotModel.project_ref_id == project.id,
-                    FinalCutPackageSnapshotModel.status.in_(
-                        ("preparing", "ready", "failed", "expired", "invalidated")
-                    ),
+                    FinalCutPackageSnapshotModel.status.in_(("preparing", "ready", "failed", "expired", "invalidated")),
                     FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
                 )
                 .order_by(FinalCutPackageSnapshotModel.created_at, FinalCutPackageSnapshotModel.id)
@@ -2204,11 +2154,7 @@ class SqlAlchemyReviewRepository:
         )
         invalidated_package_ids: list[str] = []
         for package in packages:
-            if not any(
-                isinstance(package_item, dict)
-                and package_item.get("finalization_id") == finalization.id
-                for package_item in package.items
-            ):
+            if not any(isinstance(package_item, dict) and package_item.get("finalization_id") == finalization.id for package_item in package.items):
                 continue
             if package.status != "invalidated":
                 package.status = "invalidated"
@@ -2256,6 +2202,133 @@ class SqlAlchemyReviewRepository:
             "review_item": self.item_dto(item),
             "cleanup_status": "pending" if invalidated_package_ids else "complete",
             "invalidated_package_ids": invalidated_package_ids,
+        }
+
+    def retry_finalization_cleanup(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        del context
+        if payload.get("confirmed") is not True:
+            raise ReviewError("VALIDATION_ERROR", "重试定稿包清理必须 confirmed=true")
+        project = self._get_project(payload["project_ref_id"], for_update=True)
+        self._assert_project_active(project)
+        item = self._get_item(project.id, payload["review_item_id"], for_update=True)
+        self._expect_lock(item, expected_version)
+        if item.workflow_status == "finalized" or item.active_finalization_id is not None:
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "当前分集仍处于定稿状态，不能重试撤回清理")
+
+        revoked_finalization_id = self.session.scalar(
+            select(FinalizationRecordModel.id)
+            .where(
+                FinalizationRecordModel.project_ref_id == project.id,
+                FinalizationRecordModel.review_item_id == item.id,
+                FinalizationRecordModel.status == "revoked",
+            )
+            .order_by(
+                FinalizationRecordModel.revoked_at.desc(),
+                FinalizationRecordModel.id.desc(),
+            )
+            .limit(1)
+        )
+        if revoked_finalization_id is None:
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "当前分集没有已撤回的定稿记录")
+
+        target_invalidation_ids = list(
+            self.session.scalars(
+                select(FinalizationPackageInvalidationModel.id)
+                .where(
+                    FinalizationPackageInvalidationModel.project_ref_id == project.id,
+                    FinalizationPackageInvalidationModel.review_item_id == item.id,
+                    FinalizationPackageInvalidationModel.cleanup_status != "complete",
+                )
+                .order_by(FinalizationPackageInvalidationModel.id)
+            )
+        )
+        if not target_invalidation_ids:
+            return {
+                "project_ref_id": project.id,
+                "review_item_id": item.id,
+                "cleanup_status": "complete",
+                "requeued_package_ids": [],
+            }
+
+        package_ids = sorted(
+            set(
+                self.session.scalars(
+                    select(FinalizationPackageInvalidationModel.package_id).where(FinalizationPackageInvalidationModel.id.in_(target_invalidation_ids))
+                )
+            )
+        )
+        packages = list(
+            self.session.scalars(
+                select(FinalCutPackageSnapshotModel)
+                .where(
+                    FinalCutPackageSnapshotModel.project_ref_id == project.id,
+                    FinalCutPackageSnapshotModel.id.in_(package_ids),
+                )
+                .order_by(FinalCutPackageSnapshotModel.id)
+                .with_for_update()
+            )
+        )
+        if [package.id for package in packages] != package_ids:
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "关联项目包记录缺失，无法安全重试清理")
+        invalidations = list(
+            self.session.scalars(
+                select(FinalizationPackageInvalidationModel)
+                .where(FinalizationPackageInvalidationModel.package_id.in_(package_ids))
+                .order_by(FinalizationPackageInvalidationModel.id)
+                .with_for_update()
+            )
+        )
+        invalidations_by_package: dict[str, list[FinalizationPackageInvalidationModel]] = {}
+        for invalidation in invalidations:
+            invalidations_by_package.setdefault(invalidation.package_id, []).append(invalidation)
+
+        now = utcnow()
+        retry_before = now - timedelta(microseconds=1)
+        requeued_package_ids: list[str] = []
+        for package in packages:
+            package_invalidations = invalidations_by_package.get(package.id, [])
+            if package.storage_reclaimed_at is not None:
+                for invalidation in package_invalidations:
+                    if invalidation.cleanup_status != "complete":
+                        invalidation.cleanup_status = "complete"
+                        invalidation.last_error_code = None
+                        invalidation.updated_at = now
+                continue
+            if package.status not in {"invalidated", "expired"}:
+                raise ReviewError("RESOURCE_STATE_CONFLICT", "关联项目包状态不允许重新清理")
+
+            lease_id = package.download_lease_id
+            lease_expires_at = package.download_lease_expires_at
+            if lease_id is not None and lease_expires_at is not None and aware(lease_expires_at) > now:
+                if not lease_id.startswith("cleanup_"):
+                    raise ReviewError("RESOURCE_STATE_CONFLICT", "关联项目包仍被占用，暂时不能重试清理")
+            else:
+                package.download_lease_id = None
+                package.download_lease_expires_at = None
+                package.expires_at = min(aware(package.expires_at), retry_before)
+                package.updated_at = now
+                requeued_package_ids.append(package.id)
+
+            for invalidation in package_invalidations:
+                if invalidation.cleanup_status != "complete":
+                    invalidation.cleanup_status = "pending"
+                    invalidation.last_error_code = None
+                    invalidation.updated_at = now
+
+        self.session.flush()
+        target_invalidation_id_set = set(target_invalidation_ids)
+        target_invalidations = [invalidation for invalidation in invalidations if invalidation.id in target_invalidation_id_set]
+        cleanup_status = "complete" if all(invalidation.cleanup_status == "complete" for invalidation in target_invalidations) else "pending"
+        return {
+            "project_ref_id": project.id,
+            "review_item_id": item.id,
+            "cleanup_status": cleanup_status,
+            "requeued_package_ids": requeued_package_ids,
         }
 
     def finalization_dto(self, finalization: FinalizationRecordModel) -> dict[str, Any]:
@@ -2406,11 +2479,7 @@ class SqlAlchemyReviewRepository:
                 reasons.append("episode_no_missing_or_invalid")
             else:
                 episode_items.setdefault(episode_no, []).append(item.id)
-            if (
-                item.workflow_status != "finalized"
-                or item.active_finalization_id != finalization.id
-                or item.current_version_id != finalization.version_id
-            ):
+            if item.workflow_status != "finalized" or item.active_finalization_id != finalization.id or item.current_version_id != finalization.version_id:
                 reasons.append("active_finalization_conflict")
             try:
                 extension = package_original_extension(finalization.original_filename)
@@ -2665,10 +2734,7 @@ class SqlAlchemyReviewRepository:
         try:
             if package_path != expected_path or staging_path != expected_staging_path:
                 raise ReviewError("STORAGE_UNAVAILABLE", "打包输出路径不符合存储合同")
-            if (
-                len(claim.sources) > self.settings.max_package_files
-                or claim.expected_source_bytes > self.settings.max_package_bytes
-            ):
+            if len(claim.sources) > self.settings.max_package_files or claim.expected_source_bytes > self.settings.max_package_bytes:
                 raise ReviewError("FILE_TOO_LARGE", "包快照超出打包限制")
             if (
                 not isinstance(claim.expected_source_bytes, int)
@@ -2680,9 +2746,7 @@ class SqlAlchemyReviewRepository:
                 or sum(
                     source.expected_size
                     for source in claim.sources
-                    if isinstance(source.expected_size, int)
-                    and not isinstance(source.expected_size, bool)
-                    and source.expected_size > 0
+                    if isinstance(source.expected_size, int) and not isinstance(source.expected_size, bool) and source.expected_size > 0
                 )
                 != claim.expected_source_bytes
             ):
@@ -2782,11 +2846,7 @@ class SqlAlchemyReviewRepository:
         if snapshot.next_build_attempt_at is not None and aware(snapshot.next_build_attempt_at) > now:
             return "skipped", None
         expired_lease_failure: dict[str, Any] | None = None
-        if (
-            snapshot.build_lease_id is not None
-            and snapshot.build_lease_expires_at is not None
-            and aware(snapshot.build_lease_expires_at) <= now
-        ):
+        if snapshot.build_lease_id is not None and snapshot.build_lease_expires_at is not None and aware(snapshot.build_lease_expires_at) <= now:
             # A dead worker cannot report its root cause. Persist the lease expiry
             # that this process can prove, without mislabelling it as an OOM or IO
             # failure. Host/container telemetry remains the authority for that
@@ -2847,16 +2907,8 @@ class SqlAlchemyReviewRepository:
             snapshot_original_filename = item_data.get("original_filename")
             snapshot_sha256 = item_data.get("sha256")
             file = self.session.get(FileObjectModel, file_id) if isinstance(file_id, str) else None
-            finalization = (
-                self.session.get(FinalizationRecordModel, finalization_id)
-                if isinstance(finalization_id, str)
-                else None
-            )
-            review_item = (
-                self.session.get(ReviewItemModel, review_item_id)
-                if isinstance(review_item_id, str)
-                else None
-            )
+            finalization = self.session.get(FinalizationRecordModel, finalization_id) if isinstance(finalization_id, str) else None
+            review_item = self.session.get(ReviewItemModel, review_item_id) if isinstance(review_item_id, str) else None
             source_is_valid = (
                 isinstance(file_id, str)
                 and isinstance(finalization_id, str)
@@ -2885,12 +2937,7 @@ class SqlAlchemyReviewRepository:
                 and file.sha256 == finalization.sha256
             )
             episode_no = review_item.episode_no if review_item is not None else None
-            if (
-                not isinstance(episode_no, int)
-                or isinstance(episode_no, bool)
-                or episode_no <= 0
-                or episode_no in claimed_episode_nos
-            ):
+            if not isinstance(episode_no, int) or isinstance(episode_no, bool) or episode_no <= 0 or episode_no in claimed_episode_nos:
                 source_is_valid = False
             extension = ""
             if finalization is not None:
@@ -3376,10 +3423,7 @@ class SqlAlchemyReviewRepository:
             return False
         started_hash = self._package_download_session_hash(session_token, "started", current_identity)
         verified_hash = self._package_download_session_hash(session_token, "verified", current_identity)
-        if not (
-            hmac.compare_digest(package.download_session_hash, started_hash)
-            or hmac.compare_digest(package.download_session_hash, verified_hash)
-        ):
+        if not (hmac.compare_digest(package.download_session_hash, started_hash) or hmac.compare_digest(package.download_session_hash, verified_hash)):
             return False
         package.download_session_hash = verified_hash
         package.updated_at = utcnow()
@@ -3437,9 +3481,7 @@ class SqlAlchemyReviewRepository:
         self._assert_project_visible(project)
         items = list(
             self.session.scalars(
-                select(ReviewItemModel)
-                .where(ReviewItemModel.project_ref_id == project_ref_id)
-                .order_by(ReviewItemModel.created_at.desc(), ReviewItemModel.id)
+                select(ReviewItemModel).where(ReviewItemModel.project_ref_id == project_ref_id).order_by(ReviewItemModel.created_at.desc(), ReviewItemModel.id)
             )
         )
         if not items:
@@ -3455,9 +3497,7 @@ class SqlAlchemyReviewRepository:
             ).model_dump(mode="json")
 
         item_ids = [item.id for item in items]
-        current_version_ids = [
-            item.current_version_id for item in items if item.current_version_id is not None
-        ]
+        current_version_ids = [item.current_version_id for item in items if item.current_version_id is not None]
         current_versions = {
             version.id: version
             for version in self.session.scalars(
@@ -3519,17 +3559,9 @@ class SqlAlchemyReviewRepository:
             )
         }
         asset_ids = {
-            asset_id
-            for version in current_versions.values()
-            for asset_id in (version.playback_asset_id, version.thumbnail_asset_id)
-            if asset_id is not None
+            asset_id for version in current_versions.values() for asset_id in (version.playback_asset_id, version.thumbnail_asset_id) if asset_id is not None
         }
-        files = {
-            file.id: file
-            for file in self.session.scalars(
-                select(FileObjectModel).where(FileObjectModel.id.in_(asset_ids))
-            )
-        }
+        files = {file.id: file for file in self.session.scalars(select(FileObjectModel).where(FileObjectModel.id.in_(asset_ids)))}
 
         finalizations = list(
             self.session.scalars(
@@ -3549,31 +3581,19 @@ class SqlAlchemyReviewRepository:
         selected_finalizations: dict[str, FinalizationRecordModel] = {}
         finalization_counts: dict[str, int] = {}
         for finalization in finalizations:
-            finalization_counts[finalization.review_item_id] = (
-                finalization_counts.get(finalization.review_item_id, 0) + 1
-            )
+            finalization_counts[finalization.review_item_id] = finalization_counts.get(finalization.review_item_id, 0) + 1
             selected_finalizations.setdefault(finalization.review_item_id, finalization)
 
-        selected_revoked_ids = [
-            finalization.id
-            for finalization in selected_finalizations.values()
-            if finalization.status == "revoked"
-        ]
+        selected_revoked_ids = [finalization.id for finalization in selected_finalizations.values() if finalization.status == "revoked"]
         invalidation_statuses: dict[str, list[str]] = {}
         if selected_revoked_ids:
             for finalization_id, cleanup_status in self.session.execute(
                 select(
                     FinalizationPackageInvalidationModel.finalization_id,
                     FinalizationPackageInvalidationModel.cleanup_status,
-                ).where(
-                    FinalizationPackageInvalidationModel.finalization_id.in_(
-                        selected_revoked_ids
-                    )
-                )
+                ).where(FinalizationPackageInvalidationModel.finalization_id.in_(selected_revoked_ids))
             ).all():
-                invalidation_statuses.setdefault(finalization_id, []).append(
-                    cleanup_status
-                )
+                invalidation_statuses.setdefault(finalization_id, []).append(cleanup_status)
 
         summary_items: list[ProjectSummaryItemDTO] = []
         for item in items:
@@ -3606,14 +3626,10 @@ class SqlAlchemyReviewRepository:
                 finalization_count=finalization_counts.get(item.id, 0),
             )
             playback_url = (
-                f"/api/v1/final-cut-review/projects/{project_ref_id}/items/{item.id}"
-                f"/versions/{version.id}/stream"
-                if playback_status == "ready"
-                else None
+                f"/api/v1/final-cut-review/projects/{project_ref_id}/items/{item.id}/versions/{version.id}/stream" if playback_status == "ready" else None
             )
             thumbnail_url = (
-                f"/api/v1/final-cut-review/projects/{project_ref_id}/items/{item.id}"
-                f"/versions/{version.id}/thumbnail?asset={version.thumbnail_asset_id}"
+                f"/api/v1/final-cut-review/projects/{project_ref_id}/items/{item.id}/versions/{version.id}/thumbnail?asset={version.thumbnail_asset_id}"
                 if thumbnail_status == "ready"
                 else None
             )
@@ -3638,9 +3654,7 @@ class SqlAlchemyReviewRepository:
                         thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
                         thumbnail_url=thumbnail_url,
                     ),
-                    unresolved_current_version_count=issue_counts.get(
-                        (item.id, "unresolved"), 0
-                    ),
+                    unresolved_current_version_count=issue_counts.get((item.id, "unresolved"), 0),
                     finalization=(
                         ProjectSummaryFinalizationDTO(
                             id=selected_finalization.id,
@@ -3648,11 +3662,7 @@ class SqlAlchemyReviewRepository:
                             version_no=selected_finalization.version_no,
                             status=selected_finalization.status,  # type: ignore[arg-type]
                             finalized_at=iso(selected_finalization.finalized_at),
-                            revoked_at=(
-                                iso(selected_finalization.revoked_at)
-                                if selected_finalization.revoked_at is not None
-                                else None
-                            ),
+                            revoked_at=(iso(selected_finalization.revoked_at) if selected_finalization.revoked_at is not None else None),
                         )
                         if selected_finalization is not None
                         else None
@@ -3670,9 +3680,7 @@ class SqlAlchemyReviewRepository:
                 self._project_dto(
                     project,
                     item_count=len(items),
-                    finalized_count=sum(
-                        item.workflow_status == "finalized" for item in items
-                    ),
+                    finalized_count=sum(item.workflow_status == "finalized" for item in items),
                 ),
             ),
             items=summary_items,
@@ -3691,30 +3699,16 @@ class SqlAlchemyReviewRepository:
         belongs to the authenticated stream/thumbnail endpoints, which remain
         fail-closed via ``_playback_file_is_ready``.
         """
-        asset_id = (
-            version.playback_asset_id
-            if kind == "playback_faststart"
-            else version.thumbnail_asset_id
-        )
+        asset_id = version.playback_asset_id if kind == "playback_faststart" else version.thumbnail_asset_id
         if task is None:
             # Versions created before the derivative-task migration may already
             # reference a valid compatibility asset. Preserve that authoritative
             # persisted state without scheduling a bulk media conversion or
             # adding physical file I/O to the project aggregation query.
-            return (
-                "ready"
-                if asset_id is not None and file is not None and file.id == asset_id
-                else "failed"
-            )
+            return "ready" if asset_id is not None and file is not None and file.id == asset_id else "failed"
         if task.status in {"queued", "running"}:
             return "pending"
-        if (
-            task.status != "ready"
-            or task.output_file_id is None
-            or task.output_file_id != asset_id
-            or file is None
-            or file.id != asset_id
-        ):
+        if task.status != "ready" or task.output_file_id is None or task.output_file_id != asset_id or file is None or file.id != asset_id:
             return "failed"
         return "ready"
 
@@ -3875,26 +3869,16 @@ class SqlAlchemyReviewRepository:
             select(ReviewVersionModel).where(*filters).order_by(ReviewVersionModel.version_no).offset(self._page_offset(page, page_size)).limit(page_size)
         ).all()
         version_ids = [version.id for version in versions]
-        derivative_tasks = {
-            (task.version_id, task.kind): task
-            for task in self.session.scalars(
-                select(MediaDerivativeTaskModel).where(
-                    MediaDerivativeTaskModel.version_id.in_(version_ids)
-                )
-            ).all()
-        } if version_ids else {}
-        asset_ids = {
-            asset_id
-            for version in versions
-            for asset_id in (version.playback_asset_id, version.thumbnail_asset_id)
-            if asset_id
-        }
-        files = {
-            file.id: file
-            for file in self.session.scalars(
-                select(FileObjectModel).where(FileObjectModel.id.in_(asset_ids))
-            ).all()
-        } if asset_ids else {}
+        derivative_tasks = (
+            {
+                (task.version_id, task.kind): task
+                for task in self.session.scalars(select(MediaDerivativeTaskModel).where(MediaDerivativeTaskModel.version_id.in_(version_ids))).all()
+            }
+            if version_ids
+            else {}
+        )
+        asset_ids = {asset_id for version in versions for asset_id in (version.playback_asset_id, version.thumbnail_asset_id) if asset_id}
+        files = {file.id: file for file in self.session.scalars(select(FileObjectModel).where(FileObjectModel.id.in_(asset_ids))).all()} if asset_ids else {}
         return [
             self._version_dto(
                 version,
@@ -4157,11 +4141,7 @@ class SqlAlchemyReviewRepository:
         version: ReviewVersionModel,
         kind: str,
     ) -> FileObjectModel:
-        asset_id = (
-            version.playback_asset_id
-            if kind == "playback_faststart"
-            else version.thumbnail_asset_id
-        )
+        asset_id = version.playback_asset_id if kind == "playback_faststart" else version.thumbnail_asset_id
         task = self.session.scalar(
             select(MediaDerivativeTaskModel).where(
                 MediaDerivativeTaskModel.project_ref_id == version.project_ref_id,
@@ -4170,11 +4150,7 @@ class SqlAlchemyReviewRepository:
                 MediaDerivativeTaskModel.kind == kind,
             )
         )
-        if task is not None and (
-            task.status != "ready"
-            or task.output_file_id is None
-            or task.output_file_id != asset_id
-        ):
+        if task is not None and (task.status != "ready" or task.output_file_id is None or task.output_file_id != asset_id):
             raise ReviewError("PLAYBACK_NOT_READY", "媒体衍生文件尚未就绪")
         if asset_id is None:
             raise ReviewError("PLAYBACK_NOT_READY", "媒体衍生文件尚未就绪")
@@ -4216,17 +4192,8 @@ class SqlAlchemyReviewRepository:
             )
             .with_for_update()
         )
-        asset_id = (
-            version.playback_asset_id
-            if kind == "playback_faststart"
-            else version.thumbnail_asset_id
-        )
-        if (
-            task is None
-            or task.status != "ready"
-            or asset_id is None
-            or task.output_file_id != asset_id
-        ):
+        asset_id = version.playback_asset_id if kind == "playback_faststart" else version.thumbnail_asset_id
+        if task is None or task.status != "ready" or asset_id is None or task.output_file_id != asset_id:
             return False
         file = self.session.get(FileObjectModel, asset_id)
         if self._playback_file_is_ready(file):

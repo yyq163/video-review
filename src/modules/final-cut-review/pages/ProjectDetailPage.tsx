@@ -388,7 +388,8 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     mutations.updateReviewItem.isPending ||
     mutations.deleteReviewItem.isPending ||
     mutations.bulkDeleteReviewItems.isPending ||
-    mutations.revokeFinalization.isPending;
+    mutations.revokeFinalization.isPending ||
+    mutations.retryFinalizationCleanup.isPending;
   const packageBlocked =
     isArchived ||
     projectActionPending ||
@@ -545,6 +546,16 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
       );
       throw caught;
     }
+  };
+
+  const retryFinalizationCleanup = async (item: ReviewProjectSummaryItem) => {
+    const result = await mutations.retryFinalizationCleanup.mutateAsync({
+      projectRefId,
+      reviewItemId: item.reviewItemId,
+      lockVersion: item.lockVersion,
+    });
+    await detail.refetch({ throwOnError: true });
+    return result;
   };
 
   const confirmV1List = async () => {
@@ -788,6 +799,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
           onDeleteReviewItem={(item) => void deleteReviewItem(item)}
           onThumbnailLoadError={refreshThumbnailAuthority}
           onRevokeFinalization={revokeFinalization}
+          onRetryFinalizationCleanup={retryFinalizationCleanup}
           onUpdateReviewItemMetadata={updateReviewItemMetadata}
           projectRefId={projectRefId}
           revocationUncertainIds={revocationUncertainIds}

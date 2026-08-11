@@ -1152,17 +1152,15 @@ def test_package_unlink_failure_does_not_starve_pending_deletes(
         ProjectRefModel,
         utcnow,
     )
+    from backend.app.package_builds import process_pending_package_cleanup
     from backend.app.settings import get_database_settings
 
     settings = get_database_settings()
     project_id = f"prj_{uuid.uuid4().hex}"
     failed_package_id = f"pkg_{uuid.uuid4().hex}"
-    removed_package_id = f"pkg_{uuid.uuid4().hex}"
     package_path = settings.package_root / f"{failed_package_id}.zip"
     package_path.parent.mkdir(parents=True, exist_ok=True)
     package_path.write_bytes(b"package")
-    removable_package_path = settings.package_root / f"{removed_package_id}.zip"
-    removable_package_path.write_bytes(b"removable-package")
     with SessionLocal() as session:
         session.add(
             ProjectRefModel(
@@ -1182,19 +1180,6 @@ def test_package_unlink_failure_does_not_starve_pending_deletes(
                 expires_at=utcnow() - timedelta(seconds=1),
                 total_bytes=package_path.stat().st_size,
                 sha256="a" * 64,
-                items=[],
-            )
-        )
-        session.add(
-            FinalCutPackageSnapshotModel(
-                id=removed_package_id,
-                project_ref_id=project_id,
-                status="ready",
-                package_filename=removable_package_path.name,
-                storage_path=str(removable_package_path),
-                expires_at=utcnow() - timedelta(seconds=1),
-                total_bytes=removable_package_path.stat().st_size,
-                sha256="b" * 64,
                 items=[],
             )
         )
@@ -1231,20 +1216,21 @@ def test_package_unlink_failure_does_not_starve_pending_deletes(
         return original_rename(source, target, **kwargs)
 
     monkeypatch.setattr(os, "rename", fail_package_unlink)
+    package_result = process_pending_package_cleanup()
     result = cleanup_temporary_files()
 
-    assert result["failed_packages"] == 1
-    assert result["removed_packages"] == 1
+    assert package_result["failed_package_cleanups"] == 1
+    assert package_result["removed_packages"] == 0
+    assert result["failed_packages"] == 0
+    assert result["removed_packages"] == 0
     assert result["removed_pending_deletes"] == 1
     assert package_path.exists()
-    assert not removable_package_path.exists()
     assert not pending_target.exists()
     assert not pending_tombstone.exists()
     with SessionLocal() as session:
         failed_package = session.get(FinalCutPackageSnapshotModel, failed_package_id)
-        removed_package = session.get(FinalCutPackageSnapshotModel, removed_package_id)
-        assert failed_package is not None and failed_package.status == "ready"
-        assert removed_package is not None and removed_package.status == "expired"
+        assert failed_package is not None and failed_package.status == "expired"
+        assert failed_package.download_lease_id is None
 
 
 def test_expired_package_cleanup_defers_100_failures_before_reaching_101st_package(client: TestClient) -> None:
@@ -1255,6 +1241,7 @@ def test_expired_package_cleanup_defers_100_failures_before_reaching_101st_packa
         _cleanup_claimed_expired_packages,
     )
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.repositories import aware
     from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
         FinalCutPackageSnapshotModel,
         ProjectRefModel,
@@ -1322,7 +1309,11 @@ def test_expired_package_cleanup_defers_100_failures_before_reaching_101st_packa
         session.expire_all()
         for package_id in blocker_ids:
             blocker = session.get(FinalCutPackageSnapshotModel, package_id)
-            assert blocker is not None and blocker.download_lease_id is not None
+            assert blocker is not None
+            assert blocker.status == "expired"
+            assert blocker.download_lease_id is None
+            assert blocker.download_lease_expires_at is None
+            assert aware(blocker.expires_at) >= first_claimed_at + timedelta(seconds=PACKAGE_CLEANUP_RETRY_SECONDS)
 
     with SessionLocal() as session:
         second_claims = _claim_expired_packages(
@@ -1342,7 +1333,7 @@ def test_expired_package_cleanup_defers_100_failures_before_reaching_101st_packa
 
 
 def test_cleanup_retries_expired_package_file_removal(client: TestClient) -> None:
-    from backend.app.maintenance import cleanup_temporary_files
+    from backend.app.package_builds import process_pending_packages
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
     from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
         FinalCutPackageSnapshotModel,
@@ -1380,15 +1371,15 @@ def test_cleanup_retries_expired_package_file_removal(client: TestClient) -> Non
         )
         session.commit()
 
-    result = cleanup_temporary_files()
+    result = process_pending_packages()
 
     assert result["removed_packages"] == 1
-    assert result["failed_packages"] == 0
+    assert result["failed_package_cleanups"] == 0
     assert not package_path.exists()
 
 
 def test_cleanup_rejects_package_path_bound_to_another_package(client: TestClient) -> None:
-    from backend.app.maintenance import cleanup_temporary_files
+    from backend.app.package_builds import process_pending_packages
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
     from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
         FinalCutPackageSnapshotModel,
@@ -1440,7 +1431,7 @@ def test_cleanup_rejects_package_path_bound_to_another_package(client: TestClien
         )
         session.commit()
 
-    result = cleanup_temporary_files()
+    result = process_pending_packages()
 
-    assert result["failed_packages"] == 1
+    assert result["failed_package_cleanups"] == 1
     assert live_path.read_bytes() == b"live-package"

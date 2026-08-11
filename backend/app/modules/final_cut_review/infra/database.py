@@ -30,9 +30,7 @@ def _advisory_lock_key(value: str) -> int:
 def runtime_writer_lock_keys(database_name: str, settings: Settings) -> tuple[int, int, int]:
     root_contract = hashlib.sha256(f"{settings.storage_root}\0{settings.package_root}".encode()).hexdigest()
     writer_key = _advisory_lock_key(f"{database_name}\0{RUNTIME_WRITER_LOCK_NAMESPACE}")
-    contract_key = _advisory_lock_key(
-        f"{database_name}\0{RUNTIME_STORAGE_CONTRACT_NAMESPACE}\0{root_contract}"
-    )
+    contract_key = _advisory_lock_key(f"{database_name}\0{RUNTIME_STORAGE_CONTRACT_NAMESPACE}\0{root_contract}")
     fence_key = _advisory_lock_key(f"{database_name}\0{RUNTIME_TRANSACTION_FENCE_NAMESPACE}")
     return writer_key, contract_key, fence_key
 
@@ -375,9 +373,7 @@ def acquire_runtime_participant_lease(runtime_engine: Engine, settings: Settings
             ).scalars()
         )
         if len(owner_backend_pids) != 1 or int(owner_backend_pids[0]) == int(backend_pid):
-            raise RuntimeWriterFenceUnavailable(
-                "no active backend runtime owns the current database writer and managed storage contract"
-            )
+            raise RuntimeWriterFenceUnavailable("no active backend runtime owns the current database writer and managed storage contract")
         lease = RuntimeParticipantLease(
             connection=connection,
             writer_key=writer_key,
@@ -413,7 +409,7 @@ _REQUEST_RUNTIME_WRITER_LOCK: ContextVar[RuntimeFenceBinding | None] = ContextVa
 
 
 @contextmanager
-def bind_runtime_writer_lock(lock: RuntimeWriterLock) -> Generator[None, None, None]:
+def bind_runtime_writer_lock(lock: RuntimeFenceBinding) -> Generator[None, None, None]:
     token = _REQUEST_RUNTIME_WRITER_LOCK.set(lock)
     try:
         yield

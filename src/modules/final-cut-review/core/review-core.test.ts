@@ -2606,6 +2606,53 @@ describe('final cut review core invariants', () => {
     ]);
   });
 
+  it('keeps cleanup retry review-only and validates the mock revoked-finalization scope', async () => {
+    const { edit, review } = makeHarness();
+    const before = await review.getWorkspace({
+      projectRefId: 'prj_seed_final_cut',
+      reviewItemId: 'item_ep28',
+    });
+    await review.finalizeCurrentVersion(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        reviewItemId: 'item_ep28',
+        versionId: before.currentVersion.versionId,
+        confirmed: true,
+      },
+      ctx(review),
+    );
+    await review.revokeFinalization(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        reviewItemId: 'item_ep28',
+        confirmed: true,
+      },
+      ctx(review),
+    );
+
+    await expect(review.retryFinalizationCleanup(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        reviewItemId: 'item_ep28',
+        lockVersion: 1,
+      },
+      ctx(review),
+    )).resolves.toMatchObject({
+      projectRefId: 'prj_seed_final_cut',
+      reviewItemId: 'item_ep28',
+      cleanupStatus: 'complete',
+      requeuedPackageIds: [],
+    });
+    await expect(edit.retryFinalizationCleanup(
+      {
+        projectRefId: 'prj_seed_final_cut',
+        reviewItemId: 'item_ep28',
+        lockVersion: 1,
+      },
+      ctx(edit),
+    )).rejects.toMatchObject({ code: 'CAPABILITY_DENIED' });
+  });
+
   it('packages only active finalizations in the requested project', async () => {
     const { edit, review } = makeHarness();
     await review.finalizeCurrentVersion(

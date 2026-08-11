@@ -1057,8 +1057,35 @@
 .fj-review-item-actions {
   align-items: center;
   display: flex !important;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.fj-review-cleanup-retry-row {
+  align-items: center;
+  display: flex;
+  flex: 0 0 100%;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.fj-review-cleanup-retry-button {
+  background: transparent;
+  border-color: rgba(255, 104, 104, 0.52);
+}
+
+.fj-review-cleanup-retry-error {
+  flex: 0 0 100%;
+  font-size: 12px;
+  text-align: right;
+}
+
+.fj-review-cleanup-failed-readonly {
+  flex: 0 0 100%;
+  text-align: right;
 }
 
 .fj-review-status {
@@ -3013,6 +3040,15 @@
 
   .fj-review-item-actions {
     justify-content: flex-start;
+  }
+
+  .fj-review-cleanup-retry-row {
+    justify-content: flex-start;
+  }
+
+  .fj-review-cleanup-retry-error,
+  .fj-review-cleanup-failed-readonly {
+    text-align: left;
   }
 
   .fj-review-inline-upload {

@@ -7,13 +7,14 @@ import signal
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import timedelta
 from pathlib import Path
 from types import FrameType
 from typing import Never
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,10 @@ from backend.app.modules.final_cut_review.infra.repositories import (
     SqlAlchemyReviewRepository,
 )
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel, utcnow
+from backend.app.maintenance_cleanup import (
+    _claim_expired_packages,
+    _cleanup_claimed_expired_packages,
+)
 from backend.app.safe_files import (
     UnsafeFilePathError,
     pin_regular_file,
@@ -42,6 +47,8 @@ PACKAGE_BUILD_BATCH_SIZE = 1
 PACKAGE_BUILD_ADVISORY_LOCK_KEY = 5064946991358883142
 HEARTBEAT_REFRESH_SECONDS = 30
 MAX_WORKER_SECONDS = 86_400
+PACKAGE_CLEANUP_WORKER_BATCH_SIZE = 1
+PACKAGE_CLEANUP_WORKER_LEASE_SECONDS = 7200
 _SQLITE_BUILD_LOCK = threading.Lock()
 
 
@@ -59,6 +66,43 @@ def _worker_context(project_ref_id: str) -> ExecutionContext:
         principal=PrincipalRef(kind="system", id="package-worker", project_ref_ids=(project_ref_id,)),
         write_guard=WriteGuardState(mode="none", verified=True),
     )
+
+
+def _pulse_cleanup_lease(
+    package_id: str,
+    claim_id: str,
+    stop: threading.Event,
+    runtime_binding: database_module.RuntimeFenceBinding,
+) -> None:
+    with database_module.bind_runtime_writer_lock(runtime_binding):
+        while not stop.wait(HEARTBEAT_REFRESH_SECONDS):
+            try:
+                with SessionLocal.begin() as session:
+                    database_module.require_runtime_participant_session(session)
+                    session.execute(
+                        update(FinalCutPackageSnapshotModel)
+                        .where(
+                            FinalCutPackageSnapshotModel.id == package_id,
+                            FinalCutPackageSnapshotModel.download_lease_id == claim_id,
+                            FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
+                        )
+                        .values(
+                            download_lease_expires_at=utcnow() + timedelta(seconds=PACKAGE_CLEANUP_WORKER_LEASE_SECONDS),
+                            updated_at=utcnow(),
+                        )
+                    )
+                    still_owned = session.scalar(
+                        select(FinalCutPackageSnapshotModel.id).where(
+                            FinalCutPackageSnapshotModel.id == package_id,
+                            FinalCutPackageSnapshotModel.download_lease_id == claim_id,
+                            FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
+                        )
+                    )
+                    if still_owned is None:
+                        return
+            except Exception:
+                LOGGER.warning("package_cleanup_lease_heartbeat_failed")
+                return
 
 
 @contextmanager
@@ -163,7 +207,10 @@ def _record_build_failure(
 
 def process_package_snapshot(package_id: str) -> str:
     settings = get_database_settings()
-    with database_module.runtime_participant_lease(database_module.engine, settings):
+    with database_module.runtime_participant_lease(
+        database_module.engine,
+        settings,
+    ):
         return _process_package_snapshot(package_id, settings)
 
 
@@ -246,7 +293,9 @@ def _process_package_snapshot(package_id: str, settings: Settings) -> str:
         return observed(status, error_code)
 
 
-def process_pending_packages(batch_size: int = PACKAGE_BUILD_BATCH_SIZE) -> dict[str, int]:
+def process_pending_package_builds(
+    batch_size: int = PACKAGE_BUILD_BATCH_SIZE,
+) -> dict[str, int]:
     if not 1 <= batch_size <= PACKAGE_BUILD_BATCH_SIZE:
         raise ValueError("package build batch size is outside the supported range")
     settings = get_database_settings()
@@ -266,7 +315,11 @@ def process_pending_packages(batch_size: int = PACKAGE_BUILD_BATCH_SIZE) -> dict
                     .limit(batch_size)
                 )
             )
-        results = {"built_packages": 0, "failed_package_builds": 0, "skipped_package_builds": 0}
+        results = {
+            "built_packages": 0,
+            "failed_package_builds": 0,
+            "skipped_package_builds": 0,
+        }
         for package_id in package_ids:
             status = _process_package_snapshot(package_id, settings)
             if status == "ready":
@@ -278,14 +331,64 @@ def process_pending_packages(batch_size: int = PACKAGE_BUILD_BATCH_SIZE) -> dict
         return results
 
 
-def _process_with_timeout(timeout_seconds: int) -> dict[str, int]:
+def process_pending_package_cleanup() -> dict[str, int]:
+    settings = get_database_settings()
+    with database_module.runtime_participant_lease(
+        database_module.engine,
+        settings,
+    ) as runtime_binding:
+        results = {"removed_packages": 0, "failed_package_cleanups": 0}
+        with _worker_session() as session:
+            cleanup_claims = _claim_expired_packages(
+                session,
+                utcnow(),
+                batch_size=PACKAGE_CLEANUP_WORKER_BATCH_SIZE,
+                lease_seconds=PACKAGE_CLEANUP_WORKER_LEASE_SECONDS,
+            )
+        for package_id, claim_id in cleanup_claims:
+            stop = threading.Event()
+            pulse = threading.Thread(
+                target=_pulse_cleanup_lease,
+                args=(package_id, claim_id, stop, runtime_binding),
+                daemon=True,
+                name="package-cleanup-lease-heartbeat",
+            )
+            pulse.start()
+            try:
+                with _worker_session() as session:
+                    removed, failed = _cleanup_claimed_expired_packages(
+                        session,
+                        [(package_id, claim_id)],
+                        settings.package_root,
+                    )
+                results["removed_packages"] += removed
+                results["failed_package_cleanups"] += failed
+            finally:
+                stop.set()
+                pulse.join(timeout=1)
+        return results
+
+
+def process_pending_packages(
+    batch_size: int = PACKAGE_BUILD_BATCH_SIZE,
+) -> dict[str, int]:
+    return {
+        **process_pending_package_builds(batch_size),
+        **process_pending_package_cleanup(),
+    }
+
+
+def _process_with_timeout(
+    operation: Callable[[], dict[str, int]],
+    timeout_seconds: int,
+) -> dict[str, int]:
     def raise_timeout(_signum: int, _frame: FrameType | None) -> None:
-        raise TimeoutError("package build cycle timed out")
+        raise TimeoutError("package worker phase timed out")
 
     previous_handler = signal.signal(signal.SIGALRM, raise_timeout)
     previous_timer = signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
-        return process_pending_packages()
+        return operation()
     finally:
         signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
         signal.signal(signal.SIGALRM, previous_handler)
@@ -319,7 +422,16 @@ def run_package_worker_loop(
         )
         pulse.start()
         try:
-            result = _process_with_timeout(cycle_timeout_seconds)
+            result = {
+                **_process_with_timeout(
+                    process_pending_package_builds,
+                    cycle_timeout_seconds,
+                ),
+                **_process_with_timeout(
+                    process_pending_package_cleanup,
+                    cycle_timeout_seconds,
+                ),
+            }
         except Exception as exc:
             status_path.write_text("error", encoding="ascii")
             heartbeat_path.touch()
@@ -328,7 +440,7 @@ def run_package_worker_loop(
         finally:
             stop.set()
             pulse.join(timeout=1)
-        status = "degraded" if result["failed_package_builds"] else "ok"
+        status = "degraded" if result["failed_package_builds"] or result["failed_package_cleanups"] else "ok"
         status_path.write_text(status, encoding="ascii")
         heartbeat_path.touch()
         print(json.dumps({"status": status, **result}, sort_keys=True), flush=True)

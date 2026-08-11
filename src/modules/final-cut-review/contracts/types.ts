@@ -246,6 +246,13 @@ export interface FinalizationRevocation {
   invalidatedPackageIds: string[];
 }
 
+export interface FinalizationCleanupRetry {
+  projectRefId: ProjectRefId;
+  reviewItemId: ReviewItemId;
+  cleanupStatus: 'pending' | 'complete';
+  requeuedPackageIds: string[];
+}
+
 export interface StoredOriginalFile {
   originalFileId: OriginalFileId;
   fileName: string;

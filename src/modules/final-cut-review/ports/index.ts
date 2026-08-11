@@ -2,6 +2,7 @@ import type {
   Capability,
   EntryMode,
   ExecutionContext,
+  FinalizationCleanupRetry,
   FinalizationRecord,
   FinalizationRevocation,
   IssueId,
@@ -246,6 +247,14 @@ export interface ReviewCommandPort {
     },
     context: ExecutionContext,
   ): Promise<FinalizationRevocation>;
+  retryFinalizationCleanup(
+    input: {
+      projectRefId: ProjectRefId;
+      reviewItemId: ReviewItemId;
+      lockVersion: number;
+    },
+    context: ExecutionContext,
+  ): Promise<FinalizationCleanupRetry>;
 }
 
 export interface FileStoragePort {

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from itertools import islice
 from pathlib import Path
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.modules.final_cut_review.infra import database as database_module
@@ -28,6 +28,11 @@ from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     ReviewVersionModel,
     UploadSessionModel,
     utcnow,
+)
+from backend.app.package_cleanup_files import (
+    PackageDeleteOutcome,
+    delete_claimed_package_artifact,
+    legacy_package_delete_journal_exists,
 )
 from backend.app.safe_files import (
     PinnedRegularFile,
@@ -60,9 +65,7 @@ _directory_scan_states: dict[tuple[str, str], tuple[tuple[int, int], Iterator[os
 
 
 def _derivative_output_file_id(task_id: str, kind: str) -> str:
-    digest = hashlib.sha256(
-        f"media-derivative-v1\0{task_id}\0{kind}".encode()
-    ).hexdigest()
+    digest = hashlib.sha256(f"media-derivative-v1\0{task_id}\0{kind}".encode()).hexdigest()
     return f"media_{digest[:32]}"
 
 
@@ -268,18 +271,14 @@ def _cleanup_pending_deletes(
                                         or not isinstance(expected_ctime_ns, int)
                                         or not isinstance(expected_size, int)
                                     ):
-                                        raise UnsafeFilePathError(
-                                            "pending-delete tombstone lacks the original strong file identity"
-                                        )
+                                        raise UnsafeFilePathError("pending-delete tombstone lacks the original strong file identity")
                                     if (
                                         pinned.device != expected_device
                                         or pinned.inode != expected_inode
                                         or pinned.ctime_ns != expected_ctime_ns
                                         or pinned.size != expected_size
                                     ):
-                                        raise UnsafeFilePathError(
-                                            "pending-delete target no longer identifies the original file"
-                                        )
+                                        raise UnsafeFilePathError("pending-delete target no longer identifies the original file")
                                     pinned.unlink(missing_ok=True)
                                 tombstone.unlink(missing_ok=True)
                     except (OSError, UnicodeError, ValueError):
@@ -437,31 +436,19 @@ def _cleanup_orphan_managed_files(
         with pin_managed_root(root) as (resolved_root, root_fd):
             entries = _directory_scan_batch(root_fd, resolved_root, f"orphan-managed-{kind}")
             active_derivative_ids: set[str] = set()
-            if kind == "file" and any(
-                DERIVATIVE_FILE_ID_RE.fullmatch(entry.name)
-                for entry in entries
-            ):
+            if kind == "file" and any(DERIVATIVE_FILE_ID_RE.fullmatch(entry.name) for entry in entries):
                 active_derivative_ids = {
                     _derivative_output_file_id(task.id, task.kind)
                     for task in session.scalars(
                         select(MediaDerivativeTaskModel)
-                        .where(
-                            MediaDerivativeTaskModel.status.in_(
-                                ("queued", "running")
-                            )
-                        )
+                        .where(MediaDerivativeTaskModel.status.in_(("queued", "running")))
                         .order_by(MediaDerivativeTaskModel.id)
                         .with_for_update()
                     )
                 }
             for entry in entries:
                 if kind == "file":
-                    record_id = (
-                        entry.name
-                        if FILE_ID_RE.fullmatch(entry.name)
-                        or DERIVATIVE_FILE_ID_RE.fullmatch(entry.name)
-                        else None
-                    )
+                    record_id = entry.name if FILE_ID_RE.fullmatch(entry.name) or DERIVATIVE_FILE_ID_RE.fullmatch(entry.name) else None
                 else:
                     match = PACKAGE_FILE_RE.fullmatch(entry.name)
                     record_id = match.group(1) if match else None
@@ -531,23 +518,10 @@ def _cleanup_stale_package_staging(
                         resolved_package_root,
                         Path(entry.name),
                     ) as pinned:
-                        if (
-                            pinned is None
-                            or not pinned.exists
-                            or pinned.mtime_ns is None
-                            or pinned.mtime_ns >= cutoff_ns
-                        ):
+                        if pinned is None or not pinned.exists or pinned.mtime_ns is None or pinned.mtime_ns >= cutoff_ns:
                             continue
-                        package = session.scalar(
-                            select(FinalCutPackageSnapshotModel)
-                            .where(FinalCutPackageSnapshotModel.id == package_id)
-                            .with_for_update()
-                        )
-                        if (
-                            package is not None
-                            and package.status == "preparing"
-                            and package.build_lease_id == lease_id
-                        ):
+                        package = session.scalar(select(FinalCutPackageSnapshotModel).where(FinalCutPackageSnapshotModel.id == package_id).with_for_update())
+                        if package is not None and package.status == "preparing" and package.build_lease_id == lease_id:
                             continue
                         if pinned.unlink(missing_ok=True):
                             removed += 1
@@ -619,7 +593,15 @@ def _cleanup_claimed_upload_parts(session: Session, upload_ids: list[str], uploa
     return removed, failed
 
 
-def _claim_expired_packages(session: Session, now: datetime) -> list[tuple[str, str]]:
+def _claim_expired_packages(
+    session: Session,
+    now: datetime,
+    *,
+    batch_size: int = PACKAGE_CLEANUP_BATCH_SIZE,
+    lease_seconds: int = PACKAGE_CLEANUP_RETRY_SECONDS,
+) -> list[tuple[str, str]]:
+    if not 1 <= batch_size <= PACKAGE_CLEANUP_BATCH_SIZE or lease_seconds < 1:
+        raise ValueError("package cleanup claim bounds are invalid")
     packages = list(
         session.scalars(
             select(FinalCutPackageSnapshotModel)
@@ -636,17 +618,29 @@ def _claim_expired_packages(session: Session, now: datetime) -> list[tuple[str, 
                 FinalCutPackageSnapshotModel.expires_at,
                 FinalCutPackageSnapshotModel.id,
             )
-            .limit(PACKAGE_CLEANUP_BATCH_SIZE)
+            .limit(batch_size)
             .with_for_update(skip_locked=True)
         )
     )
     claims: list[tuple[str, str]] = []
-    lease_expires_at = now + timedelta(seconds=PACKAGE_CLEANUP_RETRY_SECONDS)
+    lease_expires_at = now + timedelta(seconds=lease_seconds)
     for package in packages:
         claim_id = f"cleanup_{uuid.uuid4().hex}"
         package.download_lease_id = claim_id
         package.download_lease_expires_at = lease_expires_at
         package.updated_at = now
+        session.execute(
+            update(FinalizationPackageInvalidationModel)
+            .where(
+                FinalizationPackageInvalidationModel.package_id == package.id,
+                FinalizationPackageInvalidationModel.cleanup_status != "complete",
+            )
+            .values(
+                cleanup_status="pending",
+                last_error_code=None,
+                updated_at=now,
+            )
+        )
         claims.append((package.id, claim_id))
     session.commit()
     return claims
@@ -673,34 +667,88 @@ def _cleanup_claimed_expired_packages(
         if package is None:
             session.rollback()
             continue
+        storage_path = package.storage_path
+        expected_sha256 = package.sha256
+        session.commit()
         try:
             with pin_managed_root(package_root) as (resolved_package_root, package_root_fd):
-                package_path = contained_path(package.storage_path, resolved_package_root)
-                expected_path = contained_path(Path(f"{package.id}.zip"), resolved_package_root)
+                package_path = contained_path(storage_path, resolved_package_root)
+                expected_path = contained_path(Path(f"{package_id}.zip"), resolved_package_root)
                 if package_path != expected_path:
                     raise ValueError("package storage path does not match package identity")
-                with _pin_regular_file_beneath(
-                    package_root_fd,
-                    resolved_package_root,
-                    Path(expected_path.name),
-                ) as pinned:
-                    was_removed = pinned.unlink(missing_ok=True) if pinned is not None else False
-        except (OSError, ValueError):
-            failed += 1
+                if expected_sha256 is not None:
+                    outcome = delete_claimed_package_artifact(
+                        package_root,
+                        package_id=package_id,
+                        cleanup_claim_id=claim_id,
+                        expected_sha256=expected_sha256,
+                    )
+                    was_removed = outcome == PackageDeleteOutcome.REMOVED
+                else:
+                    if legacy_package_delete_journal_exists(
+                        package_root,
+                        package_id=package_id,
+                    ):
+                        raise UnsafeFilePathError("legacy package delete journal requires a database digest")
+                    with _pin_regular_file_beneath(
+                        package_root_fd,
+                        resolved_package_root,
+                        Path(expected_path.name),
+                    ) as pinned:
+                        was_removed = pinned.unlink(missing_ok=True) if pinned is not None else False
+        except (OSError, ValueError) as exc:
             session.rollback()
+            claimed_package = session.scalar(
+                select(FinalCutPackageSnapshotModel)
+                .where(
+                    FinalCutPackageSnapshotModel.id == package_id,
+                    FinalCutPackageSnapshotModel.download_lease_id == claim_id,
+                    FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if claimed_package is None:
+                session.rollback()
+                continue
+            failed += 1
+            failure_time = utcnow()
+            claimed_package.download_lease_id = None
+            claimed_package.download_lease_expires_at = None
+            if claimed_package.status == "ready":
+                claimed_package.status = "expired"
+            claimed_package.expires_at = failure_time + timedelta(seconds=PACKAGE_CLEANUP_RETRY_SECONDS)
+            claimed_package.updated_at = failure_time
+            if isinstance(exc, TimeoutError):
+                error_code = "PACKAGE_DELETE_TIMEOUT"
+            elif isinstance(exc, PermissionError):
+                error_code = "PACKAGE_DELETE_PERMISSION_DENIED"
+            elif isinstance(exc, (UnsafeFilePathError, ValueError)):
+                error_code = "PACKAGE_DELETE_IDENTITY_MISMATCH"
+            else:
+                error_code = "PACKAGE_DELETE_IO_RETRY_PENDING"
             invalidations = list(
                 session.scalars(
-                    select(FinalizationPackageInvalidationModel)
-                    .where(FinalizationPackageInvalidationModel.package_id == package_id)
-                    .with_for_update()
+                    select(FinalizationPackageInvalidationModel).where(FinalizationPackageInvalidationModel.package_id == package_id).with_for_update()
                 )
             )
             for invalidation in invalidations:
                 invalidation.cleanup_status = "failed"
                 invalidation.cleanup_attempts += 1
-                invalidation.last_error_code = "PACKAGE_DELETE_RETRY_PENDING"
-                invalidation.updated_at = utcnow()
+                invalidation.last_error_code = error_code
+                invalidation.updated_at = failure_time
             session.commit()
+            continue
+        package = session.scalar(
+            select(FinalCutPackageSnapshotModel)
+            .where(
+                FinalCutPackageSnapshotModel.id == package_id,
+                FinalCutPackageSnapshotModel.download_lease_id == claim_id,
+                FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if package is None:
+            session.rollback()
             continue
         if was_removed:
             removed += 1
@@ -713,11 +761,7 @@ def _cleanup_claimed_expired_packages(
         package.storage_reclaimed_at = utcnow()
         package.updated_at = package.storage_reclaimed_at
         invalidations = list(
-            session.scalars(
-                select(FinalizationPackageInvalidationModel)
-                .where(FinalizationPackageInvalidationModel.package_id == package_id)
-                .with_for_update()
-            )
+            session.scalars(select(FinalizationPackageInvalidationModel).where(FinalizationPackageInvalidationModel.package_id == package_id).with_for_update())
         )
         for invalidation in invalidations:
             invalidation.cleanup_status = "complete"
@@ -746,7 +790,6 @@ def _cleanup_temporary_files(settings: Settings) -> dict[str, int]:
         upload_root,
         file_root,
         pending_root,
-        package_root,
     ):
         try:
             resolved, failed = recover_delete_quarantines(quarantine_parent)
@@ -778,8 +821,6 @@ def _cleanup_temporary_files(settings: Settings) -> dict[str, int]:
             package_root,
             stale_before,
         )
-        package_claims = _claim_expired_packages(session, utcnow())
-        removed_packages, failed_packages = _cleanup_claimed_expired_packages(session, package_claims, package_root)
         removed_pending_deletes, failed_pending_deletes = _cleanup_pending_deletes(
             session,
             settings.storage_root,
@@ -798,8 +839,8 @@ def _cleanup_temporary_files(settings: Settings) -> dict[str, int]:
         "failed_orphan_packages": failed_orphan_packages,
         "removed_package_staging": removed_package_staging,
         "failed_package_staging": failed_package_staging,
-        "removed_packages": removed_packages,
-        "failed_packages": failed_packages,
+        "removed_packages": 0,
+        "failed_packages": 0,
         "removed_pending_deletes": removed_pending_deletes,
         "failed_pending_deletes": failed_pending_deletes,
     }

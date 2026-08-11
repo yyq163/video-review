@@ -1,4 +1,5 @@
 import type {
+  FinalizationCleanupRetryDTO,
   FinalizationDTO,
   FinalizationRevocationDTO,
   ReviewItemDTO,
@@ -14,7 +15,10 @@ import {
 } from './http-review-finalization-operation';
 import type { HttpReviewTransport } from './http-review-transport';
 
-type WorkflowApi = Pick<ReviewApiPort, 'startReview' | 'finalizeCurrentVersion' | 'revokeFinalization'>;
+type WorkflowApi = Pick<
+  ReviewApiPort,
+  'startReview' | 'finalizeCurrentVersion' | 'revokeFinalization' | 'retryFinalizationCleanup'
+>;
 
 export class HttpReviewWorkflow implements WorkflowApi {
   constructor(private readonly transport: HttpReviewTransport) {}
@@ -113,5 +117,33 @@ export class HttpReviewWorkflow implements WorkflowApi {
       }
       throw new RevokeFinalizationResultUncertainError(error);
     }
+  };
+
+  readonly retryFinalizationCleanup: ReviewApiPort['retryFinalizationCleanup'] = async (
+    input,
+    context,
+  ) => {
+    this.transport.assertWriteContext(context, ['review']);
+    const result = await this.transport.command<
+      FinalizationCleanupRetryDTO,
+      { project_ref_id: string; review_item_id: string; confirmed: true }
+    >(
+      `/api/v1/final-cut-review/review/projects/${input.projectRefId}/items/${input.reviewItemId}/finalization/cleanup/retry`,
+      'RetryFinalizationCleanup',
+      {
+        project_ref_id: input.projectRefId,
+        review_item_id: input.reviewItemId,
+        confirmed: true,
+      },
+      context,
+      input.lockVersion,
+      { idempotent: true },
+    );
+    return {
+      projectRefId: result.project_ref_id,
+      reviewItemId: result.review_item_id,
+      cleanupStatus: result.cleanup_status,
+      requeuedPackageIds: result.requeued_package_ids,
+    };
   };
 }

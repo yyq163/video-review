@@ -1,4 +1,5 @@
 import type {
+  FinalizationCleanupRetry,
   FinalizationRecord,
   FinalizationRevocation,
   ProjectRefId,
@@ -82,6 +83,34 @@ export class InMemoryReviewFinalizations {
       reviewItem: { ...updatedItem },
       cleanupStatus: 'complete',
       invalidatedPackageIds: [],
+    };
+  };
+
+  readonly retryFinalizationCleanup = async (input: {
+    projectRefId: ProjectRefId;
+    reviewItemId: ReviewItemId;
+    lockVersion: number;
+  }): Promise<FinalizationCleanupRetry> => {
+    this.store.assertProjectWritable(input.projectRefId);
+    const item = this.store.getItem(input.projectRefId, input.reviewItemId);
+    invariant(input.lockVersion === 1, '条目版本已变化，请刷新后重试', 'OPTIMISTIC_LOCK_CONFLICT');
+    invariant(
+      item.status !== 'finalized' && item.activeFinalizationId === null,
+      '当前分集仍处于定稿状态，不能重试撤回清理',
+      'INVALID_STATUS_TRANSITION',
+    );
+    const revokedFinalization = [...this.store.finalizations.values()].find(
+      (finalization) =>
+        finalization.projectRefId === input.projectRefId &&
+        finalization.reviewItemId === input.reviewItemId &&
+        finalization.status === 'revoked',
+    );
+    invariant(revokedFinalization, '当前分集没有已撤回的定稿记录', 'RESOURCE_NOT_FOUND');
+    return {
+      projectRefId: input.projectRefId,
+      reviewItemId: input.reviewItemId,
+      cleanupStatus: 'complete',
+      requeuedPackageIds: [],
     };
   };
 }

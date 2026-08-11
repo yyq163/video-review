@@ -1,8 +1,12 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import type { FinalizationRevocation, ReviewItem } from '../contracts/types';
+import type {
+  FinalizationCleanupRetry,
+  FinalizationRevocation,
+  ReviewItem,
+} from '../contracts/types';
 import { createSeedData } from '../core/seed';
 import {
   ReviewRuntimeProvider,
@@ -58,6 +62,7 @@ function summaryItem(
 function renderList(input: {
   items: ReviewProjectSummaryItem[];
   entryMode?: 'edit' | 'review';
+  isArchived?: boolean;
   itemActionPending?: boolean;
   onBulkDeleteReviewItems?: (
     items: ReviewItem[],
@@ -69,10 +74,20 @@ function renderList(input: {
   onRevokeFinalization?: (
     item: ReviewProjectSummaryItem,
   ) => Promise<FinalizationRevocation>;
+  onRetryFinalizationCleanup?: (
+    item: ReviewProjectSummaryItem,
+  ) => Promise<FinalizationCleanupRetry>;
+  onContainerClick?: () => void;
+  denyCleanupRetryCapability?: boolean;
   onThumbnailLoadError?: (item: ReviewProjectSummaryItem) => Promise<unknown>;
 }) {
   const runtime = createReviewRuntime();
   activeRuntimes.push(runtime);
+  if (input.denyCleanupRetryCapability) {
+    const can = runtime.permissions.can.bind(runtime.permissions);
+    vi.spyOn(runtime.permissions, 'can').mockImplementation((mode, capability) =>
+      capability === 'review.finalization.revoke' ? false : can(mode, capability));
+  }
   const onDeleteReviewItem = vi.fn();
   const renderView = (
     items: ReviewProjectSummaryItem[],
@@ -86,18 +101,21 @@ function renderList(input: {
     return (
       <ReviewRuntimeProvider runtime={runtime}>
         <MemoryRouter>
-          <ProjectDetailItemList
-            entryMode={input.entryMode ?? 'edit'}
-            episodeGroups={groups}
-            isArchived={false}
-            itemActionPending={itemActionPending}
-            onBulkDeleteReviewItems={input.onBulkDeleteReviewItems}
-            onDeleteReviewItem={onDeleteReviewItem}
-            onThumbnailLoadError={input.onThumbnailLoadError ?? vi.fn(async () => undefined)}
-            onRevokeFinalization={input.onRevokeFinalization}
-            onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
-            projectRefId="prj_seed_final_cut"
-          />
+          <div onClick={input.onContainerClick}>
+            <ProjectDetailItemList
+              entryMode={input.entryMode ?? 'edit'}
+              episodeGroups={groups}
+              isArchived={input.isArchived ?? false}
+              itemActionPending={itemActionPending}
+              onBulkDeleteReviewItems={input.onBulkDeleteReviewItems}
+              onDeleteReviewItem={onDeleteReviewItem}
+              onThumbnailLoadError={input.onThumbnailLoadError ?? vi.fn(async () => undefined)}
+              onRevokeFinalization={input.onRevokeFinalization}
+              onRetryFinalizationCleanup={input.onRetryFinalizationCleanup}
+              onUpdateReviewItemMetadata={vi.fn(async () => undefined)}
+              projectRefId="prj_seed_final_cut"
+            />
+          </div>
         </MemoryRouter>
       </ReviewRuntimeProvider>
     );
@@ -105,6 +123,7 @@ function renderList(input: {
   const result = render(renderView(input.items));
   return {
     onDeleteReviewItem,
+    unmountList: result.unmount,
     rerenderList: (
       items = input.items,
       itemActionPending = input.itemActionPending ?? false,
@@ -556,7 +575,160 @@ describe('ProjectDetailItemList status and finalization revocation', () => {
     renderList({ items: [pending, failed], entryMode: 'review' });
 
     expect(screen.getByText('定稿已撤回，关联包清理中')).toBeInTheDocument();
-    expect(screen.getByText('定稿已撤回，关联包清理失败，等待受控重试')).toBeInTheDocument();
+    expect(screen.getByText('定稿已撤回，关联包清理失败。')).toBeInTheDocument();
     expect(screen.getAllByText('审阅中')).toHaveLength(2);
+  });
+
+  it('keeps the failed row authoritative while retrying once and stops the action click from bubbling', async () => {
+    let resolveRetry: ((result: FinalizationCleanupRetry) => void) | undefined;
+    const retry = vi.fn(() => new Promise<FinalizationCleanupRetry>((resolve) => {
+      resolveRetry = resolve;
+    }));
+    const failed = summaryItem('cleanup-retry', {
+      episode: '1',
+      status: 'in_review',
+      finalization: { id: 'fin-retry', status: 'revoked', revokedAt: '2026-07-31T00:00:00Z' },
+      revocationCleanupStatus: 'failed',
+      bulkDelete: { eligible: false, locked: true, reason: 'CLEANUP_FAILED' },
+    });
+    const bubbled = vi.fn();
+    renderList({
+      items: [failed],
+      entryMode: 'review',
+      onRetryFinalizationCleanup: retry,
+      onContainerClick: bubbled,
+    });
+
+    const button = screen.getByRole('button', { name: '重试清理第01集关联包' });
+    fireEvent.click(button);
+    expect(bubbled).not.toHaveBeenCalled();
+    fireEvent.click(button);
+
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledWith(failed);
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    expect(button).toHaveTextContent('重试中…');
+    expect(screen.getByText('定稿已撤回，关联包清理失败。')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveRetry?.({
+        projectRefId: failed.projectRefId,
+        reviewItemId: failed.reviewItemId,
+        cleanupStatus: 'pending',
+        requeuedPackageIds: ['package-retry'],
+      });
+    });
+
+    expect(screen.getByText('定稿已撤回，关联包清理失败。')).toBeInTheDocument();
+    expect(button).toBeEnabled();
+  });
+
+  it('retains the failed warning and reports a safe error when retry fails', async () => {
+    const failed = summaryItem('cleanup-retry-failed', {
+      episode: '1',
+      status: 'in_review',
+      finalization: { id: 'fin-retry-failed', status: 'revoked', revokedAt: '2026-07-31T00:00:00Z' },
+      revocationCleanupStatus: 'failed',
+      bulkDelete: { eligible: false, locked: true, reason: 'CLEANUP_FAILED' },
+    });
+    renderList({
+      items: [failed],
+      entryMode: 'review',
+      onRetryFinalizationCleanup: vi.fn().mockRejectedValue(new Error('sensitive transport detail')),
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: '重试清理第01集关联包' }));
+
+    expect(screen.getByText('定稿已撤回，关联包清理失败。')).toBeInTheDocument();
+    expect(await screen.findByText('清理重试失败，请稍后再试；当前失败状态已保留。')).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '重试清理第01集关联包' })).toBeEnabled();
+    });
+    expect(screen.queryByText('sensitive transport detail')).not.toBeInTheDocument();
+  });
+
+  it('shows retry only in an active review entry and never for authoritative pending cleanup', () => {
+    const failed = summaryItem('cleanup-retry-scope', {
+      episode: '1',
+      status: 'in_review',
+      finalization: { id: 'fin-retry-scope', status: 'revoked', revokedAt: '2026-07-31T00:00:00Z' },
+      revocationCleanupStatus: 'failed',
+      bulkDelete: { eligible: false, locked: true, reason: 'CLEANUP_FAILED' },
+    });
+    const retry = vi.fn();
+    const editView = renderList({
+      items: [failed],
+      entryMode: 'edit',
+      onRetryFinalizationCleanup: retry,
+    });
+    expect(screen.queryByRole('button', { name: /重试清理第/ })).not.toBeInTheDocument();
+    expect(screen.getByText('定稿已撤回，关联包清理失败。')).toBeInTheDocument();
+
+    editView.rerenderList([
+      { ...failed, revocationCleanupStatus: 'pending' },
+    ]);
+    expect(screen.getByText('定稿已撤回，关联包清理中')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /重试清理第/ })).not.toBeInTheDocument();
+  });
+
+  it('hides retry for an archived review project while preserving its failure warning', () => {
+    const failed = summaryItem('cleanup-retry-archived', {
+      episode: '1',
+      status: 'in_review',
+      finalization: { id: 'fin-retry-archived', status: 'revoked', revokedAt: '2026-07-31T00:00:00Z' },
+      revocationCleanupStatus: 'failed',
+      bulkDelete: { eligible: false, locked: true, reason: 'CLEANUP_FAILED' },
+    });
+    renderList({
+      items: [failed],
+      entryMode: 'review',
+      isArchived: true,
+      onRetryFinalizationCleanup: vi.fn(),
+    });
+
+    expect(screen.queryByRole('button', { name: /重试清理第/ })).not.toBeInTheDocument();
+    expect(screen.getByText('定稿已撤回，关联包清理失败。')).toBeInTheDocument();
+  });
+
+  it('keeps the authoritative failure warning visible without revoke capability', () => {
+    const failed = summaryItem('cleanup-retry-denied', {
+      status: 'in_review',
+      finalization: { id: 'fin-retry-denied', status: 'revoked', revokedAt: '2026-07-31T00:00:00Z' },
+      revocationCleanupStatus: 'failed',
+      bulkDelete: { eligible: false, locked: true, reason: 'CLEANUP_FAILED' },
+    });
+    renderList({
+      items: [failed],
+      entryMode: 'review',
+      denyCleanupRetryCapability: true,
+      onRetryFinalizationCleanup: vi.fn(),
+    });
+
+    expect(screen.getByText('定稿已撤回，关联包清理失败。')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /重试清理第/ })).not.toBeInTheDocument();
+  });
+
+  it('settles a rejected retry after unmount without an unhandled promise', async () => {
+    let rejectRetry: ((reason?: unknown) => void) | undefined;
+    const failed = summaryItem('cleanup-retry-unmount', {
+      status: 'in_review',
+      finalization: { id: 'fin-retry-unmount', status: 'revoked', revokedAt: '2026-07-31T00:00:00Z' },
+      revocationCleanupStatus: 'failed',
+      bulkDelete: { eligible: false, locked: true, reason: 'CLEANUP_FAILED' },
+    });
+    const view = renderList({
+      items: [failed],
+      entryMode: 'review',
+      onRetryFinalizationCleanup: vi.fn(() => new Promise<FinalizationCleanupRetry>((_resolve, reject) => {
+        rejectRetry = reject;
+      })),
+    });
+    fireEvent.click(screen.getByRole('button', { name: '重试清理第28集关联包' }));
+    view.unmountList();
+
+    await act(async () => {
+      rejectRetry?.(new Error('late rejection'));
+    });
   });
 });

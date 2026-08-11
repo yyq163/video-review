@@ -890,6 +890,31 @@ paths:
                 $ref: "#/components/schemas/EnvelopeFinalizationRevocation"
         <<: *standardNon200Responses
 
+  /final-cut-review/review/projects/{project_ref_id}/items/{review_item_id}/finalization/cleanup/retry:
+    post:
+      operationId: review_retry_finalization_cleanup
+      tags: [commands]
+      x-command-type: RetryFinalizationCleanup
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/ReviewItemId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetryFinalizationCleanupCommandEnvelope"
+      responses:
+        "200":
+          description: Accepted finalization package cleanup retry envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeFinalizationCleanupRetry"
+        <<: *standardNon200Responses
+
   /final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages:
     post:
       operationId: review_prepare_package
@@ -1451,6 +1476,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/FinalizationRevocationDTO"
+    EnvelopeFinalizationCleanupRetry:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/FinalizationCleanupRetryDTO"
     EnvelopeProjectSummary:
       allOf:
         - $ref: "#/components/schemas/EnvelopeAny"
@@ -1529,6 +1561,7 @@ components:
         - SoftDeleteReviewIssue
         - FinalizeVersion
         - RevokeFinalization
+        - RetryFinalizationCleanup
         - PrepareFinalizedPackage
 
     CreateProjectCommandEnvelope:
@@ -1657,6 +1690,13 @@ components:
           properties:
             command_type: {type: string, const: RevokeFinalization}
             payload: {$ref: "#/components/schemas/RevokeFinalizationPayload"}
+    RetryFinalizationCleanupCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: RetryFinalizationCleanup}
+            payload: {$ref: "#/components/schemas/RetryFinalizationCleanupPayload"}
     PrepareFinalizedPackageCommandEnvelope:
       allOf:
         - $ref: "#/components/schemas/CommandEnvelopeBase"
@@ -1795,6 +1835,14 @@ components:
         version_id: {type: string, minLength: 1}
         confirmed: {type: boolean, const: true}
     RevokeFinalizationPayload:
+      type: object
+      required: [project_ref_id, review_item_id, confirmed]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        review_item_id: {type: string, minLength: 1}
+        confirmed: {type: boolean, const: true}
+    RetryFinalizationCleanupPayload:
       type: object
       required: [project_ref_id, review_item_id, confirmed]
       additionalProperties: false
@@ -2077,6 +2125,17 @@ components:
         review_item: {$ref: "#/components/schemas/ReviewItemDTO"}
         cleanup_status: {type: string, enum: [pending, failed, complete]}
         invalidated_package_ids:
+          type: array
+          items: {type: string}
+    FinalizationCleanupRetryDTO:
+      type: object
+      required: [project_ref_id, review_item_id, cleanup_status, requeued_package_ids]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string}
+        review_item_id: {type: string}
+        cleanup_status: {type: string, enum: [pending, complete]}
+        requeued_package_ids:
           type: array
           items: {type: string}
     ProjectSummaryCurrentVersionDTO:

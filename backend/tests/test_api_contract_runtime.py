@@ -22,7 +22,18 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.routing import BaseRoute, Mount
 
-from .conftest import api_data, api_error, command, create_item, create_project, create_project_item, principal_headers, tiny_video_bytes, upload_init_request, upload_video
+from .conftest import (
+    api_data,
+    api_error,
+    command,
+    create_item,
+    create_project,
+    create_project_item,
+    principal_headers,
+    tiny_video_bytes,
+    upload_init_request,
+    upload_video,
+)
 
 
 def iter_registered_api_routes(app: FastAPI) -> Iterator[APIRoute]:
@@ -343,12 +354,7 @@ def test_runtime_api_routes_match_openapi_contract(client: TestClient) -> None:
     declared = {(method.upper(), f"/api/v1{path}") for path, methods in openapi["paths"].items() for method in methods if not method.startswith("x-")}
     app = client.app
     assert isinstance(app, FastAPI)
-    runtime = {
-        (method, route.path)
-        for route in iter_registered_api_routes(app)
-        if route.path.startswith("/api/v1/")
-        for method in route.methods or ()
-    }
+    runtime = {(method, route.path) for route in iter_registered_api_routes(app) if route.path.startswith("/api/v1/") for method in route.methods or ()}
     assert runtime == declared
 
 
@@ -728,10 +734,7 @@ def test_project_summary_is_batched_and_contains_authoritative_card_state(
         "SUM003",
     )
     create_issue(client, project_two["project_ref_id"], first, content="summary issue")
-    version_status = client.get(
-        f"/api/v1/final-cut-review/projects/{project_two['project_ref_id']}"
-        f"/items/{first['id']}/versions/{first['current_version_id']}"
-    )
+    version_status = client.get(f"/api/v1/final-cut-review/projects/{project_two['project_ref_id']}/items/{first['id']}/versions/{first['current_version_id']}")
     assert version_status.status_code == 200, version_status.text
     version_status_data = api_data(version_status)
 
@@ -769,9 +772,7 @@ def test_project_summary_is_batched_and_contains_authoritative_card_state(
 
         event.listen(database_mod.engine, "before_cursor_execute", capture)
         try:
-            response = client.get(
-                f"/api/v1/final-cut-review/projects/{project_id}/summary"
-            )
+            response = client.get(f"/api/v1/final-cut-review/projects/{project_id}/summary")
         finally:
             event.remove(database_mod.engine, "before_cursor_execute", capture)
         return statements, response
@@ -827,10 +828,7 @@ def test_protected_playback_uses_opaque_accel_and_pending_never_falls_back_to_or
     from backend.app.settings import get_settings
 
     project, item = create_project_item(client, "ACCEL")
-    stream_path = (
-        f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/versions/{item['current_version_id']}/stream"
-    )
+    stream_path = f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/stream"
 
     monkeypatch.setenv("PROTECTED_MEDIA_DIRECT_STREAM_ENABLED", "false")
     get_settings.cache_clear()
@@ -917,10 +915,7 @@ def test_protected_playback_accepts_managed_media_derivative_id(
 
     monkeypatch.setenv("PROTECTED_MEDIA_DIRECT_STREAM_ENABLED", "false")
     get_settings.cache_clear()
-    stream_path = (
-        f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/versions/{item['current_version_id']}/stream"
-    )
+    stream_path = f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/stream"
     response = client.get(stream_path, headers={"Range": "bytes=0-3"})
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
@@ -978,10 +973,7 @@ def test_protected_thumbnail_requires_current_ready_derivative(
         task.status = "ready"
         task.output_file_id = thumbnail_id
 
-    thumbnail_route = (
-        f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/versions/{item['current_version_id']}/thumbnail"
-    )
+    thumbnail_route = f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/thumbnail"
     response = client.get(thumbnail_route)
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("image/jpeg")
@@ -1006,12 +998,7 @@ def test_protected_thumbnail_requires_current_ready_derivative(
         assert task.error_code == "MEDIA_DERIVATIVE_ARTIFACT_MISSING"
 
     create_issue(client, project["project_ref_id"], item, content="request v2")
-    current_item = api_data(
-        client.get(
-            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-            f"/items/{item['id']}"
-        )
-    )
+    current_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     replacement_file = upload_video(client, filename="thumb-v2.mp4", seed=b"v2")
     upload = command(
         "UploadReviewVersion",
@@ -1023,8 +1010,7 @@ def test_protected_thumbnail_requires_current_ready_derivative(
         },
     )
     uploaded = client.post(
-        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/versions",
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/versions",
         json=upload,
         headers={
             "Idempotency-Key": upload["command_id"],
@@ -1044,16 +1030,8 @@ def test_revoke_finalization_requires_confirmation_lock_review_capability_and_ac
 
     project, item = create_project_item(client, "REVAUTH")
     finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
-    current_item = api_data(
-        client.get(
-            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-            f"/items/{item['id']}"
-        )
-    )
-    route = (
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/finalization/revoke"
-    )
+    current_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
+    route = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/finalization/revoke"
     false_confirmation = command(
         "RevokeFinalization",
         {
@@ -1126,8 +1104,7 @@ def test_revoke_finalization_requires_confirmation_lock_review_capability_and_ac
     assert "review.finalization.revoke" not in EDIT_ENTRY_PROFILE
     assert (
         client.post(
-            f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}"
-            f"/items/{item['id']}/finalization/revoke",
+            f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/finalization/revoke",
             json=archived_revoke,
             headers={"If-Match": str(current_item["lock_version"])},
         ).status_code
@@ -1160,12 +1137,7 @@ def test_revoke_preparing_package_blocks_late_worker_publish(
     artifact = claim_repository.build_prepared_package(claim)
     assert Path(artifact.storage_path).exists()
 
-    current_item = api_data(
-        client.get(
-            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-            f"/items/{item['id']}"
-        )
-    )
+    current_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     revoke = command(
         "RevokeFinalization",
         {
@@ -1175,8 +1147,7 @@ def test_revoke_preparing_package_blocks_late_worker_publish(
         },
     )
     response = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/finalization/revoke",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/finalization/revoke",
         json=revoke,
         headers={
             "Idempotency-Key": revoke["command_id"],
@@ -1189,10 +1160,7 @@ def test_revoke_preparing_package_blocks_late_worker_publish(
             publish_session,
             get_settings(),
         )
-        assert (
-            publish_repository.publish_prepared_package(artifact, worker_context)
-            == "skipped"
-        )
+        assert publish_repository.publish_prepared_package(artifact, worker_context) == "skipped"
         publish_session.commit()
     Path(artifact.storage_path).unlink()
 
@@ -1215,12 +1183,7 @@ def test_revoke_tracks_failed_package_until_physical_storage_is_reclaimed(
         snapshot.failure_details = {"error_code": "SYNTHETIC_DELETE_FAILURE"}
         snapshot.storage_reclaimed_at = None
 
-    current_item = api_data(
-        client.get(
-            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-            f"/items/{item['id']}"
-        )
-    )
+    current_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     revoke = command(
         "RevokeFinalization",
         {
@@ -1230,8 +1193,7 @@ def test_revoke_tracks_failed_package_until_physical_storage_is_reclaimed(
         },
     )
     response = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/finalization/revoke",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/finalization/revoke",
         json=revoke,
         headers={
             "Idempotency-Key": revoke["command_id"],
@@ -1279,12 +1241,7 @@ def test_each_finalization_in_an_invalidated_multi_item_package_tracks_pending_c
     package, _ = prepare_ready_package(client, project["project_ref_id"])
 
     def revoke(item: dict[str, Any], command_id: str) -> dict[str, Any]:
-        current = api_data(
-            client.get(
-                f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-                f"/items/{item['id']}"
-            )
-        )
+        current = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
         body = command(
             "RevokeFinalization",
             {
@@ -1295,8 +1252,7 @@ def test_each_finalization_in_an_invalidated_multi_item_package_tracks_pending_c
             command_id=command_id,
         )
         response = client.post(
-            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-            f"/items/{item['id']}/finalization/revoke",
+            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/finalization/revoke",
             json=body,
             headers={
                 "Idempotency-Key": body["command_id"],
@@ -1346,8 +1302,7 @@ def test_each_finalization_in_an_invalidated_multi_item_package_tracks_pending_c
         command_id="refinalize-multi-cleanup-pending",
     )
     blocked = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/items/{second_item['id']}/versions/{second_item['current_version_id']}/finalize",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{second_item['id']}/versions/{second_item['current_version_id']}/finalize",
         json=refinalize,
         headers={
             "Idempotency-Key": refinalize["command_id"],
@@ -1365,7 +1320,6 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
     import backend.app.maintenance_cleanup as maintenance
     from sqlalchemy import select
 
-    from backend.app.maintenance import cleanup_temporary_files
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
     from backend.app.modules.final_cut_review.infra.repositories import (
         SqlAlchemyReviewRepository,
@@ -1391,8 +1345,7 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
     package_path = Path(get_settings().package_root) / f"{package['id']}.zip"
     assert package_path.exists()
     authorized = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/finalized-originals/packages/{package['id']}/download-session",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package['id']}/download-session",
         headers={"X-Package-Download-Token": package["download_token"]},
     )
     assert authorized.status_code == 200, authorized.text
@@ -1409,12 +1362,7 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
         )
         session.commit()
 
-    current_item = api_data(
-        client.get(
-            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
-            f"/items/{item['id']}"
-        )
-    )
+    current_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     revoke = command(
         "RevokeFinalization",
         {
@@ -1425,8 +1373,7 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
         command_id="revoke-finalization-idempotent",
     )
     revoked = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/finalization/revoke",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/finalization/revoke",
         json=revoke,
         headers={
             "Idempotency-Key": revoke["command_id"],
@@ -1452,8 +1399,7 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
         command_id="refinalize-while-revoke-cleanup-pending",
     )
     blocked_pending = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/versions/{item['current_version_id']}/finalize",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/finalize",
         json=pending_refinalize,
         headers={
             "Idempotency-Key": pending_refinalize["command_id"],
@@ -1464,8 +1410,7 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
     assert api_error(blocked_pending)["code"] == "RESOURCE_STATE_CONFLICT"
 
     replay = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/finalization/revoke",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/finalization/revoke",
         json=revoke,
         headers={
             "Idempotency-Key": revoke["command_id"],
@@ -1486,15 +1431,13 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
         assert invalidated.download_session_hash is None
         assert invalidated.download_lease_id is None
     old_token = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/finalized-originals/packages/{package['id']}/download-session",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package['id']}/download-session",
         headers={"X-Package-Download-Token": package["download_token"]},
     )
     assert old_token.status_code == 410 or old_token.status_code == 409
     assert api_error(old_token)["code"] in {"PACKAGE_EXPIRED", "PACKAGE_NOT_READY"}
     old_session = client.get(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/finalized-originals/packages/{package['id']}/download",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package['id']}/download",
         headers={"Cookie": f"fj_pkg_{package['id']}={session_token}"},
     )
     assert old_session.status_code in {403, 410}
@@ -1511,18 +1454,19 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
             is False
         )
 
-    original_pin = maintenance._pin_regular_file_beneath
+    original_package_delete = maintenance.delete_claimed_package_artifact
+    from backend.app.package_builds import process_pending_packages
 
     def fail_package_delete(*_args: object, **_kwargs: object) -> object:
         raise OSError("synthetic package delete failure")
 
     monkeypatch.setattr(
         maintenance,
-        "_pin_regular_file_beneath",
+        "delete_claimed_package_artifact",
         fail_package_delete,
     )
-    failed_cleanup = cleanup_temporary_files()
-    assert failed_cleanup["failed_packages"] == 1
+    failed_cleanup = process_pending_packages()
+    assert failed_cleanup["failed_package_cleanups"] == 1
     with SessionLocal() as session:
         from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
             FinalizationPackageInvalidationModel,
@@ -1532,10 +1476,7 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
         )
 
         invalidation = session.scalar(
-            select(FinalizationPackageInvalidationModel).where(
-                FinalizationPackageInvalidationModel.finalization_id
-                == finalization["id"]
-            )
+            select(FinalizationPackageInvalidationModel).where(FinalizationPackageInvalidationModel.finalization_id == finalization["id"])
         )
         item_row = session.get(ReviewItemModel, item["id"])
         finalization_row = session.get(FinalizationRecordModel, finalization["id"])
@@ -1544,7 +1485,10 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
         assert item_row is not None and item_row.workflow_status == "in_review"
         assert finalization_row is not None and finalization_row.status == "revoked"
         assert package_row is not None
-        package_row.download_lease_expires_at = utcnow() - timedelta(seconds=1)
+        assert package_row.status == "invalidated"
+        assert package_row.download_lease_id is None
+        assert package_row.download_lease_expires_at is None
+        package_row.expires_at = utcnow() - timedelta(seconds=1)
         session.commit()
 
     failed_refinalize = command(
@@ -1558,8 +1502,7 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
         command_id="refinalize-while-revoke-cleanup-failed",
     )
     blocked_failed = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/items/{item['id']}/versions/{item['current_version_id']}/finalize",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/finalize",
         json=failed_refinalize,
         headers={
             "Idempotency-Key": failed_refinalize["command_id"],
@@ -1571,17 +1514,13 @@ def test_revoke_finalization_invalidates_package_sessions_and_cleanup_converges(
 
     monkeypatch.setattr(
         maintenance,
-        "_pin_regular_file_beneath",
-        original_pin,
+        "delete_claimed_package_artifact",
+        original_package_delete,
     )
-    cleanup = cleanup_temporary_files()
+    cleanup = process_pending_packages()
     assert cleanup["removed_packages"] == 1
     assert not package_path.exists()
-    summary = api_data(
-        client.get(
-            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/summary"
-        )
-    )
+    summary = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/summary"))
     card = next(card for card in summary["items"] if card["id"] == item["id"])
     assert card["finalization"]["status"] == "revoked"
     assert card["revocation_cleanup_status"] == "complete"
@@ -1675,10 +1614,7 @@ def test_delete_review_item_requires_and_replays_one_principal_bound_idempotency
         },
         command_id="delete-idempotency-bound",
     )
-    route = (
-        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}"
-        f"/items/{first_item['id']}/delete"
-    )
+    route = f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{first_item['id']}/delete"
 
     missing_key = client.post(
         route,
@@ -1735,10 +1671,7 @@ def test_delete_review_item_requires_and_replays_one_principal_bound_idempotency
         },
     }
     payload_conflict = client.post(
-        (
-            f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}"
-            f"/items/{second_item['id']}/delete"
-        ),
+        (f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{second_item['id']}/delete"),
         json=different_payload,
         headers={
             "Idempotency-Key": body["command_id"],
@@ -2598,11 +2531,7 @@ def test_legacy_changes_requested_keeps_current_version_commands_writable(client
     )
 
     with SessionLocal.begin() as session:
-        session.execute(
-            update(ReviewItemModel)
-            .where(ReviewItemModel.id == item["id"])
-            .values(workflow_status="changes_requested")
-        )
+        session.execute(update(ReviewItemModel).where(ReviewItemModel.id == item["id"]).values(workflow_status="changes_requested"))
 
     legacy_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     assert legacy_item["workflow_status"] == "changes_requested"
@@ -2674,9 +2603,7 @@ def test_legacy_changes_requested_keeps_current_version_commands_writable(client
             "frame_number": 12,
         },
     )
-    current_item = api_data(
-        client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}")
-    )
+    current_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     response = client.post(
         f"{base}/issues",
         json=create_after_request,
@@ -2722,16 +2649,8 @@ def test_legacy_changes_requested_keeps_current_version_commands_writable(client
     finalize_project, finalize_item = create_project_item(client, code="LEGACYFINAL")
     create_issue(client, finalize_project["project_ref_id"], finalize_item, content="legacy unresolved finalization")
     with SessionLocal.begin() as session:
-        session.execute(
-            update(ReviewItemModel)
-            .where(ReviewItemModel.id == finalize_item["id"])
-            .values(workflow_status="changes_requested")
-        )
-    legacy_finalize_item = api_data(
-        client.get(
-            f"/api/v1/final-cut-review/projects/{finalize_project['project_ref_id']}/items/{finalize_item['id']}"
-        )
-    )
+        session.execute(update(ReviewItemModel).where(ReviewItemModel.id == finalize_item["id"]).values(workflow_status="changes_requested"))
+    legacy_finalize_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{finalize_project['project_ref_id']}/items/{finalize_item['id']}"))
     assert legacy_finalize_item["workflow_status"] == "changes_requested"
     assert legacy_finalize_item["unresolved_current_version_count"] == 1
     finalization = finalize(client, finalize_project["project_ref_id"], legacy_finalize_item)
@@ -2748,9 +2667,7 @@ def test_issue_query_orders_unmodified_before_modified_then_time_and_number(clie
     resolve_issue(client, project["project_ref_id"], item["id"], item["current_version_id"], early)
 
     listed = api_data(
-        client.get(
-            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/issues"
-        )
+        client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}/versions/{item['current_version_id']}/issues")
     )
     assert [issue["id"] for issue in listed] == [first_at_same_time["id"], second_at_same_time["id"], early["id"]]
     assert [issue["status"] for issue in listed] == ["unresolved", "unresolved", "resolved"]
@@ -3932,9 +3849,7 @@ def test_project_code_is_immutable_and_request_changes_route_is_removed(client: 
     assert api_error(changed_code)["code"] == "VALIDATION_ERROR"
 
     create_issue(client, project["project_ref_id"], item)
-    changed_item = api_data(
-        client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}")
-    )
+    changed_item = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}"))
     assert changed_item["workflow_status"] == "changes_requested"
     request_changes = command(
         "RequestChanges", {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "version_id": item["current_version_id"]}
@@ -4314,10 +4229,7 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
     set_cookie = SimpleCookie()
     set_cookie.load(authorize_zip.headers["set-cookie"])
     cookie_attributes = set_cookie[cookie_name]
-    expected_download_path = (
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        f"/finalized-originals/packages/{package_data['id']}/download"
-    )
+    expected_download_path = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download"
     assert cookie_attributes["httponly"] is True
     assert cookie_attributes["samesite"].lower() == "strict"
     assert cookie_attributes["path"] == expected_download_path
@@ -5553,9 +5465,7 @@ def test_package_download_rejects_snapshot_size_drift_before_streaming(
         assert package.storage_bytes > 0
         session.commit()
 
-    response = client.get(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{ready['id']}/download"
-    )
+    response = client.get(f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{ready['id']}/download")
 
     assert response.status_code == 409
     assert api_error(response)["code"] == "FILE_HASH_MISMATCH"
@@ -5628,10 +5538,7 @@ def test_package_unified_name_rejects_unsafe_input_without_creating_snapshot(
 
     project, item = create_project_item(client, code="PPKGNAME")
     finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
-    endpoint = (
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        "/finalized-originals/packages"
-    )
+    endpoint = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages"
 
     missing_name = command(
         "PrepareFinalizedPackage",
@@ -5728,8 +5635,7 @@ def test_package_prepare_blocks_all_missing_and_duplicate_episode_sources(
         },
     )
     response = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        "/finalized-originals/packages",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages",
         json=body,
         headers={"Idempotency-Key": body["command_id"]},
     )
@@ -5744,10 +5650,7 @@ def test_package_prepare_blocks_all_missing_and_duplicate_episode_sources(
         assert review_item["title"] in error["message"]
     assert "实际集数 缺失或无效" in error["message"]
     assert error["message"].count("实际集数 7") == 2
-    problems = {
-        problem["review_item_id"]: set(problem["reasons"])
-        for problem in error["details"]["problem_items"]
-    }
+    problems = {problem["review_item_id"]: set(problem["reasons"]) for problem in error["details"]["problem_items"]}
     assert set(problems) == {
         missing["id"],
         duplicate_a["id"],
@@ -5766,10 +5669,7 @@ def test_package_name_and_content_are_part_of_pending_ready_and_idempotency_iden
 ) -> None:
     project, item = create_project_item(client, code="PPKGIDENTITY")
     finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
-    endpoint = (
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        "/finalized-originals/packages"
-    )
+    endpoint = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages"
 
     def request_named_package(name: str, command_id: str | None = None) -> Any:
         body = command(
@@ -5857,10 +5757,7 @@ def test_package_worker_revalidates_archive_safety_and_authoritative_episode(
 
     project, item = create_project_item(client, code="PPKGWORKER")
     finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
-    endpoint = (
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
-        "/finalized-originals/packages"
-    )
+    endpoint = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages"
 
     unsafe_command = command(
         "PrepareFinalizedPackage",
@@ -5886,10 +5783,7 @@ def test_package_worker_revalidates_archive_safety_and_authoritative_episode(
         assert snapshot.status == "failed"
         assert snapshot.failure_details is not None
         assert snapshot.failure_details["error_code"] == "PACKAGE_SOURCE_MISSING"
-    assert not any(
-        path.name.startswith(unsafe_package_id)
-        for path in managed_directory_entries(get_settings().package_root)
-    )
+    assert not any(path.name.startswith(unsafe_package_id) for path in managed_directory_entries(get_settings().package_root))
 
     episode_command = command(
         "PrepareFinalizedPackage",
@@ -5915,10 +5809,7 @@ def test_package_worker_revalidates_archive_safety_and_authoritative_episode(
         assert snapshot.status == "failed"
         assert snapshot.failure_details is not None
         assert snapshot.failure_details["error_code"] == "PACKAGE_SOURCE_MISSING"
-    assert not any(
-        path.name.startswith(episode_package_id)
-        for path in managed_directory_entries(get_settings().package_root)
-    )
+    assert not any(path.name.startswith(episode_package_id) for path in managed_directory_entries(get_settings().package_root))
 
 
 def test_package_archive_names_ttl_and_failed_event(client: TestClient) -> None:
@@ -6290,11 +6181,7 @@ def test_upload_init_ambiguous_commit_replays_single_quota_reservation(
     def commit_then_raise(session: OrmSession) -> None:
         nonlocal raised
         init_record = session.get(IdempotencyRecordModel, key)
-        is_init_commit = (
-            init_record is not None
-            and init_record.command_type == "InitUpload"
-            and init_record.status_code == 200
-        )
+        is_init_commit = init_record is not None and init_record.command_type == "InitUpload" and init_record.status_code == 200
         original_commit(session)
         if is_init_commit and not raised:
             raised = True
@@ -6630,9 +6517,7 @@ def test_shared_storage_lock_is_taken_after_expensive_reuse_integrity_scan() -> 
     from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
 
     source = inspect.getsource(SqlAlchemyReviewRepository.prepare_package)
-    assert source.index("self._ready_package_reuse_integrity") < source.index(
-        '{"lock_key": STORAGE_ADMISSION_ADVISORY_LOCK_KEY}'
-    )
+    assert source.index("self._ready_package_reuse_integrity") < source.index('{"lock_key": STORAGE_ADMISSION_ADVISORY_LOCK_KEY}')
 
 
 @pytest.mark.parametrize("corrupt_newest", [False, True])
@@ -6775,14 +6660,20 @@ def test_package_limit_comparison_accepts_exact_boundaries_and_rejects_plus_one(
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     max_legal_archive_name = "a" * ZIP_MAX_ARCHIVE_NAME_BYTES
-    assert estimate_package_storage_bytes(
-        settings.max_package_bytes,
-        [max_legal_archive_name] * settings.max_package_files,
-    ) == settings.max_package_storage_bytes
-    assert validate_package_limits(
-        cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=1) for _ in range(200)]),
-        settings,
-    ) == 200
+    assert (
+        estimate_package_storage_bytes(
+            settings.max_package_bytes,
+            [max_legal_archive_name] * settings.max_package_files,
+        )
+        == settings.max_package_storage_bytes
+    )
+    assert (
+        validate_package_limits(
+            cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=1) for _ in range(200)]),
+            settings,
+        )
+        == 200
+    )
     with pytest.raises(ReviewError) as count_error:
         validate_package_limits(
             cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=1) for _ in range(201)]),
@@ -6791,10 +6682,13 @@ def test_package_limit_comparison_accepts_exact_boundaries_and_rejects_plus_one(
     assert count_error.value.code == "FILE_TOO_LARGE"
     assert count_error.value.message == "项目定稿原片数量超出打包限制"
 
-    assert validate_package_limits(
-        cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=53_687_091_200)]),
-        settings,
-    ) == 53_687_091_200
+    assert (
+        validate_package_limits(
+            cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=53_687_091_200)]),
+            settings,
+        )
+        == 53_687_091_200
+    )
     with pytest.raises(ReviewError) as byte_error:
         validate_package_limits(
             cast(list[FinalizationRecordModel], [SimpleNamespace(file_size=53_687_091_201)]),
@@ -7878,11 +7772,7 @@ def test_complete_claim_ambiguous_commit_continues_finalization(
         claim_committing = upload is not None and upload.status == "finalizing"
         if claim_committing:
             record = session.get(IdempotencyRecordModel, complete_key)
-            claim_committing = bool(
-                record is not None
-                and record.command_type == "CompleteUpload"
-                and record.status_code == 102
-            )
+            claim_committing = bool(record is not None and record.command_type == "CompleteUpload" and record.status_code == 102)
         original_commit(session)
         if claim_committing and not raised:
             raised = True
@@ -7934,12 +7824,7 @@ def test_complete_pending_replay_resumes_active_lease_after_unknown_commit_outco
         nonlocal raised
         upload = session.get(UploadSessionModel, upload_id)
         record = session.get(IdempotencyRecordModel, complete_key)
-        claim_committing = bool(
-            upload is not None
-            and upload.status == "finalizing"
-            and record is not None
-            and record.status_code == 102
-        )
+        claim_committing = bool(upload is not None and upload.status == "finalizing" and record is not None and record.status_code == 102)
         original_commit(session)
         if claim_committing and not raised:
             raised = True

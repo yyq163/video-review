@@ -49,6 +49,7 @@ export class InMemoryReviewRepository {
   readonly deleteIssue: InMemoryReviewIssues['deleteIssue'];
   readonly finalizeCurrentVersion: InMemoryReviewFinalizations['finalizeCurrentVersion'];
   readonly revokeFinalization: InMemoryReviewFinalizations['revokeFinalization'];
+  readonly retryFinalizationCleanup: InMemoryReviewFinalizations['retryFinalizationCleanup'];
 
   constructor(
     seed: Partial<InMemoryReviewRepositorySnapshot> = createSeedData(),
@@ -93,6 +94,7 @@ export class InMemoryReviewRepository {
     this.deleteIssue = issues.deleteIssue;
     this.finalizeCurrentVersion = finalizations.finalizeCurrentVersion;
     this.revokeFinalization = finalizations.revokeFinalization;
+    this.retryFinalizationCleanup = finalizations.retryFinalizationCleanup;
   }
 
   static seededFiles(): StoredOriginalFile[] {

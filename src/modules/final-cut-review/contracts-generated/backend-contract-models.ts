@@ -219,6 +219,13 @@ export interface FinalizationRevocationDTO {
   invalidated_package_ids: string[];
 }
 
+export interface FinalizationCleanupRetryDTO {
+  project_ref_id: string;
+  review_item_id: string;
+  cleanup_status: "pending" | "complete";
+  requeued_package_ids: string[];
+}
+
 export interface PackageSnapshotItem {
   review_item_id: string;
   version_id: string;

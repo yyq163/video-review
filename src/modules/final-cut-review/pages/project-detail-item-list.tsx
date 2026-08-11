@@ -4,7 +4,13 @@ import { Link } from 'react-router-dom';
 import { CapabilityGate, EmptyState, IconText, StatusBadge } from '../components/shared';
 import { ReviewItemMetadataEditor, type ReviewItemMetadataValues } from '../components/MetadataEditors';
 import { FinalizedRevokeControl, type FinalizedRevokeUiState } from '../components/FinalizedRevokeControl';
-import type { EntryMode, FinalizationRevocation, ReviewItem } from '../contracts/types';
+import { FinalizationCleanupRetryControl } from '../components/FinalizationCleanupRetryControl';
+import type {
+  EntryMode,
+  FinalizationCleanupRetry,
+  FinalizationRevocation,
+  ReviewItem,
+} from '../contracts/types';
 import { formatEpisodeDisplayValue, type ReviewEpisodeGroup } from '../core/episode-dedupe';
 import type { ReviewProjectSummaryItem } from '../ports';
 
@@ -46,6 +52,9 @@ interface ProjectDetailItemListProps {
   onDeleteReviewItem: (item: ReviewItem) => void;
   onThumbnailLoadError: (item: ReviewProjectSummaryItem) => Promise<unknown>;
   onRevokeFinalization?: (item: ReviewProjectSummaryItem) => Promise<FinalizationRevocation>;
+  onRetryFinalizationCleanup?: (
+    item: ReviewProjectSummaryItem,
+  ) => Promise<FinalizationCleanupRetry>;
   revocationUncertainIds?: ReadonlySet<string>;
   onUpdateReviewItemMetadata: (
     item: ReviewProjectSummaryItem,
@@ -151,6 +160,7 @@ export function ProjectDetailItemList({
   onDeleteReviewItem,
   onThumbnailLoadError,
   onRevokeFinalization,
+  onRetryFinalizationCleanup,
   revocationUncertainIds,
   onUpdateReviewItemMetadata,
   projectRefId,
@@ -593,9 +603,16 @@ export function ProjectDetailItemList({
                 <span className="fj-review-revoke-state" role="status">
                   定稿已撤回，关联包清理中
                 </span>
+              ) : cleanupFailed && entryMode === 'review' && !isArchived && onRetryFinalizationCleanup ? (
+                <FinalizationCleanupRetryControl
+                  blocked={itemActionPending}
+                  entryMode={entryMode}
+                  item={item}
+                  onRetry={() => onRetryFinalizationCleanup(item)}
+                />
               ) : cleanupFailed ? (
-                <span className="fj-review-form-error" role="alert">
-                  定稿已撤回，关联包清理失败，等待受控重试
+                <span className="fj-review-form-error fj-review-cleanup-failed-readonly" role="alert">
+                  定稿已撤回，关联包清理失败。
                 </span>
               ) : null}
             </div>

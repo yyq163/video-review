@@ -42,6 +42,7 @@ export class MockReviewApiAdapter implements ReviewApiPort {
   readonly deleteIssue: ReviewApiPort['deleteIssue'];
   readonly finalizeCurrentVersion: ReviewApiPort['finalizeCurrentVersion'];
   readonly revokeFinalization: ReviewApiPort['revokeFinalization'];
+  readonly retryFinalizationCleanup: ReviewApiPort['retryFinalizationCleanup'];
   readonly downloadFinalizedOriginal: ReviewApiPort['downloadFinalizedOriginal'];
   readonly createProjectFinalizedPackage: ReviewApiPort['createProjectFinalizedPackage'];
   readonly downloadProjectFinalizedPackage: ReviewApiPort['downloadProjectFinalizedPackage'];
@@ -98,6 +99,7 @@ export class MockReviewApiAdapter implements ReviewApiPort {
     this.deleteIssue = issues.deleteIssue;
     this.finalizeCurrentVersion = workflow.finalizeCurrentVersion;
     this.revokeFinalization = workflow.revokeFinalization;
+    this.retryFinalizationCleanup = workflow.retryFinalizationCleanup;
     this.downloadFinalizedOriginal = downloads.downloadFinalizedOriginal;
     this.createProjectFinalizedPackage = downloads.createProjectFinalizedPackage;
     this.downloadProjectFinalizedPackage = downloads.downloadProjectFinalizedPackage;

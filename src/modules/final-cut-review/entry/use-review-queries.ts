@@ -731,6 +731,13 @@ export function useReviewMutations(mode: EntryMode) {
         );
       },
     }),
+    retryFinalizationCleanup: useMutation({
+      mutationFn: (input: Parameters<typeof api.retryFinalizationCleanup>[0]) =>
+        api.retryFinalizationCleanup(input, context()),
+      onSuccess: async (result) => {
+        await invalidateProject(result.projectRefId);
+      },
+    }),
     downloadFinalizedOriginal: useMutation({
       mutationFn: (input: Parameters<typeof api.downloadFinalizedOriginal>[0]) =>
         api.downloadFinalizedOriginal(input, context()),
