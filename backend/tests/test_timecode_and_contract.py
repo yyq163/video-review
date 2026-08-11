@@ -14,7 +14,15 @@ from pydantic import ValidationError
 
 from backend.app.modules.final_cut_review.domain.timecode import frame_from_timestamp_ms, format_review_timecode, timestamp_ms_from_frame
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import OperationLogModel
-from backend.app.modules.review_contracts.generated import Envelope, ErrorBody, ErrorEnvelope, ReviewPlaybackTarget, ResponseMeta, validate_domain_event_payload
+from backend.app.modules.review_contracts.generated import (
+    CommandEnvelope,
+    Envelope,
+    ErrorBody,
+    ErrorEnvelope,
+    ReviewPlaybackTarget,
+    ResponseMeta,
+    validate_domain_event_payload,
+)
 
 
 def _load_contract_generator() -> ModuleType:
@@ -152,6 +160,25 @@ def test_openapi_contract_has_complete_runtime_shapes() -> None:
         for status in ("200", "206"):
             assert set(operations[operation_id]["responses"][status]["content"]) == expected_media_types
     assert set(operations["download_package"]["responses"]["200"]["content"]) == {"application/zip"}
+    package_payload = schemas["PrepareFinalizedPackagePayload"]
+    assert package_payload["required"] == ["project_ref_id", "unified_name"]
+    assert package_payload["properties"]["unified_name"] == {"type": "string", "minLength": 1}
+
+
+def test_prepare_package_command_requires_unified_name_in_shared_contract() -> None:
+    with pytest.raises(ValidationError):
+        CommandEnvelope(
+            command_id="prepare-without-name",
+            command_type="PrepareFinalizedPackage",
+            payload={"project_ref_id": "project"},
+        )
+
+    command = CommandEnvelope(
+        command_id="prepare-with-name",
+        command_type="PrepareFinalizedPackage",
+        payload={"project_ref_id": "project", "unified_name": "原样.Name-01"},
+    )
+    assert command.payload["unified_name"] == "原样.Name-01"
 
 
 @pytest.mark.parametrize(
@@ -239,6 +266,8 @@ def test_generated_types_include_command_ancestry_fields() -> None:
     assert "review_item_id: string;" in generated
     assert "export interface FinalizeVersionPayload" in generated
     assert "version_id: string;" in generated
+    assert "export interface PrepareFinalizedPackagePayload" in generated
+    assert "unified_name: string;" in generated
 
 
 def test_operation_log_attribution_migration_is_reversible_and_follows_project_description() -> None:

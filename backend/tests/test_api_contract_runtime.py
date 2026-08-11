@@ -1272,6 +1272,7 @@ def test_each_finalization_in_an_invalidated_multi_item_package_tracks_pending_c
         project["project_ref_id"],
         upload_video(client, seed=b"second"),
         "REV-MULTI-2",
+        episode_no=2,
     )
     first_finalization = finalize(client, project["project_ref_id"], first_item)
     second_finalization = finalize(client, project["project_ref_id"], second_item)
@@ -4237,6 +4238,8 @@ def test_precise_playback_revision_immutable_and_anti_cross_project(client: Test
 
 
 def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient) -> None:
+    from http.cookies import SimpleCookie
+
     project, item = create_project_item(client)
     fin = finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
     download = client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items/{item['id']}/finalized-original/download")
@@ -4267,6 +4270,7 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
         IdempotencyRecordModel,
         utcnow,
     )
+    from backend.app.settings import get_settings
 
     with SessionLocal() as session:
         persisted = session.get(IdempotencyRecordModel, package_cmd["command_id"])
@@ -4277,6 +4281,7 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
         assert persisted_package is not None
         assert persisted_package.storage_bytes == Path(persisted_package.storage_path).stat().st_size
         assert persisted_package.storage_bytes > persisted_package.total_bytes
+        expected_package_bytes = Path(persisted_package.storage_path).read_bytes()
     replay = client.post(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages",
         json=package_cmd,
@@ -4285,7 +4290,13 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
     assert replay.status_code == 202, replay.text
     assert api_data(replay)["download_token"]
 
-    second_item = create_item(client, project["project_ref_id"], upload_video(client, filename="second.mp4", seed=b"9"), item_code="FC002")
+    second_item = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, filename="second.mp4", seed=b"9"),
+        item_code="FC002",
+        episode_no=2,
+    )
     finalize(client, project["project_ref_id"], second_item, if_match=second_item["lock_version"])
     old_snapshot = client.get(f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}")
     assert old_snapshot.status_code == 200
@@ -4297,17 +4308,35 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
         headers={"X-Package-Download-Token": package_data["download_token"]},
     )
     assert authorize_zip.status_code == 200
-    download_cookie = authorize_zip.cookies.get(f"fj_pkg_{package_data['id']}")
+    cookie_name = f"fj_pkg_{package_data['id']}"
+    download_cookie = authorize_zip.cookies.get(cookie_name)
     assert download_cookie
+    set_cookie = SimpleCookie()
+    set_cookie.load(authorize_zip.headers["set-cookie"])
+    cookie_attributes = set_cookie[cookie_name]
+    expected_download_path = (
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        f"/finalized-originals/packages/{package_data['id']}/download"
+    )
+    assert cookie_attributes["httponly"] is True
+    assert cookie_attributes["samesite"].lower() == "strict"
+    assert cookie_attributes["path"] == expected_download_path
+    assert int(cookie_attributes["max-age"]) == get_settings().package_download_session_ttl_seconds
+    assert 30 <= int(cookie_attributes["max-age"]) <= 300
     first_request_cannot_skip_to_a_nonzero_range = client.get(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
         headers={"Range": "bytes=4-15"},
     )
     assert first_request_cannot_skip_to_a_nonzero_range.status_code == 409
     assert api_error(first_request_cannot_skip_to_a_nonzero_range)["code"] == "RESOURCE_STATE_CONFLICT"
-    cookie_zip = client.get(f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download")
+    cookie_zip = client.get(
+        expected_download_path,
+        headers={"Range": f"bytes=0-{len(expected_package_bytes) - 1}"},
+    )
     assert cookie_zip.status_code == 200
-    assert cookie_zip.content.startswith(b"PK")
+    assert "content-range" not in cookie_zip.headers
+    assert cookie_zip.content == expected_package_bytes
+    assert hashlib.sha256(cookie_zip.content).hexdigest() == package_data["sha256"]
     completed_download_cannot_claim_resume = client.get(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
         headers={"Range": "bytes=4-"},
@@ -4316,7 +4345,6 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
 
     from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
     from backend.app.modules.review_http.query_routes import release_package_download_lease
-    from backend.app.settings import get_settings
 
     with SessionLocal() as session:
         package_row = session.get(FinalCutPackageSnapshotModel, package_data["id"])
@@ -5589,12 +5617,337 @@ def test_expired_package_idempotency_replay_never_reissues_download_token(client
     assert api_error(replay)["code"] == "PACKAGE_EXPIRED"
 
 
+def test_package_unified_name_rejects_unsafe_input_without_creating_snapshot(
+    client: TestClient,
+) -> None:
+    from sqlalchemy import func, select
+
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="PPKGNAME")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    endpoint = (
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        "/finalized-originals/packages"
+    )
+
+    missing_name = command(
+        "PrepareFinalizedPackage",
+        {"project_ref_id": project["project_ref_id"]},
+    )
+    missing_name["payload"].pop("unified_name")
+    missing_response = client.post(
+        endpoint,
+        json=missing_name,
+        headers={"Idempotency-Key": missing_name["command_id"]},
+    )
+    assert missing_response.status_code == 422
+    assert api_error(missing_response)["code"] == "VALIDATION_ERROR"
+
+    unsafe_names = (
+        "",
+        "   ",
+        "\x00name",
+        "/absolute",
+        "../traversal",
+        "folder/name",
+        "folder\\name",
+        "C:\\absolute",
+        "C:drive-relative",
+        ".",
+        "..",
+    )
+    for index, unsafe_name in enumerate(unsafe_names):
+        body = command(
+            "PrepareFinalizedPackage",
+            {
+                "project_ref_id": project["project_ref_id"],
+                "unified_name": unsafe_name,
+            },
+            command_id=f"unsafe-package-name-{index}",
+        )
+        response = client.post(
+            endpoint,
+            json=body,
+            headers={"Idempotency-Key": body["command_id"]},
+        )
+        assert response.status_code == 422, (unsafe_name, response.text)
+        assert api_error(response)["code"] == "VALIDATION_ERROR"
+
+    with SessionLocal() as session:
+        assert session.scalar(select(func.count()).select_from(FinalCutPackageSnapshotModel)) == 0
+    assert not managed_directory_entries(get_settings().package_root)
+
+
+def test_package_prepare_blocks_all_missing_and_duplicate_episode_sources(
+    client: TestClient,
+) -> None:
+    from sqlalchemy import func, select
+
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
+    from backend.app.settings import get_settings
+
+    project = create_project(client, "PPKGEPNO")
+    missing = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, filename="missing.mp4", seed=b"m"),
+        item_code="99",
+        episode_no=None,
+    )
+    duplicate_a = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, filename="duplicate-a.mp4", seed=b"a"),
+        item_code="07A",
+        episode_no=7,
+    )
+    duplicate_b = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, filename="duplicate-b.mp4", seed=b"b"),
+        item_code="07B",
+        episode_no=7,
+    )
+    for review_item in (missing, duplicate_a, duplicate_b):
+        finalize(
+            client,
+            project["project_ref_id"],
+            review_item,
+            if_match=review_item["lock_version"],
+        )
+
+    body = command(
+        "PrepareFinalizedPackage",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "unified_name": "冲突必须整包阻断",
+        },
+    )
+    response = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        "/finalized-originals/packages",
+        json=body,
+        headers={"Idempotency-Key": body["command_id"]},
+    )
+
+    assert response.status_code == 409, response.text
+    error = api_error(response)
+    assert error["code"] == "RESOURCE_STATE_CONFLICT"
+    assert "问题集：" in error["message"]
+    for review_item in (missing, duplicate_a, duplicate_b):
+        assert review_item["id"] in error["message"]
+        assert review_item["item_code"] in error["message"]
+        assert review_item["title"] in error["message"]
+    assert "实际集数 缺失或无效" in error["message"]
+    assert error["message"].count("实际集数 7") == 2
+    problems = {
+        problem["review_item_id"]: set(problem["reasons"])
+        for problem in error["details"]["problem_items"]
+    }
+    assert set(problems) == {
+        missing["id"],
+        duplicate_a["id"],
+        duplicate_b["id"],
+    }
+    assert problems[missing["id"]] == {"episode_no_missing_or_invalid"}
+    assert problems[duplicate_a["id"]] == {"duplicate_episode_no"}
+    assert problems[duplicate_b["id"]] == {"duplicate_episode_no"}
+    with SessionLocal() as session:
+        assert session.scalar(select(func.count()).select_from(FinalCutPackageSnapshotModel)) == 0
+    assert not managed_directory_entries(get_settings().package_root)
+
+
+def test_package_name_and_content_are_part_of_pending_ready_and_idempotency_identity(
+    client: TestClient,
+) -> None:
+    project, item = create_project_item(client, code="PPKGIDENTITY")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    endpoint = (
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        "/finalized-originals/packages"
+    )
+
+    def request_named_package(name: str, command_id: str | None = None) -> Any:
+        body = command(
+            "PrepareFinalizedPackage",
+            {"project_ref_id": project["project_ref_id"], "unified_name": name},
+            command_id=command_id,
+        )
+        return client.post(
+            endpoint,
+            json=body,
+            headers={"Idempotency-Key": body["command_id"]},
+        )
+
+    first_command_id = "package-name-command-identity"
+    first = request_named_package("同内容-名称A", first_command_id)
+    assert first.status_code == 202, first.text
+    first_ready = get_package_snapshot(
+        client,
+        project["project_ref_id"],
+        api_data(first)["id"],
+    )
+    assert first_ready["status"] == "ready"
+
+    changed_idempotent_payload = request_named_package("同内容-名称B", first_command_id)
+    assert changed_idempotent_payload.status_code == 409
+    assert api_error(changed_idempotent_payload)["code"] == "IDEMPOTENCY_CONFLICT"
+
+    reused_ready = request_named_package("同内容-名称A")
+    assert reused_ready.status_code == 202, reused_ready.text
+    assert api_data(reused_ready)["id"] == first_ready["id"]
+    assert api_data(reused_ready)["status"] == "ready"
+
+    different_name = request_named_package("同内容-名称B")
+    assert different_name.status_code == 202, different_name.text
+    different_name_data = api_data(different_name)
+    assert different_name_data["status"] == "preparing"
+    assert different_name_data["id"] != first_ready["id"]
+
+    reused_pending = request_named_package("同内容-名称B")
+    assert reused_pending.status_code == 202, reused_pending.text
+    assert api_data(reused_pending)["id"] == different_name_data["id"]
+
+    conflicting_pending = request_named_package("同内容-名称C")
+    assert conflicting_pending.status_code == 409
+    assert api_error(conflicting_pending)["code"] == "RESOURCE_STATE_CONFLICT"
+
+    ready_while_other_name_is_pending = request_named_package("同内容-名称A")
+    assert ready_while_other_name_is_pending.status_code == 202
+    assert api_data(ready_while_other_name_is_pending)["id"] == first_ready["id"]
+
+    second_ready = get_package_snapshot(
+        client,
+        project["project_ref_id"],
+        different_name_data["id"],
+    )
+    assert second_ready["status"] == "ready"
+
+    second_item = create_item(
+        client,
+        project["project_ref_id"],
+        upload_video(client, filename="second-content.mp4", seed=b"2"),
+        item_code="02",
+        episode_no=2,
+    )
+    finalize(
+        client,
+        project["project_ref_id"],
+        second_item,
+        if_match=second_item["lock_version"],
+    )
+    different_content = request_named_package("同内容-名称A")
+    assert different_content.status_code == 202, different_content.text
+    different_content_data = api_data(different_content)
+    assert different_content_data["status"] == "preparing"
+    assert different_content_data["id"] not in {first_ready["id"], second_ready["id"]}
+
+
+def test_package_worker_revalidates_archive_safety_and_authoritative_episode(
+    client: TestClient,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
+    from backend.app.package_builds import process_package_snapshot
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="PPKGWORKER")
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    endpoint = (
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        "/finalized-originals/packages"
+    )
+
+    unsafe_command = command(
+        "PrepareFinalizedPackage",
+        {"project_ref_id": project["project_ref_id"], "unified_name": "安全名称"},
+    )
+    unsafe_response = client.post(
+        endpoint,
+        json=unsafe_command,
+        headers={"Idempotency-Key": unsafe_command["command_id"]},
+    )
+    unsafe_package_id = api_data(unsafe_response)["id"]
+    with SessionLocal() as session:
+        snapshot = session.get(FinalCutPackageSnapshotModel, unsafe_package_id)
+        assert snapshot is not None
+        tampered_items = [dict(package_item) for package_item in snapshot.items]
+        tampered_items[0]["archive_name"] = "../escape.mp4"
+        snapshot.items = tampered_items
+        session.commit()
+    assert process_package_snapshot(unsafe_package_id) == "failed"
+    with SessionLocal() as session:
+        snapshot = session.get(FinalCutPackageSnapshotModel, unsafe_package_id)
+        assert snapshot is not None
+        assert snapshot.status == "failed"
+        assert snapshot.failure_details is not None
+        assert snapshot.failure_details["error_code"] == "PACKAGE_SOURCE_MISSING"
+    assert not any(
+        path.name.startswith(unsafe_package_id)
+        for path in managed_directory_entries(get_settings().package_root)
+    )
+
+    episode_command = command(
+        "PrepareFinalizedPackage",
+        {"project_ref_id": project["project_ref_id"], "unified_name": "集数重验"},
+    )
+    episode_response = client.post(
+        endpoint,
+        json=episode_command,
+        headers={"Idempotency-Key": episode_command["command_id"]},
+    )
+    episode_package_id = api_data(episode_response)["id"]
+    with SessionLocal() as session:
+        snapshot = session.get(FinalCutPackageSnapshotModel, episode_package_id)
+        assert snapshot is not None
+        tampered_items = [dict(package_item) for package_item in snapshot.items]
+        tampered_items[0]["archive_name"] = "集数重验-第2集.mp4"
+        snapshot.items = tampered_items
+        session.commit()
+    assert process_package_snapshot(episode_package_id) == "failed"
+    with SessionLocal() as session:
+        snapshot = session.get(FinalCutPackageSnapshotModel, episode_package_id)
+        assert snapshot is not None
+        assert snapshot.status == "failed"
+        assert snapshot.failure_details is not None
+        assert snapshot.failure_details["error_code"] == "PACKAGE_SOURCE_MISSING"
+    assert not any(
+        path.name.startswith(episode_package_id)
+        for path in managed_directory_entries(get_settings().package_root)
+    )
+
+
 def test_package_archive_names_ttl_and_failed_event(client: TestClient) -> None:
     project = create_project(client, "PPKG")
 
-    def create_custom_item(item_code: str, title: str, seed: bytes) -> dict[str, Any]:
-        file_id = upload_video(client, filename="same.mp4", seed=seed)
-        body = command("CreateReviewItem", {"project_ref_id": project["project_ref_id"], "item_code": item_code, "title": title, "original_file_id": file_id})
+    def create_custom_item(
+        item_code: str,
+        title: str,
+        seed: bytes,
+        *,
+        episode_no: int,
+        filename: str,
+    ) -> dict[str, Any]:
+        file_id = upload_video(
+            client,
+            filename=filename,
+            seed=seed,
+            mime_type="video/quicktime" if filename.endswith(".mov") else "video/mp4",
+        )
+        body = command(
+            "CreateReviewItem",
+            {
+                "project_ref_id": project["project_ref_id"],
+                "item_code": item_code,
+                "episode_no": episode_no,
+                "title": title,
+                "original_file_id": file_id,
+            },
+        )
         response = client.post(
             f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items",
             json=body,
@@ -5603,11 +5956,27 @@ def test_package_archive_names_ttl_and_failed_event(client: TestClient) -> None:
         assert response.status_code == 201, response.text
         return api_data(response)
 
-    item_a = create_custom_item("X/ID", "Same/Title", b"a")
-    item_b = create_custom_item("ID", "Title", b"b")
+    item_a = create_custom_item(
+        "01",
+        "Same/Title",
+        b"a",
+        episode_no=1,
+        filename="same.mp4",
+    )
+    item_b = create_custom_item(
+        "09",
+        "Title",
+        b"b",
+        episode_no=9,
+        filename="same.mov",
+    )
     finalize(client, project["project_ref_id"], item_a, if_match=item_a["lock_version"])
     finalize(client, project["project_ref_id"], item_b, if_match=item_b["lock_version"])
-    package_cmd = command("PrepareFinalizedPackage", {"project_ref_id": project["project_ref_id"]})
+    unified_name = " 作品.Name-V1！ "
+    package_cmd = command(
+        "PrepareFinalizedPackage",
+        {"project_ref_id": project["project_ref_id"], "unified_name": unified_name},
+    )
     package = client.post(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages",
         json=package_cmd,
@@ -5622,8 +5991,10 @@ def test_package_archive_names_ttl_and_failed_event(client: TestClient) -> None:
     expires_at = datetime.fromisoformat(package_data["expires_at"])
     assert expires_at - datetime.now(timezone.utc) > timedelta(hours=23)
     names = [entry["archive_name"] for entry in package_data["items"]]
-    assert len(names) == len(set(names)) == 2
-    assert any(item_a["id"][-8:] in name or item_b["id"][-8:] in name for name in names)
+    assert set(names) == {
+        f"{unified_name}-第1集.mp4",
+        f"{unified_name}-第9集.mov",
+    }
 
     bad_zip = client.get(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
@@ -5662,7 +6033,10 @@ def test_package_archive_names_ttl_and_failed_event(client: TestClient) -> None:
     finally:
         session.close()
 
-    failed_cmd = command("PrepareFinalizedPackage", {"project_ref_id": project["project_ref_id"]})
+    failed_cmd = command(
+        "PrepareFinalizedPackage",
+        {"project_ref_id": project["project_ref_id"], "unified_name": unified_name},
+    )
     failed = client.post(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages",
         json=failed_cmd,
@@ -6428,6 +6802,21 @@ def test_package_limit_comparison_accepts_exact_boundaries_and_rejects_plus_one(
         )
     assert byte_error.value.code == "FILE_TOO_LARGE"
     assert byte_error.value.message == "项目定稿原片总大小超出打包限制"
+
+
+def test_package_name_and_original_extension_helpers_preserve_exact_valid_input() -> None:
+    from backend.app.modules.final_cut_review.domain.errors import ReviewError
+    from backend.app.modules.final_cut_review.infra.repositories import (
+        package_original_extension,
+        validate_package_unified_name,
+    )
+
+    unified_name = "  中文 English.Name-V1！ "
+    assert validate_package_unified_name(unified_name) == unified_name
+    assert package_original_extension("原片.Final.MOV") == ".MOV"
+    with pytest.raises(ReviewError) as missing_extension:
+        package_original_extension("没有扩展名")
+    assert missing_extension.value.code == "RESOURCE_STATE_CONFLICT"
 
 
 def test_package_archive_stream_forces_zip64_without_large_fixture(

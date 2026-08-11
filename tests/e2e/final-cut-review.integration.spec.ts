@@ -164,7 +164,8 @@ test('real proxy, backend, and PostgreSQL persist one V1/V2/V3 chain', async ({ 
   await expect(page.getByText('历史意见 2')).toBeVisible();
   await page.getByTestId('version-V1').click();
   await expect(page.getByTestId('decision-bar')).toContainText('历史版本只读');
-  await expect(page.getByTestId('issue-form')).toHaveCount(0);
+  await expect(page.getByTestId('issue-form')).toBeVisible();
+  await expect(page.getByLabel('当前版本意见正文')).toBeDisabled();
   await expect(
     page.locator('.fj-review-issue-card').filter({ hasText: 'V1 首条意见即隐式开始审阅' }).first(),
   ).toBeVisible();
@@ -220,7 +221,8 @@ test('real proxy, backend, and PostgreSQL persist one V1/V2/V3 chain', async ({ 
   });
   await page.getByTestId('finalize-current').click();
   await expect(page.getByText('当前版本已精确定稿冻结。')).toBeVisible();
-  await expect(page.getByTestId('issue-form')).toHaveCount(0);
+  await expect(page.getByTestId('issue-form')).toBeVisible();
+  await expect(page.getByLabel('当前版本意见正文')).toBeDisabled();
 
   await page.goto('/review/projects');
   const projectCard = page.locator('.fj-review-project-card').filter({ hasText: updatedProjectName });

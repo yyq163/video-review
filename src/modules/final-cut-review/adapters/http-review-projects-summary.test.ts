@@ -4,6 +4,7 @@ import type {
   ReviewItemDTO,
   ReviewVersionDTO,
 } from '../contracts-generated/backend-contract';
+import type { ReviewIssue } from '../contracts/types';
 import type { HttpReviewQueries } from './http-review-queries';
 import { HttpReviewProjects } from './http-review-projects';
 import type { HttpReviewTransport } from './http-review-transport';
@@ -20,6 +21,45 @@ const project: ProjectDTO = {
   created_at: '2026-07-31T00:00:00.000Z',
   updated_at: '2026-07-31T00:01:00.000Z',
 };
+
+function makeIssue(versionId: string, issueNo: number): ReviewIssue {
+  const issueId = `issue-${versionId}`;
+  const revisionId = `revision-${versionId}`;
+  const timestamp = '2026-07-31T00:00:00.000Z';
+  const currentRevision = {
+    revisionId,
+    projectRefId: project.project_ref_id,
+    reviewItemId: 'item-workspace',
+    versionId,
+    issueId,
+    revisionNo: 1,
+    content: `issue for ${versionId}`,
+    timestampMs: issueNo * 40,
+    frameNumber: issueNo,
+    createdAt: timestamp,
+  };
+  return {
+    issueId,
+    issueNo,
+    projectRefId: project.project_ref_id,
+    reviewItemId: 'item-workspace',
+    versionId,
+    status: 'unresolved',
+    severity: 'normal',
+    currentRevisionId: revisionId,
+    timestampMs: currentRevision.timestampMs,
+    frameNumber: currentRevision.frameNumber,
+    lockVersion: 1,
+    body: currentRevision.content,
+    currentRevision,
+    currentAnnotationSet: null,
+    revisions: [currentRevision],
+    replies: [],
+    deletedAt: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
 
 describe('HTTP project summary adapter', () => {
   it('uses one aggregate route, trusts server delete eligibility, and exposes only ready protected media URLs', async () => {
@@ -113,6 +153,35 @@ describe('HTTP project summary adapter', () => {
             reason: null,
           },
         },
+        {
+          id: 'item-legacy-no-episode',
+          project_ref_id: project.project_ref_id,
+          item_code: 'CUT-A',
+          episode_no: null,
+          title: 'Legacy item without authoritative episode',
+          workflow_state: 'pending_review',
+          lock_version: 1,
+          current_version_id: 'version-legacy',
+          current_version: {
+            id: 'version-legacy',
+            version_no: 1,
+            version_label: 'V1',
+            duration_ms: 5_000,
+            file_size: 9_000,
+            playback_status: 'pending',
+            playback_url: null,
+            thumbnail_status: 'pending',
+            thumbnail_url: null,
+          },
+          unresolved_current_version_count: 0,
+          finalization: null,
+          revocation_cleanup_status: 'none',
+          bulk_delete: {
+            eligible: false,
+            locked: false,
+            reason: 'AUTHORITATIVE_EPISODE_MISSING',
+          },
+        },
       ],
     });
     const transport = {
@@ -164,9 +233,15 @@ describe('HTTP project summary adapter', () => {
       thumbnailStatus: 'failed',
       thumbnailUrl: null,
     });
+    expect(
+      summary.items.find((item) => item.reviewItemId === 'item-legacy-no-episode'),
+    ).toMatchObject({
+      itemCode: 'CUT-A',
+      episode: '',
+    });
   });
 
-  it('loads only the selected version issue list when workspace refreshes and never fans out historical issue details', async () => {
+  it('loads every version issue page, classifies by authoritative current id, and fails closed on a partial history error', async () => {
     const item: ReviewItemDTO = {
       id: 'item-workspace',
       project_ref_id: project.project_ref_id,
@@ -247,20 +322,30 @@ describe('HTTP project summary adapter', () => {
       queryInit: vi.fn(),
       baseUrl: 'https://review.example',
     } as unknown as HttpReviewTransport;
+    const issuesForVersion = vi.fn(async (_projectRefId: string, _itemId: string, versionId: string) => {
+      const issue = makeIssue(versionId, versionId === 'version-1' ? 1 : 2);
+      return versionId === 'version-1'
+        ? [
+            issue,
+            {
+              ...issue,
+              issueId: 'deleted-history-issue',
+              deletedAt: '2026-07-31T00:02:00.000Z',
+            },
+          ]
+        : [issue];
+    });
     const queries = {
-      issuesForVersion: vi.fn().mockResolvedValue([]),
+      issuesForVersion,
       issueWithMessages: vi.fn(),
       optionalFinalization: vi.fn().mockResolvedValue(null),
     } as unknown as HttpReviewQueries;
     const projects = new HttpReviewProjects(transport, queries);
 
-    await projects.getWorkspace({
+    const workspace = await projects.getWorkspace({
       projectRefId: project.project_ref_id,
       reviewItemId: item.id,
-    });
-    await projects.getWorkspace({
-      projectRefId: project.project_ref_id,
-      reviewItemId: item.id,
+      versionId: 'version-1',
     });
 
     expect(queries.issuesForVersion).toHaveBeenCalledTimes(2);
@@ -268,7 +353,7 @@ describe('HTTP project summary adapter', () => {
       1,
       project.project_ref_id,
       item.id,
-      'version-2',
+      'version-1',
       undefined,
     );
     expect(queries.issuesForVersion).toHaveBeenNthCalledWith(
@@ -279,8 +364,31 @@ describe('HTTP project summary adapter', () => {
       undefined,
     );
     expect(queries.issueWithMessages).not.toHaveBeenCalled();
-    expect(
-      vi.mocked(queries.issuesForVersion).mock.calls.some((call) => call[2] === 'version-1'),
-    ).toBe(false);
+    expect(workspace.currentVersion.versionId).toBe('version-1');
+    expect(workspace.currentIssues.map((issue) => issue.versionId)).toEqual(['version-2']);
+    expect(workspace.historicalIssues.map((issue) => issue.versionId)).toEqual(['version-1']);
+
+    issuesForVersion.mockImplementation(async (_projectRefId, _itemId, versionId) => {
+      if (versionId === 'version-1') throw new Error('历史意见分页失败');
+      return [makeIssue(versionId, 2)];
+    });
+    await expect(
+      projects.getWorkspace({
+        projectRefId: project.project_ref_id,
+        reviewItemId: item.id,
+      }),
+    ).rejects.toThrow('历史意见分页失败');
+
+    issuesForVersion.mockImplementation(async (_projectRefId, _itemId, versionId) => [
+      versionId === 'version-1'
+        ? { ...makeIssue(versionId, 1), versionId: 'version-2' }
+        : makeIssue(versionId, 2),
+    ]);
+    await expect(
+      projects.getWorkspace({
+        projectRefId: project.project_ref_id,
+        reviewItemId: item.id,
+      }),
+    ).rejects.toThrow('版本 version-1 的意见列表包含越界数据');
   });
 });

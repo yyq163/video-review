@@ -9,10 +9,8 @@ export function DecisionBar(props: {
   isCurrentVersion: boolean;
   readonlyReason?: string;
   pending?: boolean;
-  packageState: 'idle' | 'preparing' | 'ready' | 'downloading' | 'failed';
   onFinalize(): void;
   onDownload(): void;
-  onPackage(): void;
 }) {
   const openCurrent = props.issues.some((issue) => issue.status === 'unresolved');
   const isCurrentFinalized =
@@ -51,21 +49,6 @@ export function DecisionBar(props: {
       <CapabilityGate entryMode={props.entryMode} capability="review.download.finalized_original">
         <button className="fj-review-secondary" onClick={props.onDownload} disabled={!isCurrentFinalized || props.pending}>
           <IconText icon="download">下载单片定稿原片</IconText>
-        </button>
-      </CapabilityGate>
-      <CapabilityGate entryMode={props.entryMode} capability="review.package.create">
-        <button className="fj-review-secondary" data-testid="package-project" onClick={props.onPackage} disabled={props.pending || isReadonly}>
-          <IconText icon="package">
-            {props.packageState === 'preparing'
-              ? '项目包准备中...'
-              : props.packageState === 'ready'
-                ? '项目包下载就绪'
-                : props.packageState === 'downloading'
-                  ? '启动下载中...'
-                  : props.packageState === 'failed'
-                    ? '重新准备项目包'
-                    : '打包项目定稿原片'}
-          </IconText>
         </button>
       </CapabilityGate>
     </section>

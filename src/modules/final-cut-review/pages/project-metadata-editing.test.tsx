@@ -138,7 +138,7 @@ describe('project and review item metadata editing', () => {
       projectRefId: 'project_nonnumeric',
       itemCode: 'CUT-A',
       title: 'Original cut',
-      episode: 'CUT-A',
+      episode: '',
       currentVersionId: 'version_nonnumeric',
       activeFinalizationId: null,
       status: 'pending_review' as const,
@@ -156,6 +156,7 @@ describe('project and review item metadata editing', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: '保存成片元数据' }));
 
     expect(onSubmit).toHaveBeenCalledWith(item, { title: 'Renamed cut', episode: 'CUT-A' });
+    expect(item.episode).toBe('');
   });
 
   it('keeps the item dialog open and shows the API error when saving fails', async () => {

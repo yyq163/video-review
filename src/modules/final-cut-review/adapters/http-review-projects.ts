@@ -1,5 +1,6 @@
 import type { ProjectDTO, ReviewItemDTO, ReviewVersionDTO } from '../contracts-generated/backend-contract';
 import type { ReviewApiPort, ReviewProjectSummary, ReviewProjectSummaryItem } from '../ports';
+import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
 import {
   itemFromDto,
   projectFromDto,
@@ -7,6 +8,8 @@ import {
 } from './http-review-project-mappers';
 import type { HttpReviewQueries } from './http-review-queries';
 import type { HttpReviewTransport } from './http-review-transport';
+
+const MAX_CONCURRENT_VERSION_ISSUE_QUERIES = 4;
 
 type ProjectApi = Pick<
   ReviewApiPort,
@@ -118,7 +121,7 @@ function summaryItemFromDto(
     projectRefId: dto.project_ref_id,
     itemCode: dto.item_code,
     title: dto.title,
-    episode: dto.episode_no?.toString() ?? dto.item_code,
+    episode: dto.episode_no?.toString() ?? '',
     currentVersionId: dto.current_version_id,
     activeFinalizationId:
       finalization?.status === 'active'
@@ -225,19 +228,64 @@ export class HttpReviewProjects implements ProjectApi {
         options,
       ),
     ]);
-    const versionId = params.versionId ?? itemDto.current_version_id;
-    const currentVersionDto =
-      versionDtos.find((version) => version.id === versionId) ??
-      (await this.transport.requestJson<ReviewVersionDTO>(
-        `/api/v1/final-cut-review/projects/${params.projectRefId}/items/${params.reviewItemId}/versions/${versionId}`,
-        { signal: options?.signal },
-      ));
-    const currentIssues = await this.queries.issuesForVersion(
-      params.projectRefId,
-      params.reviewItemId,
-      versionId,
-      options,
+    const selectedVersionId = params.versionId ?? itemDto.current_version_id;
+    const versionsById = new Map(versionDtos.map((version) => [version.id, version]));
+    const missingVersionIds = [...new Set([selectedVersionId, itemDto.current_version_id])].filter(
+      (versionId) => !versionsById.has(versionId),
     );
+    const missingVersions = await Promise.all(
+      missingVersionIds.map((versionId) =>
+        this.transport.requestJson<ReviewVersionDTO>(
+          `/api/v1/final-cut-review/projects/${params.projectRefId}/items/${params.reviewItemId}/versions/${versionId}`,
+          { signal: options?.signal },
+        ),
+      ),
+    );
+    for (const version of missingVersions) versionsById.set(version.id, version);
+    const allVersionDtos = [...versionsById.values()].sort(
+      (left, right) => left.version_no - right.version_no || left.id.localeCompare(right.id),
+    );
+    const selectedVersionDto = versionsById.get(selectedVersionId);
+    const authoritativeCurrentVersionDto = versionsById.get(itemDto.current_version_id);
+    if (!selectedVersionDto || !authoritativeCurrentVersionDto) {
+      throw new Error('工作台版本列表缺少当前或所选版本');
+    }
+
+    const issueResults = await settleWithConcurrencyLimit(
+      allVersionDtos,
+      MAX_CONCURRENT_VERSION_ISSUE_QUERIES,
+      (version) =>
+        this.queries.issuesForVersion(
+          params.projectRefId,
+          params.reviewItemId,
+          version.id,
+          options,
+        ),
+    );
+    const issuesByVersion = new Map<string, Awaited<ReturnType<HttpReviewQueries['issuesForVersion']>>>();
+    issueResults.forEach((result, index) => {
+      if (result.status === 'rejected') throw result.reason;
+      const versionId = allVersionDtos[index].id;
+      if (
+        result.value.some(
+          (issue) =>
+            issue.projectRefId !== params.projectRefId ||
+            issue.reviewItemId !== params.reviewItemId ||
+            issue.versionId !== versionId,
+        )
+      ) {
+        throw new Error(`版本 ${versionId} 的意见列表包含越界数据`);
+      }
+      issuesByVersion.set(
+        versionId,
+        result.value.filter((issue) => !issue.deletedAt),
+      );
+    });
+    const currentIssues = issuesByVersion.get(itemDto.current_version_id);
+    if (!currentIssues) throw new Error('工作台意见列表缺少真实当前版本');
+    const historicalIssues = allVersionDtos
+      .filter((version) => version.id !== itemDto.current_version_id)
+      .flatMap((version) => issuesByVersion.get(version.id) ?? []);
     const activeFinalization = await this.queries.optionalFinalization(
       params.projectRefId,
       params.reviewItemId,
@@ -247,10 +295,10 @@ export class HttpReviewProjects implements ProjectApi {
     return {
       project: projectFromDto(projectDto),
       item: editableItemFromDto(itemDto),
-      versions: versionDtos.map((version) => versionFromDto(version, this.transport.baseUrl, itemDto)),
-      currentVersion: versionFromDto(currentVersionDto, this.transport.baseUrl, itemDto),
+      versions: allVersionDtos.map((version) => versionFromDto(version, this.transport.baseUrl, itemDto)),
+      currentVersion: versionFromDto(selectedVersionDto, this.transport.baseUrl, itemDto),
       currentIssues,
-      historicalIssues: [],
+      historicalIssues,
       activeFinalization,
     };
   };

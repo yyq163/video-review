@@ -37,9 +37,32 @@ export function versionForIssue(
   fallback: ReviewVersion,
   issue: ReviewIssue,
 ): ReviewVersion {
-  return versions?.find((version) => version.versionId === issue.versionId) ?? {
-    ...fallback,
-    versionId: issue.versionId,
-    label: versionLabelForIssue(fallback, issue),
-  };
+  const matchingVersions = (versions ?? [fallback]).filter(
+    (version) => version.versionId === issue.versionId,
+  );
+  if (matchingVersions.length !== 1) {
+    throw new Error(`意见 ${issue.issueId} 无法唯一映射到真实版本 ${issue.versionId}`);
+  }
+  return matchingVersions[0];
+}
+
+export function sortedHistoricalIssues(
+  issues: ReviewIssue[],
+  versions: ReviewVersion[] | undefined,
+  fallback: ReviewVersion,
+): Array<{ issue: ReviewIssue; version: ReviewVersion }> {
+  return issues
+    .filter((issue) => !issue.deletedAt)
+    .map((issue, stableIndex) => ({
+      issue,
+      version: versionForIssue(versions, fallback, issue),
+      stableIndex,
+    }))
+    .sort(
+      (left, right) =>
+        right.version.versionNo - left.version.versionNo ||
+        left.issue.timestampMs - right.issue.timestampMs ||
+        left.stableIndex - right.stableIndex,
+    )
+    .map(({ issue, version }) => ({ issue, version }));
 }

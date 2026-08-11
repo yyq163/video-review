@@ -9,16 +9,6 @@ import { EpisodeStrip } from './review-workspace-elements';
 export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { controller: ReviewWorkspaceController }>(
   function ReviewWorkspaceMainColumn({ controller }, playerRef) {
     const { actions, data, mutations, playback, props } = controller;
-    const packageState = mutations.createProjectFinalizedPackage.isPending
-      ? 'preparing'
-      : mutations.downloadProjectFinalizedPackage.isPending
-        ? 'downloading'
-        : mutations.createProjectFinalizedPackage.isError || mutations.downloadProjectFinalizedPackage.isError
-          ? 'failed'
-          : mutations.createProjectFinalizedPackage.data
-            ? 'ready'
-            : 'idle';
-
     return (
       <div className="fj-review-main-column">
         <div className="fj-review-workspace-head">
@@ -45,7 +35,7 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
             key={data.currentVersion.versionId}
             ref={playerRef}
             version={data.currentVersion}
-            issues={controller.currentIssues}
+            issues={controller.selectedVersionIssues}
             selectedAnnotationSet={controller.selectedAnnotationSet}
             selectedIssueId={controller.selectedIssueId}
             initialTimeMs={controller.timeMs}
@@ -83,15 +73,13 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
         <DecisionBar
           entryMode={props.entryMode}
           version={data.currentVersion}
-          issues={controller.currentIssues}
+          issues={controller.selectedVersionIssues}
           finalization={data.activeFinalization}
           isCurrentVersion={controller.isSelectedCurrent}
           readonlyReason={controller.readonlyReason}
           pending={controller.pending}
-          packageState={packageState}
           onFinalize={actions.finalize}
           onDownload={actions.download}
-          onPackage={actions.packageProject}
         />
         {controller.canAppendVersion && controller.appendVersionConfirmationRequired ? (
           <section className="fj-review-readonly-notice" data-testid="append-version-confirmation-required" role="alert">
@@ -135,11 +123,20 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
         )}
         <div className="fj-review-episode-strip-slot">
           <EpisodeStrip
+            entryMode={props.entryMode}
+            isArchived={data.project.status === 'archived'}
+            itemActionPending={controller.pending}
             items={controller.episodeItems}
             currentItemId={data.item.reviewItemId}
             unresolvedCounts={controller.episodeUnresolvedCounts}
             currentVersionLabels={controller.episodeCurrentVersionLabels}
             currentFileNames={controller.episodeCurrentFileNames}
+            revocationUncertainIds={controller.revocationUncertainIds}
+            onRevokeFinalization={
+              controller.canRevokeEpisodeFinalization
+                ? controller.revokeEpisodeFinalization
+                : undefined
+            }
             onSelect={(item) => {
               if (item.reviewItemId === data.item.reviewItemId) return;
               controller.navigate(`/${props.entryMode}/projects/${props.projectRefId}/items/${item.reviewItemId}`);

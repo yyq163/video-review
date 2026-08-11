@@ -3,17 +3,15 @@ import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { CapabilityGate, EmptyState, IconText, StatusBadge } from '../components/shared';
 import { ReviewItemMetadataEditor, type ReviewItemMetadataValues } from '../components/MetadataEditors';
+import { FinalizedRevokeControl, type FinalizedRevokeUiState } from '../components/FinalizedRevokeControl';
 import type { EntryMode, FinalizationRevocation, ReviewItem } from '../contracts/types';
 import { formatEpisodeDisplayValue, type ReviewEpisodeGroup } from '../core/episode-dedupe';
 import type { ReviewProjectSummaryItem } from '../ports';
-import { RevokeFinalizationResultUncertainError } from '../adapters/http-review-finalization-operation';
 
 export type ProjectDetailMetadataEpisodeGroup = Omit<ReviewEpisodeGroup, 'items' | 'representative'> & {
   items: ReviewProjectSummaryItem[];
   representative: ReviewProjectSummaryItem;
 };
-
-type RevokeUiState = 'pending' | 'uncertain';
 
 const LONG_PRESS_SELECTION_MS = 500;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
@@ -162,7 +160,7 @@ export function ProjectDetailItemList({
   const [batchDeleteUncertainIds, setBatchDeleteUncertainIds] = useState<Set<string>>(() => new Set());
   const [locallyDeletedIds, setLocallyDeletedIds] = useState<Set<string>>(() => new Set());
   const [batchDeletePending, setBatchDeletePending] = useState(false);
-  const [revokeUiStates, setRevokeUiStates] = useState<Record<string, RevokeUiState>>({});
+  const [revokeUiStates, setRevokeUiStates] = useState<Record<string, Exclude<FinalizedRevokeUiState, null>>>({});
   const longPressSelectionRef = useRef<LongPressSelection | null>(null);
   const visibleItems = useMemo(
     () =>
@@ -498,40 +496,22 @@ export function ProjectDetailItemList({
               </span>
             </div>
             {isFinalized && entryMode === 'review' && !isArchived && onRevokeFinalization ? (
-              <CapabilityGate entryMode={entryMode} capability="review.finalization.revoke">
-                <button
-                  aria-busy={revokePending || undefined}
-                  aria-label={`撤销第${formatEpisodeDisplayValue(item.episode)}集定稿`}
-                  className={`fj-review-finalized-revoke${revokePending ? ' is-pending' : ''}`}
-                  disabled={itemActionPending || revokePending || revokeUncertain}
-                  onClick={() => {
-                    if (!window.confirm(`确认撤销第 ${item.episode} 集定稿？关联项目包将立即失效、无法继续下载，并进入物理删除的受控清理。`)) {
-                      return;
-                    }
-                    setRevokeUiStates((current) => ({
-                      ...current,
-                      [item.reviewItemId]: 'pending',
-                    }));
-                    void onRevokeFinalization(item).catch((error: unknown) => {
-                      setRevokeUiStates((current) => {
-                        const next = { ...current };
-                        if (error instanceof RevokeFinalizationResultUncertainError) {
-                          next[item.reviewItemId] = 'uncertain';
-                        } else {
-                          delete next[item.reviewItemId];
-                        }
-                        return next;
-                      });
-                    });
-                  }}
-                  type="button"
-                >
-                  <span className="fj-review-finalized-label">已定稿</span>
-                  <span className="fj-review-revoke-label">
-                    {revokePending ? '撤销中' : revokeUncertain ? '确认中' : '撤销'}
-                  </span>
-                </button>
-              </CapabilityGate>
+              <FinalizedRevokeControl
+                blocked={itemActionPending}
+                entryMode={entryMode}
+                item={item}
+                pending={revokePending}
+                uncertain={revokeUncertain}
+                onRevoke={() => onRevokeFinalization(item)}
+                onStateChange={(state) => {
+                  setRevokeUiStates((current) => {
+                    const next = { ...current };
+                    if (state) next[item.reviewItemId] = state;
+                    else delete next[item.reviewItemId];
+                    return next;
+                  });
+                }}
+              />
             ) : (
               <StatusBadge status={item.status} />
             )}

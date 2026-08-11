@@ -34,18 +34,19 @@ export class MockReviewDownloads implements DownloadApi {
   };
 
   readonly createProjectFinalizedPackage: ReviewApiPort['createProjectFinalizedPackage'] = async (
-    projectRefId,
+    input,
     executionContext,
   ) => {
     await this.context.ready();
     this.context.assertContext(executionContext, 'review.package.create');
-    this.context.repository.ensureProjectNotDeleted(projectRefId);
-    const summary = await this.context.repository.getProjectSummary(projectRefId);
+    this.context.repository.ensureProjectNotDeleted(input.projectRefId);
+    const summary = await this.context.repository.getProjectSummary(input.projectRefId);
     return this.context.packageAdapter.createProjectPackage({
+      unifiedName: input.unifiedName,
       project: summary.project,
-      items: this.context.repository.getAllProjectItems(projectRefId),
-      versions: this.context.repository.getAllProjectVersions(projectRefId),
-      finalizations: this.context.repository.getActiveFinalizations(projectRefId),
+      items: this.context.repository.getAllProjectItems(input.projectRefId),
+      versions: this.context.repository.getAllProjectVersions(input.projectRefId),
+      finalizations: this.context.repository.getActiveFinalizations(input.projectRefId),
       fileStorage: this.context.fileStorage,
     });
   };

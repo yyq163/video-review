@@ -52,14 +52,14 @@ export class HttpReviewDownloads implements DownloadApi {
   };
 
   readonly createProjectFinalizedPackage: ReviewApiPort['createProjectFinalizedPackage'] = async (
-    projectRefId,
+    input,
     context,
   ) => {
     this.transport.assertWriteContext(context, ['review']);
-    const snapshot = await this.transport.command<PackageSnapshotDTO, { project_ref_id: string }>(
-      `/api/v1/final-cut-review/review/projects/${projectRefId}/finalized-originals/packages`,
+    const snapshot = await this.transport.command<PackageSnapshotDTO, { project_ref_id: string; unified_name: string }>(
+      `/api/v1/final-cut-review/review/projects/${input.projectRefId}/finalized-originals/packages`,
       'PrepareFinalizedPackage',
-      { project_ref_id: projectRefId },
+      { project_ref_id: input.projectRefId, unified_name: input.unifiedName },
       context,
       undefined,
       { idempotent: true },
@@ -74,7 +74,7 @@ export class HttpReviewDownloads implements DownloadApi {
         await wait(PACKAGE_PREPARATION_POLL_INTERVAL_MS);
       }
       current = await this.transport.requestJsonWithTimeout<PackageSnapshotDTO>(
-        `/api/v1/final-cut-review/review/projects/${projectRefId}/finalized-originals/packages/${snapshot.id}`,
+        `/api/v1/final-cut-review/review/projects/${input.projectRefId}/finalized-originals/packages/${snapshot.id}`,
         PACKAGE_PREPARATION_REQUEST_TIMEOUT_MS,
       );
     }

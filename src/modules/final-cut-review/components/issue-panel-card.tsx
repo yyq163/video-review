@@ -20,11 +20,20 @@ export function IssueCard(props: IssueCardProps) {
   const localSubmitting = editSubmitting || replySubmitting;
   return (
     <article
-      className={`fj-review-issue-card ${props.selected ? 'is-selected' : ''}`}
+      className={`fj-review-issue-card ${props.historical ? 'is-historical' : ''} ${props.selected ? 'is-selected' : ''}`}
       data-testid={`issue-${props.issue.issueId}`}
       data-issue-id={props.issue.issueId}
       data-version-id={props.issue.versionId}
     >
+      {props.historical ? (
+        <span
+          aria-hidden="true"
+          className="fj-review-issue-version-watermark"
+          data-testid={`issue-watermark-${props.issue.issueId}`}
+        >
+          V{props.version.versionNo}
+        </span>
+      ) : null}
       {props.batchSelectable ? (
         <label className="fj-review-issue-batch-select">
           <input

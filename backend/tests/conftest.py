@@ -110,11 +110,14 @@ def shared_code_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
 
 
 def command(command_type: str, payload: dict[str, Any] | None = None, command_id: str | None = None) -> dict[str, Any]:
+    command_payload = dict(payload or {})
+    if command_type == "PrepareFinalizedPackage":
+        command_payload.setdefault("unified_name", "测试统一命名")
     return {
         "command_id": command_id or uuid.uuid4().hex,
         "command_type": command_type,
         "contract_version": "1.0",
-        "payload": payload or {},
+        "payload": command_payload,
     }
 
 
@@ -152,14 +155,21 @@ def upload_init_request(
     return client.post("/api/v1/files/uploads/init", json=json, headers=request_headers)
 
 
-def upload_video(client: TestClient, filename: str = "cut.mp4", seed: bytes = b"0", fps_num: int = 25, fps_den: int = 1) -> str:
+def upload_video(
+    client: TestClient,
+    filename: str = "cut.mp4",
+    seed: bytes = b"0",
+    fps_num: int = 25,
+    fps_den: int = 1,
+    mime_type: str = "video/mp4",
+) -> str:
     blob = tiny_video_bytes(seed)
     sha = hashlib.sha256(blob).hexdigest()
     init = upload_init_request(
         client,
         json={
             "original_filename": filename,
-            "mime_type": "video/mp4",
+            "mime_type": mime_type,
             "file_size": len(blob),
             "sha256": sha,
             "duration_ms": 10_000,
@@ -185,8 +195,23 @@ def create_project(client: TestClient, code: str = "P001") -> dict[str, Any]:
     return api_data(response)
 
 
-def create_item(client: TestClient, project_ref_id: str, file_id: str, item_code: str = "FC001") -> dict[str, Any]:
-    body = command("CreateReviewItem", {"project_ref_id": project_ref_id, "item_code": item_code, "title": f"Cut {item_code}", "original_file_id": file_id})
+def create_item(
+    client: TestClient,
+    project_ref_id: str,
+    file_id: str,
+    item_code: str = "FC001",
+    *,
+    episode_no: int | None = 1,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "project_ref_id": project_ref_id,
+        "item_code": item_code,
+        "title": f"Cut {item_code}",
+        "original_file_id": file_id,
+    }
+    if episode_no is not None:
+        payload["episode_no"] = episode_no
+    body = command("CreateReviewItem", payload)
     response = client.post(f"/api/v1/final-cut-review/edit/projects/{project_ref_id}/items", json=body, headers={"Idempotency-Key": body["command_id"]})
     assert response.status_code == 201, response.text
     item = api_data(response)

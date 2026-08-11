@@ -6,6 +6,7 @@ import { useProjectSummary, useReviewMutations } from '../entry/use-review-queri
 import { AppShell, CapabilityGate, ErrorView, LoadingBlock, StatusBadge, actionError } from '../components/shared';
 import { CreateItemUploadPanel } from '../components/UploadPanel';
 import { ProjectMetadataEditor, type ReviewItemMetadataValues } from '../components/MetadataEditors';
+import { ProjectPackageControl } from '../components/ProjectPackageControl';
 import { uploadSchema, type ProjectFormValues } from '../components/ProjectForms';
 import type { ReviewItemWithMetadata } from '../ports';
 import type { ReviewProjectSummaryItem } from '../ports';
@@ -383,6 +384,14 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     mutations.deleteReviewItem.isPending ||
     mutations.bulkDeleteReviewItems.isPending ||
     mutations.revokeFinalization.isPending;
+  const packageBlocked =
+    isArchived ||
+    projectActionPending ||
+    itemActionPending ||
+    mutations.createReviewItemWithVersion.isPending ||
+    activeV1UploadCount > 0 ||
+    v1ListConfirmationRequired ||
+    revocationUncertainIds.size > 0;
 
   const updateProjectMetadata = async (values: ProjectFormValues) => {
     setProjectActionError(null);
@@ -564,6 +573,20 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
       entryLinks={entryLinksFor(props.entryMode)}
       right={
         <>
+          <ProjectPackageControl
+            createPending={mutations.createProjectFinalizedPackage.isPending}
+            disabled={packageBlocked}
+            downloadPending={mutations.downloadProjectFinalizedPackage.isPending}
+            entryMode={props.entryMode}
+            projectRefId={projectRefId}
+            onCreate={(input) => mutations.createProjectFinalizedPackage.mutateAsync(input)}
+            onDownload={(result) => mutations.downloadProjectFinalizedPackage.mutateAsync(result)}
+            onSuccess={() => {
+              mutations.createProjectFinalizedPackage.reset();
+              setProjectActionError(null);
+              setProjectActionMessage('项目定稿原片包已完成并开始下载。');
+            }}
+          />
           {isArchived ? (
             <CapabilityGate entryMode={props.entryMode} capability="review.project.restore">
               <button className="fj-review-secondary" disabled={projectActionPending} onClick={restoreProject} type="button">

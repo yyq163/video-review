@@ -1,8 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const TEST_VIDEO_ROOT = '/Volumes/App_Dev/审阅平台/test-video';
-const TEST_VIDEO_V1 = `${TEST_VIDEO_ROOT}/01.mp4`;
-const TEST_VIDEO_V2 = `${TEST_VIDEO_ROOT}/02.mp4`;
+const TEST_VIDEO_V1 = process.env.FCR_E2E_VIDEO_PATH ?? `${TEST_VIDEO_ROOT}/01.mp4`;
+const TEST_VIDEO_V2 = process.env.FCR_E2E_VIDEO_PATH_V2 ?? `${TEST_VIDEO_ROOT}/02.mp4`;
 
 const ENTRY_VISIBILITY_SCENARIOS = [
   { entryMode: 'edit', surface: 'project list', path: '/edit/projects' },
@@ -18,10 +18,10 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator('#root')).toHaveAttribute('data-review-runtime', 'mock');
 });
 
-async function expectUploadProgressVisible(page: Page) {
-  await expect(page.getByTestId('upload-progress')).toBeVisible();
-  await expect(page.getByTestId('upload-progress')).toContainText('%');
-  await expect(page.getByTestId('upload-progress')).toContainText(/校验文件|创建上传会话|上传分片|绑定成片记录|上传完成/);
+async function expectUploadProgressVisible(page: Page, progress: Locator = page.getByTestId('upload-progress')) {
+  await expect(progress).toBeVisible();
+  await expect(progress).toContainText('%');
+  await expect(progress).toContainText(/校验文件|创建上传会话|上传分片|绑定成片记录|上传完成/);
 }
 
 async function openFirstEditableReviewItem(page: Page) {
@@ -74,8 +74,9 @@ test('edit entry creates project, uploads V1, and appends isolated V2', async ({
   await expect(page.getByTestId('create-item-upload').getByRole('button', { name: '上传 V1' })).toBeDisabled();
   await expect(page.getByTestId('review-player')).toHaveCount(0);
   await page.getByTestId('create-item-file').setInputFiles(TEST_VIDEO_V1);
+  const createProgress = expectUploadProgressVisible(page, page.locator('[data-testid$="-progress"]').first());
   await page.getByTestId('create-item-upload').getByRole('button', { name: '上传 V1' }).click();
-  await expectUploadProgressVisible(page);
+  await createProgress;
   await openFirstEditableReviewItem(page);
   await expect(page.getByTestId('review-player')).toBeVisible();
   await expect(page.getByTestId('version-V1')).toBeVisible();
@@ -91,8 +92,9 @@ test('edit entry creates project, uploads V1, and appends isolated V2', async ({
   await page.getByTestId('append-version-panel').locator('button', { hasText: '追加 V2' }).click();
   await expect(page.getByTestId('append-version-file-error')).toContainText('请选择原片文件');
   await page.getByTestId('append-version-file').setInputFiles(TEST_VIDEO_V2);
+  const appendProgress = expectUploadProgressVisible(page);
   await page.getByTestId('append-version-panel').locator('button', { hasText: '追加 V2' }).click();
-  await expectUploadProgressVisible(page);
+  await appendProgress;
   await expect(page.getByText('V2 已追加，旧版本意见不会继承。')).toBeVisible();
   await expect(page.getByText('当前版本未修改 0')).toBeVisible();
 });
@@ -115,14 +117,17 @@ test('review entry archives and restores a project without deleting existing ite
   await reviewCard.getByRole('link', { name: /成片审阅/ }).click();
   await expect(page.getByTestId('archived-readonly-notice')).toContainText('恢复项目后才能创建成片');
   await expect(page.getByRole('button', { name: '删除项目' })).toHaveCount(0);
+  await expect(page.getByTestId('package-project')).toBeVisible();
+  await expect(page.getByTestId('package-project')).toBeDisabled();
   await expect(page.getByTestId('review-item-table')).toContainText('第 28 集 · 最终成片');
   await page.getByRole('link', { name: '查看' }).click();
   await expect(page.getByTestId('archived-workspace-readonly-notice')).toContainText('归档项目只读');
   await expect(page.getByTestId('review-player')).toBeVisible();
-  await expect(page.getByTestId('issue-form')).toHaveCount(0);
+  await expect(page.getByTestId('issue-form')).toBeVisible();
+  await expect(page.getByLabel('当前版本意见正文')).toBeDisabled();
   await expect(page.getByRole('button', { name: '要求修改' })).toHaveCount(0);
   await expect(page.getByTestId('finalize-current')).toHaveCount(0);
-  await expect(page.getByTestId('package-project')).toBeVisible();
+  await expect(page.getByTestId('package-project')).toHaveCount(0);
 
   await page.getByRole('link', { name: '成片审阅' }).click();
   await page.getByTestId('project-card-prj_seed_final_cut').getByRole('link', { name: /成片审阅/ }).click();
@@ -165,7 +170,7 @@ test('review workspace submits centered toast and soft-deletes only current-vers
   const episodeStrip = page.getByTestId('episode-strip');
   await expect(episodeStrip).toContainText('剧集列表 (1)');
   await expect(episodeStrip.getByTestId('episode-item-item_ep28')).toHaveCount(1);
-  await expect(episodeStrip).toContainText('2 个版本 · 当前 V2');
+  await expect(episodeStrip.getByTestId('episode-item-item_ep28')).toContainText('当前版本·V2·未修改3');
   await expect(page.getByTestId('historical-issues').getByRole('button', { name: '删除意见' })).toHaveCount(0);
 
   const panelMetrics = await page.evaluate(() => {
@@ -841,7 +846,8 @@ test('precise playback switches to historical version before restoring annotatio
   await page.goto('/review/projects/prj_seed_final_cut/items/item_ep28');
   await expect(page.getByTestId('issue-panel')).toContainText('V2 00:00:00:04');
 
-  await page.getByTestId('historical-issues').getByTestId('issue-issue_v1_001').getByRole('button', { name: /#001/ }).click();
+  const historicalCard = page.getByTestId('historical-issues').getByTestId('issue-issue_v1_001');
+  await historicalCard.getByRole('button', { name: /#001/ }).click();
   await expect(page).toHaveURL(/version=ver_ep28_v1/);
   await expect(page).toHaveURL(/issue=issue_v1_001/);
   await expect(page.getByTestId('version-V1')).toHaveClass(/is-active/);
@@ -849,7 +855,8 @@ test('precise playback switches to historical version before restoring annotatio
   await expect(page.getByTestId('saved-annotation-layer')).toHaveAttribute('data-annotation-set-id', 'aset_issue_v1_001_001');
   await expect(page.getByTestId('saved-annotation-layer')).toHaveAttribute('data-selected-issue-id', 'issue_v1_001');
   await expect(page.getByTestId('saved-annotation-layer')).not.toHaveAttribute('data-annotation-set-id', 'aset_issue_v2_001_001');
-  await expect(page.getByTestId('issue-panel').getByText('历史版本只读').first()).toBeVisible();
+  await expect(historicalCard.locator('.fj-review-readonly-note')).toHaveCount(0);
+  await expect(historicalCard.getByRole('button', { name: '编辑意见' })).toHaveCount(0);
 });
 
 test('rapid issue selection only applies the last playback target', async ({ page }) => {
@@ -872,7 +879,7 @@ test('version isolation keeps history read-only and unresolved current issues do
   await expect(page.getByTestId('finalize-current')).toBeEnabled();
   await expect(page.getByText('当前版本有未修改意见，仍可定稿')).toBeVisible();
   page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toContain('不可撤销');
+    expect(dialog.message()).toContain('未归档项目可在项目详情二次确认后撤回');
     await dialog.dismiss();
   });
   await page.getByTestId('finalize-current').click();
@@ -890,18 +897,29 @@ test('version isolation keeps history read-only and unresolved current issues do
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toContain('V2');
 
+  await expect(page.getByTestId('package-project')).toHaveCount(0);
+  await page.getByRole('button', { name: /← 28/ }).click();
+  await expect(page.getByTestId('package-project')).toBeVisible();
   await page.getByTestId('package-project').click();
-  await expect(page.getByText('项目包下载就绪，包含 1 个定稿原片。')).toBeVisible();
-  await expect(page.getByTestId('package-project')).toContainText('项目包下载就绪');
+  await page.getByLabel('统一名称').fill('E2E 定稿原片');
+  await page.getByRole('button', { name: '取消' }).click();
+  await expect(page.getByRole('dialog', { name: '统一命名定稿原片' })).toHaveCount(0);
+  await page.getByTestId('package-project').click();
+  await page.getByLabel('统一名称').fill('E2E 定稿原片');
   const packageDownloadPromise = page.waitForEvent('download');
-  await page.getByTestId('package-project').click();
+  await page.getByRole('button', { name: '确认并下载' }).click();
   const packageDownload = await packageDownloadPromise;
   expect(packageDownload.suggestedFilename()).toContain('finalized-originals.zip');
+  await expect(page.getByText('项目定稿原片包已完成并开始下载。')).toBeVisible();
 });
 
 test('entry capability boundary hides review writes and project delete in edit entry while hiding project creation in review entry', async ({ page }) => {
   await page.goto('/edit/projects/prj_seed_final_cut/items/item_ep28');
   await expect(page.getByText('剪辑入口仅可查看意见')).toBeVisible();
+  await expect(page.getByTestId('issue-form')).toBeVisible();
+  await expect(page.getByLabel('当前版本意见正文')).toBeDisabled();
+  await expect(page.getByLabel('当前版本意见正文')).toHaveAttribute('aria-readonly', 'true');
+  await expect(page.getByRole('button', { name: '提交意见' })).toBeDisabled();
   await expect(page.getByTestId('finalize-current')).toHaveCount(0);
   await expect(page.getByTestId('package-project')).toHaveCount(0);
   await page.goto('/edit/projects');

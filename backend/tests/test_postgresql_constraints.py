@@ -1821,6 +1821,9 @@ def test_postgresql_shared_storage_lock_serializes_upload_and_package_reservatio
             status="active",
         )
         seed.add(finalization)
+        item.episode_no = 1
+        item.workflow_status = "finalized"
+        item.active_finalization_id = finalization.id
         seed.commit()
         project_id = project.id
     principal_id = f"shared-reservation-{prefix}"
@@ -1859,7 +1862,7 @@ def test_postgresql_shared_storage_lock_serializes_upload_and_package_reservatio
             try:
                 barrier.wait(timeout=5)
                 SqlAlchemyReviewRepository(session, settings).prepare_package(
-                    {"project_ref_id": project_id},
+                    {"project_ref_id": project_id, "unified_name": "并发配额测试"},
                     context,
                     None,
                 )
@@ -2553,9 +2556,11 @@ def test_postgresql_finalized_version_accepts_only_ready_task_backed_thumbnail()
         thumbnail.height = 180
         session.add(thumbnail)
         session.flush()
-        task = session.get(MediaDerivativeTaskModel, task.id)
-        version = session.get(ReviewVersionModel, version.id)
-        assert task is not None and version is not None
+        reloaded_task = session.get(MediaDerivativeTaskModel, task.id)
+        reloaded_version = session.get(ReviewVersionModel, version.id)
+        assert reloaded_task is not None and reloaded_version is not None
+        task = reloaded_task
+        version = reloaded_version
         task.status = "ready"
         task.output_file_id = thumbnail.id
         task.updated_at = utcnow()

@@ -12,10 +12,10 @@ export function ReviewWorkspaceIssuePanel({
   return (
     <IssuePanel
       entryMode={props.entryMode}
-      version={data.currentVersion}
+      version={controller.authoritativeCurrentVersion}
       versions={data.versions}
       issues={controller.currentIssues}
-      historicalIssues={[]}
+      historicalIssues={controller.historicalIssues}
       selectedIssueId={controller.selectedIssueId}
       isCurrentVersion={controller.isSelectedCurrent}
       pending={controller.pending}

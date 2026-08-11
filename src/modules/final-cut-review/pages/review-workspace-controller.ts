@@ -12,6 +12,7 @@ import {
 } from '../adapters/http-review-uploads';
 import { useReviewWorkspaceActions, type AppendVersionInput } from './review-workspace-actions';
 import { useReviewWorkspacePlayback } from './review-workspace-playback';
+import { useFinalizationRevocationCoordinator } from './use-finalization-revocation-coordinator';
 
 export interface ReviewWorkspaceLoadedProps {
   entryMode: EntryMode;
@@ -45,7 +46,19 @@ export function useReviewWorkspaceController(
   );
   const [appendVersionConfirmationPending, setAppendVersionConfirmationPending] = useState(false);
   const data = props.data;
-  const selectedIssueSummary = data.currentIssues.find(
+  const authoritativeCurrentVersion = useMemo(
+    () => {
+      const matchingVersions = data.versions.filter(
+        (version) => version.versionId === data.item.currentVersionId,
+      );
+      if (matchingVersions.length !== 1) {
+        throw new Error('工作台缺少唯一的真实当前版本');
+      }
+      return matchingVersions[0];
+    },
+    [data.item.currentVersionId, data.versions],
+  );
+  const selectedIssueSummary = [...data.currentIssues, ...data.historicalIssues].find(
     (issue) => issue.issueId === selectedIssueId,
   );
   const selectedIssueDetail = useIssueDetail(
@@ -66,9 +79,8 @@ export function useReviewWorkspaceController(
       mutations.resolveIssue.isPending ||
       mutations.reopenIssue.isPending ||
       mutations.finalizeCurrentVersion.isPending ||
+      mutations.revokeFinalization.isPending ||
       mutations.downloadFinalizedOriginal.isPending ||
-      mutations.createProjectFinalizedPackage.isPending ||
-      mutations.downloadProjectFinalizedPackage.isPending ||
       mutations.editIssue.isPending ||
       mutations.replyToIssue.isPending ||
       mutations.deleteIssue.isPending,
@@ -90,7 +102,12 @@ export function useReviewWorkspaceController(
         : data.currentVersion.status === 'finalized'
           ? '当前版本已定稿冻结'
           : undefined);
-  const issuePanelReadonlyReason = writeReadonlyReason === '当前版本已定稿冻结' ? '定稿冻结后意见区只读。' : writeReadonlyReason;
+  const issuePanelReadonlyReason =
+    writeReadonlyReason === '历史版本只读'
+      ? undefined
+      : writeReadonlyReason === '当前版本已定稿冻结'
+        ? '定稿冻结后意见区只读。'
+        : writeReadonlyReason;
   const issueStatusReadonlyReason =
     readonlyReason ??
     (!isSelectedCurrent
@@ -110,22 +127,26 @@ export function useReviewWorkspaceController(
       !optimisticIssue ||
       optimisticIssue.projectRefId !== props.projectRefId ||
       optimisticIssue.reviewItemId !== props.reviewItemId ||
-      optimisticIssue.versionId !== data.currentVersion.versionId
+      optimisticIssue.versionId !== data.item.currentVersionId
     ) {
       return sortedIssuesForPlayback(
-        data.currentIssues.map((issue) => {
-          const loadedIssue =
-            selectedIssueDetail.data?.issueId === issue.issueId
-              ? selectedIssueDetail.data
-              : issue;
-          return {
-            ...loadedIssue,
-            status: optimisticIssueStatuses[issue.issueId] ?? loadedIssue.status,
-          };
-        }),
+        data.currentIssues
+          .map((issue) => {
+            const loadedIssue =
+              selectedIssueDetail.data?.issueId === issue.issueId
+                ? selectedIssueDetail.data
+                : issue;
+            return {
+              ...loadedIssue,
+              status: optimisticIssueStatuses[issue.issueId] ?? loadedIssue.status,
+            };
+          })
+          .filter((issue) => !issue.deletedAt),
       );
     }
-    const currentCopy = data.currentIssues.filter((issue) => issue.issueId !== optimisticIssue.issueId);
+    const currentCopy = data.currentIssues.filter(
+      (issue) => !issue.deletedAt && issue.issueId !== optimisticIssue.issueId,
+    );
     return sortedIssuesForPlayback(
       [...currentCopy, optimisticIssue].map((issue) => ({
         ...issue,
@@ -134,18 +155,49 @@ export function useReviewWorkspaceController(
     );
   }, [
     data.currentIssues,
-    data.currentVersion.versionId,
+    data.item.currentVersionId,
     optimisticIssue,
     optimisticIssueStatuses,
     props.projectRefId,
     props.reviewItemId,
     selectedIssueDetail.data,
   ]);
+  const historicalIssues = useMemo(
+    () =>
+      data.historicalIssues
+        .map((issue) =>
+          selectedIssueDetail.data?.issueId === issue.issueId
+            ? selectedIssueDetail.data
+            : issue,
+        )
+        .filter((issue) => !issue.deletedAt && issue.versionId !== data.item.currentVersionId),
+    [data.historicalIssues, data.item.currentVersionId, selectedIssueDetail.data],
+  );
+  const selectedVersionIssues = useMemo(
+    () =>
+      data.currentVersion.versionId === data.item.currentVersionId
+        ? currentIssues
+        : historicalIssues.filter((issue) => issue.versionId === data.currentVersion.versionId),
+    [
+      currentIssues,
+      data.currentVersion.versionId,
+      data.item.currentVersionId,
+      historicalIssues,
+    ],
+  );
+  const otherVersionIssues = useMemo(
+    () =>
+      [...currentIssues, ...historicalIssues].filter(
+        (issue) => issue.versionId !== data.currentVersion.versionId,
+      ),
+    [currentIssues, data.currentVersion.versionId, historicalIssues],
+  );
   const currentInput = useMemo(
     () => ({ projectRefId: props.projectRefId, reviewItemId: props.reviewItemId, versionId: data.currentVersion.versionId }),
     [data.currentVersion.versionId, props.projectRefId, props.reviewItemId],
   );
-  const selectedIssue = currentIssues.find((issue) => issue.issueId === selectedIssueId) ?? null;
+  const selectedIssue =
+    [...currentIssues, ...historicalIssues].find((issue) => issue.issueId === selectedIssueId) ?? null;
   const selectedAnnotationSet = selectedIssue?.currentAnnotationSet ?? null;
   const episodeItems = useMemo(() => {
     const projectItems = projectSummary.data?.items ?? [];
@@ -164,16 +216,9 @@ export function useReviewWorkspaceController(
     const counts: Record<string, number> = {};
     for (const item of episodeItems) {
       if (item.reviewItemId === data.item.reviewItemId) {
-        counts[item.reviewItemId] =
-          data.currentVersion.versionId === item.currentVersionId
-            ? currentIssues.filter(
-                (issue) => issue.status === 'unresolved' && !issue.deletedAt,
-              ).length
-            : data.item.unresolvedCurrentVersionCount ??
-              projectSummary.data?.items.find(
-                  (candidate) => candidate.reviewItemId === item.reviewItemId,
-                )?.unresolvedCurrentVersionCount ??
-              0;
+        counts[item.reviewItemId] = currentIssues.filter(
+          (issue) => issue.status === 'unresolved' && !issue.deletedAt,
+        ).length;
       } else {
         counts[item.reviewItemId] =
           projectSummary.data?.items.find(
@@ -184,9 +229,7 @@ export function useReviewWorkspaceController(
     return counts;
   }, [
     currentIssues,
-    data.currentVersion.versionId,
     data.item.reviewItemId,
-    data.item.unresolvedCurrentVersionCount,
     episodeItems,
     projectSummary.data?.items,
   ]);
@@ -216,13 +259,57 @@ export function useReviewWorkspaceController(
   }, [data.item.reviewItemId, data.versions, episodeItems, projectSummary.data?.items]);
   const showToast = useCallback((message: string) => setToast(message), []);
   const showActionError = useCallback((caught: unknown) => showToast(actionError(caught)), [showToast]);
+  const reportRevocationError = useCallback(
+    (message: string | null) => setToast(message),
+    [],
+  );
+  const refetchProjectSummary = projectSummary.refetch;
+  const refreshProjectSummary = useCallback(
+    async () => {
+      await refetchProjectSummary({ throwOnError: true, cancelRefetch: false });
+    },
+    [refetchProjectSummary],
+  );
+  const revocation = useFinalizationRevocationCoordinator({
+    projectRefId: props.projectRefId,
+    items: projectSummary.data?.items ?? [],
+    mutations,
+    refreshProjectSummary,
+    reportError: reportRevocationError,
+    reportMessage: showToast,
+  });
+  const revokeFinalization = revocation.revokeFinalization;
+  const revocationUncertainIds = useMemo(() => {
+    const ids = new Set(revocation.revocationUncertainIds);
+    if (data.item.status === 'finalized' && !data.item.activeFinalizationId) {
+      ids.add(data.item.reviewItemId);
+    }
+    return ids;
+  }, [
+    data.item.activeFinalizationId,
+    data.item.reviewItemId,
+    data.item.status,
+    revocation.revocationUncertainIds,
+  ]);
+  const revokeEpisodeFinalization = useCallback(
+    (item: { reviewItemId: string }) => {
+      const authoritativeItem = projectSummary.data?.items.find(
+        (candidate) => candidate.reviewItemId === item.reviewItemId,
+      );
+      if (!authoritativeItem) {
+        return Promise.reject(new Error('项目剧集权威状态尚未载入，暂时不能撤销定稿。'));
+      }
+      return revokeFinalization(authoritativeItem);
+    },
+    [projectSummary.data?.items, revokeFinalization],
+  );
   const playback = useReviewWorkspacePlayback({
     projectRefId: props.projectRefId,
     reviewItemId: props.reviewItemId,
     currentVersionId: data.currentVersion.versionId,
     currentItemVersionId: data.item.currentVersionId,
-    currentIssues,
-    historicalIssues: [],
+    currentIssues: selectedVersionIssues,
+    historicalIssues: otherVersionIssues,
     selectedIssueId,
     searchParams,
     setSearchParams,
@@ -275,7 +362,7 @@ export function useReviewWorkspaceController(
   useEffect(() => {
     if (!optimisticIssue) return;
     if (
-      optimisticIssue.versionId !== data.currentVersion.versionId ||
+      optimisticIssue.versionId !== data.item.currentVersionId ||
       data.currentIssues.some(
         (issue) => issue.issueId === optimisticIssue.issueId && issue.currentRevisionId === optimisticIssue.currentRevisionId,
       )
@@ -283,7 +370,7 @@ export function useReviewWorkspaceController(
       const frame = window.requestAnimationFrame(() => setOptimisticIssue(null));
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [data.currentIssues, data.currentVersion.versionId, optimisticIssue]);
+  }, [data.currentIssues, data.item.currentVersionId, optimisticIssue]);
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       setOptimisticIssueStatuses((current) => {
@@ -324,13 +411,19 @@ export function useReviewWorkspaceController(
     issueStatusReadonlyReason,
     canAppendVersion,
     nextLabel,
+    authoritativeCurrentVersion,
     currentIssues,
+    historicalIssues,
+    selectedVersionIssues,
     selectedIssueId,
     selectedAnnotationSet,
     episodeItems,
     episodeUnresolvedCounts,
     episodeCurrentVersionLabels: episodeCurrentVersionMetadata.labels,
     episodeCurrentFileNames: episodeCurrentVersionMetadata.fileNames,
+    revocationUncertainIds,
+    revokeEpisodeFinalization,
+    canRevokeEpisodeFinalization: Boolean(projectSummary.data),
     playback,
     actions,
     selectVersion: (versionId: string) => selectVersionParams(versionId, data.item.currentVersionId),

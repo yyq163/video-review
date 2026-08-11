@@ -736,7 +736,8 @@ export function useReviewMutations(mode: EntryMode) {
         api.downloadFinalizedOriginal(input, context()),
     }),
     createProjectFinalizedPackage: useMutation({
-      mutationFn: (projectRefId: ProjectRefId) => api.createProjectFinalizedPackage(projectRefId, context()),
+      mutationFn: (input: Parameters<typeof api.createProjectFinalizedPackage>[0]) =>
+        api.createProjectFinalizedPackage(input, context()),
     }),
     downloadProjectFinalizedPackage: useMutation({
       mutationFn: (result: Parameters<typeof api.downloadProjectFinalizedPackage>[0]) =>

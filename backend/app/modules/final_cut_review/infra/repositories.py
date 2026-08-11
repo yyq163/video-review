@@ -13,7 +13,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, BinaryIO, cast
 
 from sqlalchemy import case, func, select, text, update
@@ -61,7 +61,7 @@ from backend.app.thumbnail_similarity import (
     reconcile_project_thumbnail_groups,
     thumbnail_variant_file_ids,
 )
-from backend.app.settings import Settings, estimate_zip_stored_storage_bytes
+from backend.app.settings import ZIP_MAX_ARCHIVE_NAME_BYTES, Settings, estimate_zip_stored_storage_bytes
 
 from .sqlalchemy_models import (
     FileObjectModel,
@@ -394,9 +394,83 @@ def contained_storage_path(path_value: str, root: Path, file_id: str | None = No
     return path
 
 
-def safe_archive_component(filename: str) -> str:
-    basename = Path(filename.replace("\\", "/")).name.strip()
-    return basename or "original.bin"
+def package_name_has_path_semantics(value: str) -> bool:
+    """Reject archive components that an extractor could treat as a path."""
+    if not value or "\x00" in value or "/" in value or "\\" in value:
+        return True
+    if value in {".", ".."}:
+        return True
+    windows_path = PureWindowsPath(value)
+    return Path(value).is_absolute() or windows_path.is_absolute() or bool(windows_path.drive)
+
+
+def validate_package_unified_name(value: object) -> str:
+    if not isinstance(value, str) or value == "" or value.strip() == "":
+        raise ReviewError("VALIDATION_ERROR", "统一命名不能为空")
+    if package_name_has_path_semantics(value):
+        raise ReviewError("VALIDATION_ERROR", "统一命名不能包含路径或不安全字符")
+    return value
+
+
+def package_original_extension(filename: object) -> str:
+    if not isinstance(filename, str):
+        raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿原片缺少安全的原扩展名")
+    basename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    suffix = Path(basename).suffix
+    if not suffix or package_name_has_path_semantics(suffix):
+        raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿原片缺少安全的原扩展名")
+    return suffix
+
+
+def validate_package_archive_name(value: object, *, error_code: str) -> str:
+    if not isinstance(value, str) or package_name_has_path_semantics(value):
+        raise ReviewError(error_code, "包快照条目名非法")
+    try:
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ReviewError(error_code, "包快照条目名非法") from exc
+    if encoded_length > ZIP_MAX_ARCHIVE_NAME_BYTES:
+        raise ReviewError("FILE_TOO_LARGE", "ZIP 条目名超出格式限制")
+    return value
+
+
+def package_archive_name_is_safe(value: object) -> bool:
+    if not isinstance(value, str) or package_name_has_path_semantics(value):
+        return False
+    try:
+        return len(value.encode("utf-8")) <= ZIP_MAX_ARCHIVE_NAME_BYTES
+    except UnicodeEncodeError:
+        return False
+
+
+PACKAGE_PROBLEM_REASON_LABELS = {
+    "episode_no_missing_or_invalid": "实际集数缺失或无效",
+    "duplicate_episode_no": "项目内实际集数重复",
+    "active_finalization_conflict": "定稿状态与权威版本冲突",
+    "original_extension_missing_or_invalid": "原片扩展名缺失或无效",
+}
+
+
+def package_problem_summary(problem: dict[str, Any]) -> str:
+    item_code = json.dumps(str(problem.get("item_code", "")), ensure_ascii=False)
+    title = json.dumps(str(problem.get("title", "")), ensure_ascii=False)
+    review_item_id = str(problem.get("review_item_id", ""))
+    episode_no = problem.get("episode_no")
+    episode_label = (
+        str(episode_no)
+        if isinstance(episode_no, int) and not isinstance(episode_no, bool) and episode_no > 0
+        else "缺失或无效"
+    )
+    reasons = problem.get("reasons")
+    reason_labels = [
+        PACKAGE_PROBLEM_REASON_LABELS.get(reason, str(reason))
+        for reason in reasons
+        if isinstance(reason, str)
+    ] if isinstance(reasons, list) else []
+    return (
+        f"{item_code}（标题 {title}，条目 {review_item_id}，实际集数 {episode_label}，"
+        f"{'、'.join(reason_labels) or '信息冲突'}）"
+    )
 
 
 def _media_from_version(version: ReviewVersionModel) -> OriginalMediaSnapshotDTO:
@@ -2304,19 +2378,9 @@ class SqlAlchemyReviewRepository:
 
     def prepare_package(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
         del expected_version
+        unified_name = validate_package_unified_name(payload.get("unified_name"))
         project = self._get_project(payload["project_ref_id"], for_update=True)
         self._assert_project_active(project)
-        existing_preparing = self.session.scalar(
-            select(FinalCutPackageSnapshotModel)
-            .where(
-                FinalCutPackageSnapshotModel.project_ref_id == project.id,
-                FinalCutPackageSnapshotModel.status == "preparing",
-            )
-            .order_by(FinalCutPackageSnapshotModel.created_at, FinalCutPackageSnapshotModel.id)
-            .limit(1)
-        )
-        if existing_preparing is not None:
-            return self.package_dto(existing_preparing)
         finalizations = list(
             self.session.scalars(
                 select(FinalizationRecordModel)
@@ -2329,49 +2393,82 @@ class SqlAlchemyReviewRepository:
         )
         if not finalizations:
             raise ReviewError("PACKAGE_NO_FINALIZED_FILES", "项目无定稿原片")
+        problem_items: dict[str, dict[str, Any]] = {}
+        episode_items: dict[int, list[str]] = {}
+        items_by_id: dict[str, ReviewItemModel] = {}
+        resolved_items: list[tuple[FinalizationRecordModel, ReviewItemModel, int, str]] = []
+        for finalization in finalizations:
+            item = self._get_item(finalization.project_ref_id, finalization.review_item_id)
+            items_by_id[item.id] = item
+            reasons: list[str] = []
+            episode_no = item.episode_no
+            if not isinstance(episode_no, int) or isinstance(episode_no, bool) or episode_no <= 0:
+                reasons.append("episode_no_missing_or_invalid")
+            else:
+                episode_items.setdefault(episode_no, []).append(item.id)
+            if (
+                item.workflow_status != "finalized"
+                or item.active_finalization_id != finalization.id
+                or item.current_version_id != finalization.version_id
+            ):
+                reasons.append("active_finalization_conflict")
+            try:
+                extension = package_original_extension(finalization.original_filename)
+            except ReviewError:
+                extension = ""
+                reasons.append("original_extension_missing_or_invalid")
+            if reasons:
+                problem_items[item.id] = {
+                    "review_item_id": item.id,
+                    "item_code": item.item_code,
+                    "title": item.title,
+                    "episode_no": episode_no,
+                    "reasons": reasons,
+                }
+                continue
+            resolved_items.append((finalization, item, cast(int, episode_no), extension))
+        for duplicate_episode_no, review_item_ids in episode_items.items():
+            if len(review_item_ids) < 2:
+                continue
+            for review_item_id in review_item_ids:
+                item = items_by_id[review_item_id]
+                problem = problem_items.setdefault(
+                    review_item_id,
+                    {
+                        "review_item_id": item.id,
+                        "item_code": item.item_code,
+                        "title": item.title,
+                        "episode_no": duplicate_episode_no,
+                        "reasons": [],
+                    },
+                )
+                cast(list[str], problem["reasons"]).append("duplicate_episode_no")
+        if problem_items:
+            ordered_problem_items = [problem_items[item_id] for item_id in sorted(problem_items)]
+            raise ReviewError(
+                "RESOURCE_STATE_CONFLICT",
+                "定稿项目的实际集数或原片信息存在冲突，无法生成完整包。问题集："
+                + "；".join(package_problem_summary(problem) for problem in ordered_problem_items),
+                details={
+                    "problem_items": ordered_problem_items,
+                },
+            )
         total_bytes = validate_package_limits(finalizations, self.settings)
         items: list[dict[str, Any]] = []
         package_id = new_id("pkg")
         package_filename = f"{project.project_code}_{project.project_name}_定稿原片_{utcnow().strftime('%Y%m%d-%H%M')}.zip"
         package_path = contained_path(Path(f"{package_id}.zip"), self.settings.package_root)
         archive_names: set[str] = set()
-        for finalization in finalizations:
-            item = self._get_item(finalization.project_ref_id, finalization.review_item_id)
-            version = self._get_version(finalization.project_ref_id, finalization.review_item_id, finalization.version_id)
-            original_name = safe_archive_component(finalization.original_filename)
-            base_arcname = "_".join(
-                [
-                    safe_archive_component(item.item_code),
-                    safe_archive_component(item.title),
-                    safe_archive_component(version.version_label),
-                    original_name,
-                ]
+        for finalization, _item, episode_no, extension in resolved_items:
+            arcname = validate_package_archive_name(
+                f"{unified_name}-第{episode_no}集{extension}",
+                error_code="VALIDATION_ERROR",
             )
-            arcname = base_arcname
             if arcname in archive_names:
-                arcname = "_".join(
-                    [
-                        safe_archive_component(item.item_code),
-                        safe_archive_component(item.title),
-                        item.id[-8:],
-                        safe_archive_component(version.version_label),
-                        original_name,
-                    ]
+                raise ReviewError(
+                    "RESOURCE_STATE_CONFLICT",
+                    "定稿项目存在重复的实际集数，无法生成完整包",
                 )
-            suffix = 2
-            while arcname in archive_names:
-                stem = Path(original_name).stem or "original"
-                suffix_name = f"{stem}_{suffix}{Path(original_name).suffix}"
-                arcname = "_".join(
-                    [
-                        safe_archive_component(item.item_code),
-                        safe_archive_component(item.title),
-                        item.id[-8:],
-                        safe_archive_component(version.version_label),
-                        safe_archive_component(suffix_name),
-                    ]
-                )
-                suffix += 1
             archive_names.add(arcname)
             items.append(
                 {
@@ -2422,8 +2519,24 @@ class SqlAlchemyReviewRepository:
                 snapshot.updated_at,
             )
 
+        def package_content_matches(snapshot: FinalCutPackageSnapshotModel) -> bool:
+            return snapshot.total_bytes == total_bytes and snapshot.items == items
+
+        existing_preparing = self.session.scalar(
+            select(FinalCutPackageSnapshotModel)
+            .where(
+                FinalCutPackageSnapshotModel.project_ref_id == project.id,
+                FinalCutPackageSnapshotModel.status == "preparing",
+            )
+            .order_by(FinalCutPackageSnapshotModel.created_at, FinalCutPackageSnapshotModel.id)
+            .limit(1)
+        )
+        if existing_preparing is not None:
+            if package_content_matches(existing_preparing):
+                return self.package_dto(existing_preparing)
+
         for reusable in reusable_packages:
-            if reusable.total_bytes != total_bytes or reusable.items != items:
+            if not package_content_matches(reusable):
                 continue
             sources_available = True
             for reusable_item in reusable.items:
@@ -2473,8 +2586,6 @@ class SqlAlchemyReviewRepository:
             .limit(1)
             .with_for_update()
         )
-        if existing_preparing is not None:
-            return self.package_dto(existing_preparing)
         for reusable_id, scanned_fingerprint, integrity in scanned_reusable_packages:
             current_reusable = self.session.scalar(
                 select(FinalCutPackageSnapshotModel)
@@ -2501,6 +2612,13 @@ class SqlAlchemyReviewRepository:
                 expected_path=expected_path,
                 actual_size=actual_size,
                 identity=identity,
+            )
+        if existing_preparing is not None:
+            if package_content_matches(existing_preparing):
+                return self.package_dto(existing_preparing)
+            raise ReviewError(
+                "RESOURCE_STATE_CONFLICT",
+                "项目已有不同内容或统一命名的包正在准备",
             )
         pending_count = (
             self.session.scalar(select(func.count()).select_from(FinalCutPackageSnapshotModel).where(FinalCutPackageSnapshotModel.status == "preparing")) or 0
@@ -2548,6 +2666,11 @@ class SqlAlchemyReviewRepository:
             if package_path != expected_path or staging_path != expected_staging_path:
                 raise ReviewError("STORAGE_UNAVAILABLE", "打包输出路径不符合存储合同")
             if (
+                len(claim.sources) > self.settings.max_package_files
+                or claim.expected_source_bytes > self.settings.max_package_bytes
+            ):
+                raise ReviewError("FILE_TOO_LARGE", "包快照超出打包限制")
+            if (
                 not isinstance(claim.expected_source_bytes, int)
                 or isinstance(claim.expected_source_bytes, bool)
                 or claim.expected_source_bytes <= 0
@@ -2577,6 +2700,7 @@ class SqlAlchemyReviewRepository:
                         compression=zipfile.ZIP_STORED,
                     ) as zf:
                         for source in claim.sources:
+                            archive_name = source.archive_name
                             if (
                                 not isinstance(source.file_id, str)
                                 or not isinstance(source.storage_path, str)
@@ -2585,8 +2709,8 @@ class SqlAlchemyReviewRepository:
                                 or not isinstance(source.expected_size, int)
                                 or isinstance(source.expected_size, bool)
                                 or source.expected_size <= 0
-                                or not isinstance(source.archive_name, str)
-                                or Path(source.archive_name).name != source.archive_name
+                                or not isinstance(archive_name, str)
+                                or not package_archive_name_is_safe(archive_name)
                             ):
                                 raise ReviewError("PACKAGE_SOURCE_MISSING", "包快照条目非法")
                             source_path = contained_storage_path(
@@ -2598,7 +2722,7 @@ class SqlAlchemyReviewRepository:
                                 zf,
                                 source_path,
                                 self.settings.storage_root,
-                                source.archive_name,
+                                archive_name,
                                 source.expected_size,
                             )
                             if actual_hash != source.expected_hash:
@@ -2710,31 +2834,101 @@ class SqlAlchemyReviewRepository:
         snapshot.build_lease_expires_at = lease_expires_at
         snapshot.updated_at = now
         sources: list[PackageBuildSource] = []
-        for item in snapshot.items:
-            file_id = item.get("original_file_id") if isinstance(item, dict) else None
-            finalization_id = item.get("finalization_id") if isinstance(item, dict) else None
+        claimed_unified_name: str | None = None
+        claimed_episode_nos: set[int] = set()
+        claimed_archive_names: set[str] = set()
+        for item_snapshot in snapshot.items:
+            item_data = item_snapshot if isinstance(item_snapshot, dict) else {}
+            file_id = item_data.get("original_file_id")
+            finalization_id = item_data.get("finalization_id")
+            review_item_id = item_data.get("review_item_id")
+            version_id = item_data.get("version_id")
+            archive_name = item_data.get("archive_name")
+            snapshot_original_filename = item_data.get("original_filename")
+            snapshot_sha256 = item_data.get("sha256")
             file = self.session.get(FileObjectModel, file_id) if isinstance(file_id, str) else None
             finalization = (
                 self.session.get(FinalizationRecordModel, finalization_id)
                 if isinstance(finalization_id, str)
                 else None
             )
-            expected_size = (
-                finalization.file_size
-                if finalization is not None
-                and finalization.project_ref_id == snapshot.project_ref_id
-                and finalization.original_file_id == file_id
-                and finalization.review_item_id == item.get("review_item_id")
-                and finalization.version_id == item.get("version_id")
+            review_item = (
+                self.session.get(ReviewItemModel, review_item_id)
+                if isinstance(review_item_id, str)
                 else None
             )
+            source_is_valid = (
+                isinstance(file_id, str)
+                and isinstance(finalization_id, str)
+                and isinstance(review_item_id, str)
+                and isinstance(version_id, str)
+                and isinstance(snapshot_original_filename, str)
+                and isinstance(snapshot_sha256, str)
+                and re.fullmatch(r"[0-9a-f]{64}", snapshot_sha256) is not None
+                and package_archive_name_is_safe(archive_name)
+                and file is not None
+                and finalization is not None
+                and review_item is not None
+                and finalization.status == "active"
+                and finalization.project_ref_id == snapshot.project_ref_id
+                and finalization.original_file_id == file_id
+                and finalization.review_item_id == review_item_id
+                and finalization.version_id == version_id
+                and finalization.original_filename == snapshot_original_filename
+                and finalization.sha256 == snapshot_sha256
+                and review_item.project_ref_id == snapshot.project_ref_id
+                and review_item.workflow_status == "finalized"
+                and review_item.active_finalization_id == finalization_id
+                and review_item.current_version_id == version_id
+                and file.original_filename == finalization.original_filename
+                and file.file_size == finalization.file_size
+                and file.sha256 == finalization.sha256
+            )
+            episode_no = review_item.episode_no if review_item is not None else None
+            if (
+                not isinstance(episode_no, int)
+                or isinstance(episode_no, bool)
+                or episode_no <= 0
+                or episode_no in claimed_episode_nos
+            ):
+                source_is_valid = False
+            extension = ""
+            if finalization is not None:
+                try:
+                    extension = package_original_extension(finalization.original_filename)
+                except ReviewError:
+                    source_is_valid = False
+            unified_name: str | None = None
+            if isinstance(archive_name, str) and isinstance(episode_no, int) and extension:
+                expected_tail = f"-第{episode_no}集{extension}"
+                if archive_name.endswith(expected_tail):
+                    unified_name = archive_name[: -len(expected_tail)]
+                    try:
+                        validate_package_unified_name(unified_name)
+                    except ReviewError:
+                        source_is_valid = False
+                else:
+                    source_is_valid = False
+            else:
+                source_is_valid = False
+            if unified_name is not None:
+                if claimed_unified_name is None:
+                    claimed_unified_name = unified_name
+                elif claimed_unified_name != unified_name:
+                    source_is_valid = False
+            if isinstance(archive_name, str) and archive_name in claimed_archive_names:
+                source_is_valid = False
+            if isinstance(episode_no, int):
+                claimed_episode_nos.add(episode_no)
+            if isinstance(archive_name, str):
+                claimed_archive_names.add(archive_name)
             sources.append(
                 PackageBuildSource(
-                    file_id=file_id if isinstance(file_id, str) else None,
-                    storage_path=file.storage_path if file is not None else None,
-                    expected_hash=(item.get("sha256") if isinstance(item, dict) and isinstance(item.get("sha256"), str) else None),
-                    expected_size=expected_size,
-                    archive_name=(item.get("archive_name") if isinstance(item, dict) and isinstance(item.get("archive_name"), str) else None),
+                    file_id=file_id if source_is_valid else None,
+                    storage_path=file.storage_path if source_is_valid and file is not None else None,
+                    expected_hash=finalization.sha256 if source_is_valid and finalization is not None else None,
+                    expected_size=finalization.file_size if source_is_valid and finalization is not None else None,
+                    archive_name=archive_name if source_is_valid and isinstance(archive_name, str) else None,
                 )
             )
         self.session.flush()

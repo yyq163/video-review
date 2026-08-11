@@ -694,6 +694,9 @@ describe('generated HTTP envelope client', () => {
         expect(init?.method).toBe('POST');
         expect(init?.credentials).toBe('include');
         expect(init?.headers).toEqual(expect.objectContaining({ 'Idempotency-Key': expect.stringContaining('PrepareFinalizedPackage_') }));
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          payload: { project_ref_id: 'prj_http', unified_name: 'HTTP 定稿' },
+        });
         return new Response(
           JSON.stringify({
             data: {
@@ -754,7 +757,10 @@ describe('generated HTTP envelope client', () => {
       },
     );
 
-    const result = await api.createProjectFinalizedPackage('prj_http', entryPolicy.createContext('review'));
+    const result = await api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 定稿' },
+      entryPolicy.createContext('review'),
+    );
 
     expect(result.fileName).toBe('HTTP Finalized Package.zip');
     expect(result.blob).toBeUndefined();
@@ -808,7 +814,10 @@ describe('generated HTTP envelope client', () => {
       },
     );
 
-    await expect(api.createProjectFinalizedPackage('prj_http', entryPolicy.createContext('review'))).rejects.toThrow(
+    await expect(api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 定稿' },
+      entryPolicy.createContext('review'),
+    )).rejects.toThrow(
       '项目包准备失败，请重试。',
     );
     await expect(
@@ -876,7 +885,10 @@ describe('generated HTTP envelope client', () => {
       { entryMode: 'review', notify: () => undefined, downloadBlob: () => undefined, downloadUrl: () => undefined },
     );
 
-    await expect(api.createProjectFinalizedPackage('prj_http', entryPolicy.createContext('review'))).resolves.toMatchObject({
+    await expect(api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 定稿' },
+      entryPolicy.createContext('review'),
+    )).resolves.toMatchObject({
       packageId: 'pkg_poll',
       fileName: 'poll.zip',
     });
@@ -918,7 +930,10 @@ describe('generated HTTP envelope client', () => {
       { entryMode: 'review', notify: () => undefined, downloadBlob: () => undefined, downloadUrl: () => undefined },
     );
 
-    const preparation = api.createProjectFinalizedPackage('prj_http', entryPolicy.createContext('review'));
+    const preparation = api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 定稿' },
+      entryPolicy.createContext('review'),
+    );
     const rejection = expect(preparation).rejects.toThrow('项目包状态查询超时，请重试。');
     await vi.advanceTimersByTimeAsync(10_000);
     await rejection;
@@ -959,7 +974,10 @@ describe('generated HTTP envelope client', () => {
       'https://review.example',
       { entryMode: 'review', notify: () => undefined, downloadBlob: () => undefined, downloadUrl: () => undefined },
     );
-    const result = await api.createProjectFinalizedPackage('prj_http', entryPolicy.createContext('review'));
+    const result = await api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 定稿' },
+      entryPolicy.createContext('review'),
+    );
     await vi.advanceTimersByTimeAsync(1_001);
 
     await expect(api.downloadProjectFinalizedPackage(result, entryPolicy.createContext('review'))).rejects.toThrow(
@@ -1821,7 +1839,10 @@ describe('final cut review core invariants', () => {
         ctx(review),
       ),
     ).rejects.toMatchObject({ code: 'PROJECT_ARCHIVED_READONLY' });
-    await expect(review.createProjectFinalizedPackage('prj_seed_final_cut', ctx(review))).resolves.toMatchObject({
+    await expect(review.createProjectFinalizedPackage(
+      { projectRefId: 'prj_seed_final_cut', unifiedName: '归档定稿' },
+      ctx(review),
+    )).resolves.toMatchObject({
       entries: [expect.objectContaining({ projectRefId: 'prj_seed_final_cut', versionId: 'ver_ep28_v2' })],
     });
 
@@ -1890,7 +1911,10 @@ describe('final cut review core invariants', () => {
     expect(snapshot.issues.filter((issue) => issue.projectRefId === 'prj_seed_final_cut')).toHaveLength(
       beforeIssueCount,
     );
-    await expect(review.createProjectFinalizedPackage('prj_seed_final_cut', ctx(review))).rejects.toMatchObject({
+    await expect(review.createProjectFinalizedPackage(
+      { projectRefId: 'prj_seed_final_cut', unifiedName: '删除定稿' },
+      ctx(review),
+    )).rejects.toMatchObject({
       code: 'RESOURCE_STATE_CONFLICT',
     });
     await expect(
@@ -2047,19 +2071,23 @@ describe('final cut review core invariants', () => {
     expect(workspace.currentVersion.label).toBe('V3');
     expect(workspace.currentVersion.status).toBe('pending_review');
     expect(workspace.currentIssues).toHaveLength(0);
-    expect(workspace.historicalIssues).toHaveLength(0);
-    const historicalIssues = (
-      await Promise.all(
-        ['ver_ep28_v1', 'ver_ep28_v2'].map((versionId) =>
-          review.getVersionIssues({
-            projectRefId: 'prj_seed_final_cut',
-            reviewItemId: 'item_ep28',
-            versionId,
-          }),
-        ),
-      )
-    ).flat();
-    expect(historicalIssues.map((issue) => issue.versionId).sort()).toEqual([
+    expect(workspace.historicalIssues.map((issue) => issue.versionId).sort()).toEqual([
+      'ver_ep28_v1',
+      'ver_ep28_v2',
+      'ver_ep28_v2',
+      'ver_ep28_v2',
+    ]);
+
+    const selectedHistoricalWorkspace = await review.getWorkspace({
+      projectRefId: 'prj_seed_final_cut',
+      reviewItemId: 'item_ep28',
+      versionId: 'ver_ep28_v1',
+    });
+    expect(selectedHistoricalWorkspace.currentVersion.versionId).toBe('ver_ep28_v1');
+    expect(selectedHistoricalWorkspace.currentIssues).toHaveLength(0);
+    expect(
+      selectedHistoricalWorkspace.historicalIssues.map((issue) => issue.versionId).sort(),
+    ).toEqual([
       'ver_ep28_v1',
       'ver_ep28_v2',
       'ver_ep28_v2',
@@ -2138,14 +2166,9 @@ describe('final cut review core invariants', () => {
       reviewItemId: created.item.reviewItemId,
     });
     expect(nextWorkspace.currentIssues).toHaveLength(0);
-    expect(nextWorkspace.historicalIssues).toHaveLength(0);
-    await expect(
-      review.getVersionIssues({
-        projectRefId: project.projectRefId,
-        reviewItemId: created.item.reviewItemId,
-        versionId: created.version.versionId,
-      }),
-    ).resolves.toEqual([expect.objectContaining({ issueId: issue.issueId })]);
+    expect(nextWorkspace.historicalIssues).toEqual([
+      expect.objectContaining({ issueId: issue.issueId, versionId: created.version.versionId }),
+    ]);
   });
 
   it('edits issue by creating a current revision and keeps replies separate from playback', async () => {
@@ -2265,7 +2288,10 @@ describe('final cut review core invariants', () => {
       ctx(edit),
     );
 
-    const pkg = await review.createProjectFinalizedPackage('prj_seed_final_cut', ctx(review));
+    const pkg = await review.createProjectFinalizedPackage(
+      { projectRefId: 'prj_seed_final_cut', unifiedName: '定稿原片' },
+      ctx(review),
+    );
     expect(pkg.entries).toHaveLength(1);
     expect(pkg.entries[0]).toMatchObject({
       projectRefId: 'prj_seed_final_cut',
@@ -2275,6 +2301,7 @@ describe('final cut review core invariants', () => {
     });
     const { default: JSZip } = await import('jszip');
     const zip = await JSZip.loadAsync(pkg.blob!, { checkCRC32: true });
+    expect(pkg.entries[0].fileName).toBe('定稿原片-第28集.webm');
     expect(zip.file(pkg.entries[0].fileName)).not.toBeNull();
   });
 
@@ -2323,10 +2350,13 @@ describe('final cut review core invariants', () => {
       ctx(review),
     );
 
-    const pkg = await review.createProjectFinalizedPackage(project.projectRefId, ctx(review));
+    const pkg = await review.createProjectFinalizedPackage(
+      { projectRefId: project.projectRefId, unifiedName: '大文件原片' },
+      ctx(review),
+    );
     expect(pkg.entries).toHaveLength(1);
     expect(pkg.blob?.type).toBe('application/zip');
-    expect(pkg.entries[0].fileName).toContain('large-original.mov');
+    expect(pkg.entries[0].fileName).toBe('大文件原片-第1集.mov');
     expect(arrayBuffer).not.toHaveBeenCalled();
     expect(stream).toHaveBeenCalled();
   });
@@ -2362,9 +2392,140 @@ describe('final cut review core invariants', () => {
     const stored = await storage.getOriginal(finalization.originalFileId);
     storage.seedOriginal({ ...stored, sha256: 'mismatched-source-hash' });
 
-    await expect(review.createProjectFinalizedPackage(project.projectRefId, ctx(review))).rejects.toMatchObject({
+    await expect(review.createProjectFinalizedPackage(
+      { projectRefId: project.projectRefId, unifiedName: '哈希原片' },
+      ctx(review),
+    )).rejects.toMatchObject({
       code: 'PACKAGE_SOURCE_HASH_MISMATCH',
     });
+  });
+
+  it('rejects the whole package when an active finalization has no authoritative episode number', async () => {
+    const { edit, review } = makeHarness();
+    const project = await edit.createProject(
+      {
+        name: '缺失集数项目',
+        code: 'MISSING-EPISODE',
+        description: '验证项目包不能从 item_code 或列表位置推断集数。',
+      },
+      ctx(edit),
+    );
+    const created = await edit.createReviewItemWithVersion(
+      {
+        projectRefId: project.projectRefId,
+        title: '缺失权威集数',
+        episode: '',
+        file: demoFile('missing-episode.mp4'),
+      },
+      ctx(edit),
+    );
+    await review.finalizeCurrentVersion(
+      {
+        projectRefId: project.projectRefId,
+        reviewItemId: created.item.reviewItemId,
+        versionId: created.version.versionId,
+        confirmed: true,
+      },
+      ctx(review),
+    );
+
+    await expect(review.createProjectFinalizedPackage(
+      { projectRefId: project.projectRefId, unifiedName: '不得猜集数' },
+      ctx(review),
+    )).rejects.toMatchObject({
+      code: 'PACKAGE_EPISODE_INVALID',
+      message: expect.stringContaining(created.item.reviewItemId),
+    });
+  });
+
+  it('rejects the whole package when a finalized original has no extension', async () => {
+    const { edit, review, repository, storage } = makeHarness();
+    const project = await edit.createProject(
+      {
+        name: '缺失扩展名项目',
+        code: 'MISSING-EXTENSION',
+        description: '验证打包必须保留真实且有效的原扩展名。',
+      },
+      ctx(edit),
+    );
+    const created = await edit.createReviewItemWithVersion(
+      {
+        projectRefId: project.projectRefId,
+        title: '无扩展名原片',
+        episode: '09',
+        file: demoFile('original.mp4'),
+      },
+      ctx(edit),
+    );
+    const finalization = await review.finalizeCurrentVersion(
+      {
+        projectRefId: project.projectRefId,
+        reviewItemId: created.item.reviewItemId,
+        versionId: created.version.versionId,
+        confirmed: true,
+      },
+      ctx(review),
+    );
+    const original = await storage.getOriginal(finalization.originalFileId);
+    storage.seedOriginal({ ...original, fileName: 'original-without-extension' });
+    const packageAdapter = new MockFinalizedPackageAdapter();
+    const summary = await repository.getProjectSummary(project.projectRefId);
+
+    await expect(packageAdapter.createProjectPackage({
+      unifiedName: '不得补扩展名',
+      project: summary.project,
+      items: repository.getAllProjectItems(project.projectRefId),
+      versions: repository.getAllProjectVersions(project.projectRefId),
+      finalizations: repository.getActiveFinalizations(project.projectRefId).map((active) => ({
+        ...active,
+        fileName: 'original-without-extension',
+        originalMedia: {
+          ...active.originalMedia,
+          originalFilename: 'original-without-extension',
+        },
+      })),
+      fileStorage: storage,
+    })).rejects.toMatchObject({
+      code: 'PACKAGE_EPISODE_INVALID',
+      message: expect.stringContaining('缺少有效原扩展名'),
+    });
+  });
+
+  it('rejects a stored source whose file identity differs from its finalization snapshot', async () => {
+    const { edit, review, storage } = makeHarness();
+    const project = await edit.createProject(
+      {
+        name: '源身份项目',
+        code: 'SOURCE-IDENTITY',
+        description: '验证同 SHA 也不能掩盖文件名或大小身份漂移。',
+      },
+      ctx(edit),
+    );
+    const created = await edit.createReviewItemWithVersion(
+      {
+        projectRefId: project.projectRefId,
+        title: '源身份成片',
+        episode: '1',
+        file: demoFile('identity.mp4'),
+      },
+      ctx(edit),
+    );
+    const finalization = await review.finalizeCurrentVersion(
+      {
+        projectRefId: project.projectRefId,
+        reviewItemId: created.item.reviewItemId,
+        versionId: created.version.versionId,
+        confirmed: true,
+      },
+      ctx(review),
+    );
+    const stored = await storage.getOriginal(finalization.originalFileId);
+    storage.seedOriginal({ ...stored, fileName: 'renamed.mp4' });
+
+    await expect(review.createProjectFinalizedPackage(
+      { projectRefId: project.projectRefId, unifiedName: '身份校验' },
+      ctx(review),
+    )).rejects.toMatchObject({ code: 'PACKAGE_SOURCE_HASH_MISMATCH' });
   });
 
   it('rejects cross-project, cross-item, cross-version, and cross-issue misuse', async () => {
@@ -2436,7 +2597,7 @@ describe('final cut review core invariants', () => {
     });
   });
 
-  it('sanitizes file names and zip path segments before download/package use', async () => {
+  it('preserves a valid unified name exactly and rejects unsafe package names', async () => {
     expect(sanitizeFileSegment('../bad/project', 'project')).toBe('bad_project');
     expect(sanitizeFileSegment('..', 'project')).toBe('project');
     expect(sanitizeDownloadFileName('..\\evil/clip.mp4', 'clip.mp4')).toBe('evil_clip.mp4');
@@ -2454,8 +2615,8 @@ describe('final cut review core invariants', () => {
       {
         projectRefId: project.projectRefId,
         title: '../成片',
-        episode: '../01',
-        file: demoFile('../payload.mp4'),
+        episode: '01',
+        file: demoFile('payload.MP4'),
       },
       ctx(edit),
     );
@@ -2470,11 +2631,21 @@ describe('final cut review core invariants', () => {
     );
     expect(finalization.fileName).not.toContain('..');
 
-    const pkg = await review.createProjectFinalizedPackage(project.projectRefId, ctx(review));
+    const pkg = await review.createProjectFinalizedPackage(
+      { projectRefId: project.projectRefId, unifiedName: '  中文 Name.标点!  ' },
+      ctx(review),
+    );
     expect(pkg.entries).toHaveLength(1);
     expect(pkg.fileName).toBe('PROJECT-finalized-originals.zip');
     expect(pkg.fileName).not.toMatch(/\.\.|\/|\\/);
-    expect(pkg.entries[0].fileName).not.toMatch(/\.\.|\\/);
-    expect(pkg.entries[0].fileName).toMatch(/^PROJECT\//);
+    expect(pkg.entries[0].fileName).toBe('  中文 Name.标点!  -第1集.MP4');
+    for (const unifiedName of ['', '   ', '../evil', '..\\evil', '/absolute', 'C:drive', `bad\0name`]) {
+      await expect(
+        review.createProjectFinalizedPackage(
+          { projectRefId: project.projectRefId, unifiedName },
+          ctx(review),
+        ),
+      ).rejects.toMatchObject({ code: 'PACKAGE_UNIFIED_NAME_INVALID' });
+    }
   });
 });

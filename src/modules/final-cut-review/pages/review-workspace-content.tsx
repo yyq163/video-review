@@ -207,7 +207,7 @@ export function ReviewWorkspaceContent({
               versions={data.versions}
               currentVersionId={data.item.currentVersionId}
               workspaceVersionId={data.currentVersion.versionId}
-              workspaceIssues={controller.currentIssues}
+              workspaceIssues={controller.selectedVersionIssues}
             />
           </CapabilityGate>
         </div>

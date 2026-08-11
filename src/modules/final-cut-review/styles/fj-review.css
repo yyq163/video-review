@@ -1956,10 +1956,11 @@
   padding-bottom: 2px;
 }
 
-.fj-review-episodes button {
+.fj-review-episode-card {
   align-items: center;
   background: #101417;
   border: 1px solid #2b3638;
+  border-radius: 6px;
   color: var(--fj-review-text);
   display: grid;
   flex: 0 0 260px;
@@ -1973,12 +1974,23 @@
   text-align: left;
 }
 
-.fj-review-episodes button.is-active {
+.fj-review-episode-select {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.fj-review-episode-card.is-active {
   border-color: var(--fj-review-aqua);
   box-shadow: inset 0 -3px 0 var(--fj-review-aqua);
 }
 
-.fj-review-episodes button.is-changes-requested {
+.fj-review-episode-card.is-changes-requested {
   background:
     linear-gradient(rgba(255, 201, 71, 0.18), rgba(255, 201, 71, 0.18)),
     var(--fj-review-surface);
@@ -1986,7 +1998,7 @@
   box-shadow: inset 4px 0 0 var(--fj-review-yellow);
 }
 
-.fj-review-episodes button.is-finalized {
+.fj-review-episode-card.is-finalized {
   background:
     linear-gradient(rgba(114, 216, 139, 0.2), rgba(114, 216, 139, 0.2)),
     var(--fj-review-surface);
@@ -1994,24 +2006,24 @@
   box-shadow: inset 4px 0 0 var(--fj-review-green);
 }
 
-.fj-review-episodes button.is-active.is-changes-requested,
-.fj-review-episodes button.is-active.is-finalized {
+.fj-review-episode-card.is-active.is-changes-requested,
+.fj-review-episode-card.is-active.is-finalized {
   border-color: var(--fj-review-aqua);
   box-shadow:
     inset 4px 0 0 currentColor,
     inset 0 -3px 0 var(--fj-review-aqua);
 }
 
-.fj-review-episodes button.is-active.is-changes-requested {
+.fj-review-episode-card.is-active.is-changes-requested {
   color: var(--fj-review-yellow);
 }
 
-.fj-review-episodes button.is-active.is-finalized {
+.fj-review-episode-card.is-active.is-finalized {
   color: var(--fj-review-green);
 }
 
-.fj-review-episodes button.is-active.is-changes-requested .fj-review-episode-copy,
-.fj-review-episodes button.is-active.is-finalized .fj-review-episode-copy {
+.fj-review-episode-card.is-active.is-changes-requested .fj-review-episode-copy,
+.fj-review-episode-card.is-active.is-finalized .fj-review-episode-copy {
   color: var(--fj-review-text);
 }
 
@@ -2327,8 +2339,10 @@
   gap: 10px;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   padding-right: 2px;
   scrollbar-gutter: stable;
+  touch-action: pan-y;
 }
 
 .fj-review-issue-list {
@@ -2344,7 +2358,10 @@
   align-content: start;
   display: grid;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
   padding: 10px;
+  position: relative;
 }
 
 .fj-review-issue-card.is-selected {
@@ -2352,18 +2369,58 @@
   box-shadow: inset 3px 0 0 var(--fj-review-aqua);
 }
 
+.fj-review-issue-card.is-historical {
+  background:
+    linear-gradient(rgba(114, 216, 139, 0.2), rgba(114, 216, 139, 0.2)),
+    var(--fj-review-surface);
+  border-color: rgba(114, 216, 139, 0.62);
+  box-shadow: inset 4px 0 0 var(--fj-review-green);
+}
+
+.fj-review-issue-card.is-historical.is-selected {
+  border-color: var(--fj-review-aqua);
+  box-shadow:
+    inset 4px 0 0 var(--fj-review-green),
+    inset 0 -3px 0 var(--fj-review-aqua);
+}
+
+.fj-review-issue-card > :not(.fj-review-issue-version-watermark) {
+  position: relative;
+  z-index: 1;
+}
+
+.fj-review-issue-version-watermark {
+  align-items: center;
+  color: rgba(114, 216, 139, 0.13);
+  display: flex;
+  font-size: clamp(48px, 6vw, 72px);
+  font-style: italic;
+  font-weight: 800;
+  inset: 0;
+  justify-content: center;
+  line-height: 1;
+  pointer-events: none;
+  position: absolute;
+  user-select: none;
+  z-index: 0;
+}
+
 .fj-review-issue-select {
   background: transparent;
   border: 0;
   color: inherit;
   justify-content: flex-start;
+  min-width: 0;
   padding: 0;
   text-align: left;
+  width: 100%;
 }
 
 .fj-review-issue-select span {
   color: var(--fj-review-text);
+  min-width: 0;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .fj-review-issue-meta {
@@ -2408,6 +2465,7 @@
 .fj-review-revision-history p {
   color: var(--fj-review-text);
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .fj-review-timecode-button {
@@ -2424,6 +2482,20 @@
   gap: 10px;
   margin-top: 12px;
   padding-top: 12px;
+}
+
+.fj-review-historical-issue-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fj-review-historical-issue-group h3 {
+  color: var(--fj-review-green);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
 }
 
 .fj-review-issue-card p {
@@ -2465,7 +2537,13 @@
 .fj-review-reply-list {
   border-left: 2px solid var(--fj-review-line);
   color: var(--fj-review-muted);
+  min-width: 0;
   padding-left: 10px;
+}
+
+.fj-review-reply-list p {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .fj-review-player-toast {

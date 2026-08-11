@@ -147,13 +147,33 @@ def main() -> int:
         class ProjectScopedProxyHandler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
+            def _from_allowed_frontend(self) -> bool:
+                origin = self.headers.get("Origin")
+                if origin is not None:
+                    return origin == allowed_origin
+                if self.command not in {"GET", "HEAD"}:
+                    return False
+                referer = self.headers.get("Referer")
+                if referer is None:
+                    return False
+                try:
+                    parsed_referer = urllib.parse.urlparse(referer)
+                except ValueError:
+                    return False
+                return (
+                    parsed_referer.scheme == parsed_frontend.scheme
+                    and parsed_referer.netloc == parsed_frontend.netloc
+                    and parsed_referer.username is None
+                    and parsed_referer.password is None
+                )
+
             def _allowed(self) -> bool:
                 if self.client_address[0] not in {"127.0.0.1", "::1"}:
                     return False
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/runtimez":
                     return self.command in {"GET", "HEAD"} and self.headers.get("Origin") in {None, allowed_origin}
-                if self.headers.get("Origin") != allowed_origin:
+                if not self._from_allowed_frontend():
                     return False
                 path_segments = tuple(segment for segment in path.split("/") if segment)
                 if path == "/api/v1/final-cut-review/projects":

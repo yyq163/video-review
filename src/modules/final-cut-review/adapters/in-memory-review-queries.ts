@@ -154,8 +154,17 @@ export class InMemoryReviewQueries {
     const currentIssues = this.store.getIssuesForVersion(
       input.projectRefId,
       input.reviewItemId,
-      currentVersion.versionId,
+      item.currentVersionId,
     );
+    const historicalIssues = versions
+      .filter((version) => version.versionId !== item.currentVersionId)
+      .flatMap((version) =>
+        this.store.getIssuesForVersion(
+          input.projectRefId,
+          input.reviewItemId,
+          version.versionId,
+        ),
+      );
     const unresolvedCurrentVersionCount = this.store
       .getIssuesForVersion(
         input.projectRefId,
@@ -173,7 +182,7 @@ export class InMemoryReviewQueries {
       versions,
       currentVersion,
       currentIssues,
-      historicalIssues: [],
+      historicalIssues,
       activeFinalization: activeFinalization ? cloneFinalization(activeFinalization) : null,
     };
   };

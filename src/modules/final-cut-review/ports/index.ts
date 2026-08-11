@@ -256,6 +256,7 @@ export interface FileStoragePort {
 
 export interface FinalizedPackagePort {
   createProjectPackage(input: {
+    unifiedName: string;
     project: Project;
     items: ReviewItem[];
     versions: ReviewVersion[];
@@ -303,6 +304,9 @@ export interface ReviewApiPort extends ReviewQueryPort, ReviewCommandPort {
     },
     context: ExecutionContext,
   ): Promise<StoredOriginalFile>;
-  createProjectFinalizedPackage(projectRefId: ProjectRefId, context: ExecutionContext): Promise<PackageResult>;
+  createProjectFinalizedPackage(
+    input: { projectRefId: ProjectRefId; unifiedName: string },
+    context: ExecutionContext,
+  ): Promise<PackageResult>;
   downloadProjectFinalizedPackage(result: PackageResult, context: ExecutionContext): Promise<void>;
 }

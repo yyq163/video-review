@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReviewItemDTO } from '../contracts-generated/backend-contract';
 import { createReviewRuntime } from '../entry/runtime';
+import { itemFromDto } from './http-review-project-mappers';
 
 function envelope(data: object) {
   return new Response(
@@ -7,6 +9,30 @@ function envelope(data: object) {
     { status: 200, headers: { 'Content-Type': 'application/json' } },
   );
 }
+
+it('maps the displayed episode only from authoritative episode_no and drops item-code zero padding', () => {
+  const dto: ReviewItemDTO = {
+    id: 'item_authoritative_episode',
+    project_ref_id: 'prj_metadata',
+    item_code: '01',
+    episode_no: 1,
+    title: 'Authoritative episode',
+    workflow_status: 'pending_review',
+    current_version_id: 'ver_authoritative_episode',
+    current_version_no: 1,
+    ui_status: '待审核',
+    active_finalization_id: null,
+    unresolved_current_version_count: 0,
+    resolved_current_version_count: 0,
+    historical_version_count: 0,
+    is_finalized: false,
+    lock_version: 1,
+    created_at: '2026-08-11T00:00:00.000Z',
+    updated_at: '2026-08-11T00:00:00.000Z',
+  };
+
+  expect(itemFromDto(dto)).toMatchObject({ episode: '1' });
+});
 
 describe('HTTP metadata commands', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -106,7 +132,7 @@ describe('HTTP metadata commands', () => {
     runtime.dispose();
   });
 
-  it('preserves a nonnumeric item code when a title-only edit omits episode_no', async () => {
+  it('keeps the nonnumeric item code without inventing an episode when a title-only edit omits episode_no', async () => {
     const item = {
       id: 'item_nonnumeric',
       project_ref_id: 'prj_metadata',
@@ -157,7 +183,7 @@ describe('HTTP metadata commands', () => {
       api.entryPolicy.createContext('edit'),
     );
 
-    expect(updatedItem).toMatchObject({ title: 'Renamed cut', episode: 'CUT-A', itemCode: 'CUT-A' });
+    expect(updatedItem).toMatchObject({ title: 'Renamed cut', episode: '', itemCode: 'CUT-A' });
     runtime.dispose();
   });
 });

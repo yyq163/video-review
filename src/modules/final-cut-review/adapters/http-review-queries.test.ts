@@ -230,6 +230,58 @@ describe('HttpReviewQueries issue revisions', () => {
     );
   });
 
+  it('loads every page of a version issue list without truncating after 200 opinions', async () => {
+    const issueForIndex = (index: number): ReviewIssueDTO => {
+      const issueId = `issue_${index}`;
+      const revisionId = `revision_${index}`;
+      return {
+        ...issueDto,
+        id: issueId,
+        issue_no: index,
+        current_revision_id: revisionId,
+        playback_target: {
+          ...issueDto.playback_target,
+          issue_id: issueId,
+          revision_id: revisionId,
+        },
+        current_revision: {
+          ...issueDto.current_revision,
+          id: revisionId,
+          issue_id: issueId,
+        },
+      };
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const page = Number(new URL(String(input)).searchParams.get('page'));
+      const data = page === 1
+        ? Array.from({ length: 200 }, (_, index) => issueForIndex(index + 1))
+        : [issueForIndex(201)];
+      return new Response(JSON.stringify({
+        data,
+        meta: { total_count: 201, page, page_size: 200 },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const issues = await new HttpReviewQueries(reviewTransport()).issuesForVersion(
+      'project_1',
+      'item_1',
+      'version_1',
+    );
+
+    expect(issues).toHaveLength(201);
+    expect(issues[0].issueId).toBe('issue_1');
+    expect(issues.at(-1)?.issueId).toBe('issue_201');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('page'))).toEqual([
+      '1',
+      '2',
+    ]);
+  });
+
   it('aggregates every page instead of silently truncating long HTTP lists', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));

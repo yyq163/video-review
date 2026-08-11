@@ -252,12 +252,16 @@ describe('frozen player controls and focus boundaries', () => {
           onPlaybackError={vi.fn()}
         />
         <EpisodeStrip
+          entryMode="review"
+          isArchived={false}
+          itemActionPending={false}
           items={seed.items}
           currentItemId={seed.items[0].reviewItemId}
           unresolvedCounts={{}}
           currentVersionLabels={{}}
           currentFileNames={{}}
           onSelect={vi.fn()}
+          revocationUncertainIds={new Set()}
         />
       </>,
     );
@@ -451,6 +455,9 @@ describe('frozen episode strip behavior', () => {
     const onSelect = vi.fn();
     render(
       <EpisodeStrip
+        entryMode="review"
+        isArchived={false}
+        itemActionPending={false}
         items={items}
         currentItemId="episode-12"
         unresolvedCounts={Object.fromEntries(items.map((item) => [item.reviewItemId, 1]))}
@@ -461,6 +468,7 @@ describe('frozen episode strip behavior', () => {
           items.map((item) => [item.reviewItemId, `测试剧集 ${item.episode}.mp4`]),
         )}
         onSelect={onSelect}
+        revocationUncertainIds={new Set()}
       />,
     );
 
@@ -495,6 +503,9 @@ describe('frozen episode strip behavior', () => {
     const longFileName = '很长很长的当前版本原文件名_用于验证安全截断且不挤压状态胶囊.mp4';
     render(
       <EpisodeStrip
+        entryMode="review"
+        isArchived={false}
+        itemActionPending={false}
         items={items}
         currentItemId="episode-17"
         unresolvedCounts={{ 'episode-17': 8, 'episode-18': 0 }}
@@ -504,6 +515,7 @@ describe('frozen episode strip behavior', () => {
           'episode-18': '第18集定稿原片.mov',
         }}
         onSelect={vi.fn()}
+        revocationUncertainIds={new Set()}
       />,
     );
 
@@ -516,7 +528,7 @@ describe('frozen episode strip behavior', () => {
     expect(within(episode17).getByText('第 17 集')).toBeInTheDocument();
     expect(within(episode17).getByText('当前版本·V7·未修改8')).toBeInTheDocument();
     expect(within(episode17).getByTitle(longFileName)).toHaveTextContent(longFileName);
-    expect(within(episode17).getByText('审阅中')).toHaveClass(
+    expect(within(episode17.closest('article')!).getByText('审阅中')).toHaveClass(
       'fj-review-status-in_review',
     );
     const watermark = screen.getByTestId('episode-unresolved-watermark-episode-17');
@@ -526,7 +538,7 @@ describe('frozen episode strip behavior', () => {
 
     const episode18 = screen.getByTestId('episode-item-episode-18');
     expect(within(episode18).getByText('当前版本·V3·未修改0')).toBeInTheDocument();
-    expect(within(episode18).getByText('待修改')).toHaveClass(
+    expect(within(episode18.closest('article')!).getByText('待修改')).toHaveClass(
       'fj-review-status-changes_requested',
     );
   });

@@ -83,35 +83,6 @@ export function useReviewWorkspaceActions(input: {
       { onError: input.showActionError, onSuccess: () => input.showToast('已触发单片定稿原片下载。') },
     );
 
-  const packageProject = () => {
-    const preparePackage = () =>
-      input.mutations.createProjectFinalizedPackage.mutate(input.projectRefId, {
-        onError: input.showActionError,
-        onSuccess: (result) => input.showToast(`项目包下载就绪，包含 ${result.entries.length} 个定稿原片。`),
-      });
-    if (input.mutations.downloadProjectFinalizedPackage.isError) {
-      input.mutations.downloadProjectFinalizedPackage.reset();
-      input.mutations.createProjectFinalizedPackage.reset();
-      preparePackage();
-      return;
-    }
-    const preparedPackage = input.mutations.createProjectFinalizedPackage.data;
-    if (preparedPackage) {
-      input.mutations.downloadProjectFinalizedPackage.mutate(preparedPackage, {
-        onError: (error) => {
-          input.mutations.createProjectFinalizedPackage.reset();
-          input.showActionError(error);
-        },
-        onSuccess: () => {
-          input.mutations.createProjectFinalizedPackage.reset();
-          input.showToast('已触发项目定稿包下载。');
-        },
-      });
-      return;
-    }
-    preparePackage();
-  };
-
   const appendVersion = async (versionInput: AppendVersionInput) => {
     const retryAllowed =
       input.appendVersionProtectionState === 'required' &&
@@ -271,7 +242,6 @@ export function useReviewWorkspaceActions(input: {
     createIssue,
     finalize,
     download,
-    packageProject,
     appendVersion,
     confirmAppendVersionList,
     editIssue,

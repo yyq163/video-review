@@ -8,7 +8,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ReviewRuntimeProvider, createReviewRuntime, type ReviewRuntime } from '../entry/runtime';
 import { FinalCutReviewClient } from '../contracts-generated/backend-contract';
-import type { UploadProgress } from '../contracts/types';
+import type { ReviewIssue, ReviewVersion, UploadProgress } from '../contracts/types';
 import { createSeedData } from '../core/seed';
 import { playbackTargetFromIssue } from '../core/playback';
 import { IssuePanel } from './IssuePanel';
@@ -182,8 +182,12 @@ describe('EpisodeStrip project-detail status colors', () => {
         currentFileNames={{}}
         currentItemId="episode-changes"
         currentVersionLabels={{}}
+        entryMode="review"
+        isArchived={false}
+        itemActionPending={false}
         items={items}
         onSelect={vi.fn()}
+        revocationUncertainIds={new Set()}
         unresolvedCounts={{}}
       />,
     );
@@ -203,9 +207,8 @@ describe('EpisodeStrip project-detail status colors', () => {
 });
 
 describe('DecisionBar component', () => {
-  it('presents a failed package as a retry action', async () => {
+  it('does not expose project package creation from a single episode', () => {
     const seed = createSeedData();
-    const onPackage = vi.fn();
     const runtimeResult = renderWithRuntime(
       <DecisionBar
         entryMode="review"
@@ -213,19 +216,16 @@ describe('DecisionBar component', () => {
         issues={[]}
         finalization={null}
         isCurrentVersion
-        packageState="failed"
         onFinalize={vi.fn()}
         onDownload={vi.fn()}
-        onPackage={onPackage}
       />,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: '重新准备项目包' }));
-    expect(onPackage).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('package-project')).not.toBeInTheDocument();
     cleanupRuntime(runtimeResult.runtime);
   });
 
-  it('keeps package creation locked while revocation authority is uncertain', () => {
+  it('keeps single-file actions locked while revocation authority is uncertain', () => {
     const seed = createSeedData();
     const runtimeResult = renderWithRuntime(
       <DecisionBar
@@ -235,15 +235,13 @@ describe('DecisionBar component', () => {
         finalization={null}
         isCurrentVersion
         readonlyReason="撤回结果确认中，正在查询权威状态。"
-        packageState="idle"
         onFinalize={vi.fn()}
         onDownload={vi.fn()}
-        onPackage={vi.fn()}
       />,
     );
 
     expect(screen.getByRole('button', { name: '下载单片定稿原片' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '打包项目定稿原片' })).toBeDisabled();
+    expect(screen.queryByTestId('package-project')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '最终通过' })).not.toBeInTheDocument();
     cleanupRuntime(runtimeResult.runtime);
   });
@@ -396,6 +394,7 @@ describe('IssuePanel component', () => {
       <IssuePanel
         entryMode="review"
         version={seed.versions[1]}
+        versions={seed.versions}
         issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
         historicalIssues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v1')}
         selectedIssueId="issue_v2_001"
@@ -416,6 +415,82 @@ describe('IssuePanel component', () => {
     await userEvent.click(within(issueCard).getByRole('button', { name: '00:00:00:04' }));
     expect(onSelectIssue).toHaveBeenLastCalledWith(expect.objectContaining({ issueId: 'issue_v2_001', frameNumber: 4 }));
     cleanupRuntime(runtimeResult.runtime);
+  });
+
+  it('switches a clicked historical issue to its real media, frame, annotation, and read-only selection', async () => {
+    const seed = createSeedData();
+    const historicalIssue = seed.issues.find((issue) => issue.issueId === 'issue_v1_001');
+    if (!historicalIssue?.currentAnnotationSet) throw new Error('missing historical seed annotation');
+    const rendered = renderReviewWorkspace();
+
+    const historicalCard = await screen.findByTestId('issue-issue_v1_001');
+    await userEvent.click(within(historicalCard).getByRole('button', { name: /#001/ }));
+    await waitFor(() => {
+      expect(screen.getByTestId('version-V1')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('issue-issue_v1_001')).toHaveClass('is-selected', 'is-historical');
+    });
+
+    const selectedHistoricalCard = screen.getByTestId('issue-issue_v1_001');
+    expect(within(selectedHistoricalCard).queryByRole('button', { name: '编辑意见' })).not.toBeInTheDocument();
+    expect(within(selectedHistoricalCard).queryByRole('button', { name: '标记已修改' })).not.toBeInTheDocument();
+    await screen.findByText('正在定位意见画面...');
+
+    const video = rendered.container.querySelector<HTMLVideoElement>(
+      'video[data-version-id="ver_ep28_v1"]',
+    );
+    if (!video) throw new Error('historical media was not mounted');
+    let readyState = 0;
+    Object.defineProperty(video, 'readyState', { configurable: true, get: () => readyState });
+    Object.defineProperty(video, 'duration', {
+      configurable: true,
+      value: seed.versions[0].durationMs / 1000,
+    });
+    Object.defineProperty(video, 'videoWidth', { configurable: true, value: seed.versions[0].width });
+    Object.defineProperty(video, 'videoHeight', { configurable: true, value: seed.versions[0].height });
+    Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 0 });
+    Object.defineProperty(video, 'paused', { configurable: true, value: true });
+    Object.defineProperty(video, 'seeking', { configurable: true, value: false });
+    Object.defineProperty(video, 'pause', { configurable: true, value: vi.fn() });
+
+    act(() => {
+      readyState = 1;
+      fireEvent.loadedMetadata(video);
+      readyState = 2;
+      fireEvent.canPlay(video);
+    });
+    await waitFor(() => expect(video.currentTime).toBeCloseTo(historicalIssue.timestampMs / 1000));
+    act(() => fireEvent.seeked(video));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-frame')).toHaveTextContent(String(historicalIssue.frameNumber));
+      expect(screen.getByTestId('current-timecode')).toHaveTextContent('00:00:00:02');
+      expect(screen.getByTestId('saved-annotation-layer')).toHaveAttribute(
+        'data-annotation-set-id',
+        historicalIssue.currentAnnotationSet!.annotationSetId,
+      );
+    });
+    expect(screen.getByTestId('saved-annotation-layer')).toHaveAttribute(
+      'data-selected-issue-id',
+      historicalIssue.issueId,
+    );
+    expect(screen.getByTestId('saved-annotation-layer').querySelectorAll('rect')).toHaveLength(1);
+    expect(video.closest('.fj-review-video-frame')).toHaveAttribute('data-annotation-readonly', 'true');
+    const fixedForm = screen.getByTestId('issue-form');
+    expect(fixedForm).toBeInTheDocument();
+    expect(fixedForm).toHaveTextContent('针对 V2（当前查看历史版本，只读）');
+    expect(screen.getByLabelText('当前版本意见正文')).toBeDisabled();
+    expect(screen.getByLabelText('当前版本意见正文')).toHaveAttribute(
+      'aria-readonly',
+      'true',
+    );
+    expect(within(fixedForm).getByRole('button', { name: '提交意见' })).toBeDisabled();
+    expect(screen.getByText(/当前版本未修改 \d+/)).toBeInTheDocument();
+    expect(screen.getByText(/历史意见 \d+/)).toBeInTheDocument();
+    const issueScroll = screen.getByTestId('issue-panel-scroll');
+    expect(issueScroll.contains(fixedForm)).toBe(false);
+
+    rendered.unmount();
+    cleanupRuntime(rendered.runtime, rendered.queryClient);
   });
 
   it('summarizes annotation chips without exposing raw shape internals', () => {
@@ -466,6 +541,7 @@ describe('IssuePanel component', () => {
       <IssuePanel
         entryMode="review"
         version={seed.versions[1]}
+        versions={seed.versions}
         issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
         historicalIssues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v1')}
         selectedIssueId="issue_v2_001"
@@ -495,6 +571,7 @@ describe('IssuePanel component', () => {
       <IssuePanel
         entryMode="review"
         version={seed.versions[1]}
+        versions={seed.versions}
         issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
         historicalIssues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v1')}
         selectedIssueId="issue_v2_001"
@@ -522,6 +599,7 @@ describe('IssuePanel component', () => {
       <IssuePanel
         entryMode="review"
         version={seed.versions[1]}
+        versions={seed.versions}
         issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
         historicalIssues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v1')}
         selectedIssueId="issue_v2_001"
@@ -537,16 +615,226 @@ describe('IssuePanel component', () => {
     );
 
     const scroll = screen.getByTestId('issue-panel-scroll');
-    expect(scroll.children[0]).toHaveClass('fj-review-issue-summary');
-    expect(scroll.children[1]).toHaveClass('fj-review-issue-list');
-    expect(scroll.children[2]).toHaveClass('fj-review-historical-issues');
+    const summary = screen.getByTestId('issue-panel').querySelector('.fj-review-issue-summary');
+    expect(summary).not.toBeNull();
+    expect(scroll.contains(summary)).toBe(false);
+    expect(scroll.children[0]).toHaveClass('fj-review-issue-list');
+    expect(scroll.children[1]).toHaveClass('fj-review-historical-issues');
+    cleanupRuntime(runtimeResult.runtime);
+  });
+
+  it('keeps long current and historical content complete inside one independent scroll region without card scrolling', () => {
+    const seed = createSeedData();
+    const template = seed.issues.find((issue) => issue.issueId === 'issue_v1_001')!;
+    const longBody = `历史正文第一行\n${'中English-标点！'.repeat(120)}`;
+    const longRevision = `历史修订第一行\n${'revision正文。'.repeat(120)}`;
+    const longReply = `历史回复第一行\n${'reply正文？'.repeat(120)}`;
+    const currentRevision = {
+      ...template.currentRevision,
+      revisionId: 'revision-long-2',
+      revisionNo: 2,
+      content: longRevision,
+    };
+    const historicalIssue: ReviewIssue = {
+      ...template,
+      issueId: 'issue-long-history',
+      body: longBody,
+      currentRevisionId: currentRevision.revisionId,
+      currentRevision,
+      revisions: [template.currentRevision, currentRevision],
+      replies: [
+        {
+          messageId: 'message-long-history',
+          projectRefId: template.projectRefId,
+          reviewItemId: template.reviewItemId,
+          versionId: template.versionId,
+          issueId: 'issue-long-history',
+          body: longReply,
+          createdAt: template.createdAt,
+        },
+      ],
+    };
+    const runtimeResult = renderWithRuntime(
+      <IssuePanel
+        entryMode="review"
+        version={seed.versions[1]}
+        versions={seed.versions}
+        issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
+        historicalIssues={[historicalIssue]}
+        isCurrentVersion
+        onCreateIssue={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onEditIssue={vi.fn()}
+        onReplyIssue={vi.fn()}
+        onResolve={vi.fn()}
+        onReopen={vi.fn()}
+        onDeleteIssue={vi.fn()}
+      />,
+    );
+
+    const panel = screen.getByTestId('issue-panel');
+    const scroll = screen.getByTestId('issue-panel-scroll');
+    const historicalCard = screen.getByTestId('issue-issue-long-history');
+    expect(panel.querySelectorAll('.fj-review-issue-scroll')).toHaveLength(1);
+    expect(scroll).toContainElement(historicalCard);
+    expect(
+      historicalCard.querySelector('.fj-review-issue-select span')?.textContent,
+    ).toBe(longBody);
+    expect(
+      [...historicalCard.querySelectorAll('.fj-review-revision-history p')].some(
+        (paragraph) => paragraph.textContent === longRevision,
+      ),
+    ).toBe(true);
+    expect(
+      historicalCard.querySelector('.fj-review-reply-list p')?.textContent,
+    ).toBe(longReply);
+
+    const css = readFileSync(
+      resolve(process.cwd(), 'src/modules/final-cut-review/styles/fj-review.css'),
+      'utf8',
+    );
+    expect(css).toMatch(
+      /\.fj-review-issue-scroll\s*\{[^}]*overflow-y:\s*auto;[^}]*overscroll-behavior-y:\s*contain;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-issue-select span\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*pre-wrap;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-revision-history p\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*pre-wrap;/s,
+    );
+    expect(css).toMatch(
+      /\.fj-review-reply-list p\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*pre-wrap;/s,
+    );
+    expect(css).not.toMatch(/\.fj-review-issue-card\s*\{[^}]*overflow-y:\s*(?:auto|scroll)/s);
+    expect(css).not.toMatch(/\.fj-review-revision-history\s*\{[^}]*overflow-y:\s*(?:auto|scroll)/s);
+    expect(css).not.toMatch(/\.fj-review-reply-list\s*\{[^}]*overflow-y:\s*(?:auto|scroll)/s);
+    cleanupRuntime(runtimeResult.runtime);
+  });
+
+  it('groups history by numeric version, keeps equal-time order stable, filters deletions, and renders inert watermarks', async () => {
+    const seed = createSeedData();
+    const v2: ReviewVersion = {
+      ...seed.versions[0],
+      versionId: 'sort-version-2',
+      versionNo: 2,
+      label: 'V2',
+    };
+    const v10: ReviewVersion = {
+      ...seed.versions[0],
+      versionId: 'sort-version-10',
+      versionNo: 10,
+      label: 'V10',
+    };
+    const v11: ReviewVersion = {
+      ...seed.versions[1],
+      versionId: 'sort-version-11',
+      versionNo: 11,
+      label: 'V11',
+    };
+    const issueFrom = (
+      template: ReviewIssue,
+      issueId: string,
+      versionId: string,
+      timestampMs: number,
+      status: ReviewIssue['status'],
+      deletedAt: string | null = null,
+    ): ReviewIssue => {
+      const revisionId = `revision-${issueId}`;
+      const currentRevision = {
+        ...template.currentRevision,
+        revisionId,
+        issueId,
+        versionId,
+        timestampMs,
+        frameNumber: Math.round(timestampMs / 40),
+        content: issueId,
+      };
+      return {
+        ...template,
+        issueId,
+        issueNo: Number(issueId.match(/\d+$/)?.[0] ?? 1),
+        versionId,
+        timestampMs,
+        frameNumber: currentRevision.frameNumber,
+        status,
+        body: issueId,
+        currentRevisionId: revisionId,
+        currentRevision,
+        currentAnnotationSet: null,
+        revisions: [currentRevision],
+        replies: [],
+        deletedAt,
+      };
+    };
+    const template = seed.issues[0];
+    const current = issueFrom(template, 'sort-current-1', v11.versionId, 40, 'unresolved');
+    const v2Issue = issueFrom(template, 'sort-v2-1', v2.versionId, 80, 'resolved');
+    const v10First = issueFrom(template, 'sort-v10-1', v10.versionId, 120, 'unresolved');
+    const v10Second = issueFrom(template, 'sort-v10-2', v10.versionId, 120, 'resolved');
+    const deleted = issueFrom(
+      template,
+      'sort-v10-3',
+      v10.versionId,
+      40,
+      'unresolved',
+      '2026-08-11T00:00:00.000Z',
+    );
+    const onSelectIssue = vi.fn();
+    const runtimeResult = renderWithRuntime(
+      <IssuePanel
+        entryMode="review"
+        version={v11}
+        versions={[v2, v10, v11]}
+        issues={[current]}
+        historicalIssues={[v2Issue, v10First, v10Second, deleted]}
+        isCurrentVersion
+        onCreateIssue={vi.fn()}
+        onSelectIssue={onSelectIssue}
+        onEditIssue={vi.fn()}
+        onReplyIssue={vi.fn()}
+        onResolve={vi.fn()}
+        onReopen={vi.fn()}
+        onDeleteIssue={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('当前版本未修改 1')).toBeInTheDocument();
+    expect(screen.getByText('历史意见 3')).toBeInTheDocument();
+    expect(screen.queryByTestId('issue-sort-v10-3')).not.toBeInTheDocument();
+    const historical = screen.getByTestId('historical-issues');
+    expect(
+      [...historical.querySelectorAll<HTMLElement>('[data-issue-id]')].map(
+        (card) => card.dataset.issueId,
+      ),
+    ).toEqual(['sort-v10-1', 'sort-v10-2', 'sort-v2-1']);
+    expectBefore(screen.getByLabelText('V10 历史意见'), screen.getByLabelText('V2 历史意见'));
+
+    const currentCard = screen.getByTestId('issue-sort-current-1');
+    const historicalCard = screen.getByTestId('issue-sort-v10-1');
+    expect(currentCard).not.toHaveClass('is-historical');
+    expect(within(currentCard).queryByTestId('issue-watermark-sort-current-1')).not.toBeInTheDocument();
+    expect(historicalCard).toHaveClass('is-historical');
+    expect(within(historicalCard).getByText('未修改')).toBeInTheDocument();
+    expect(within(screen.getByTestId('issue-sort-v10-2')).getByText('已修改')).toBeInTheDocument();
+    expect(within(historicalCard).getByTestId('issue-watermark-sort-v10-1')).toHaveAttribute('aria-hidden', 'true');
+    expect(within(historicalCard).getByTestId('issue-watermark-sort-v10-1')).toHaveTextContent('V10');
+    expect(within(historicalCard).queryByText('历史版本只读')).not.toBeInTheDocument();
+    expect(within(historical).queryByRole('button', { name: '编辑意见' })).not.toBeInTheDocument();
+    expect(within(historical).queryByRole('button', { name: '标记已修改' })).not.toBeInTheDocument();
+
+    await userEvent.click(within(historicalCard).getByRole('button', { name: /#001/ }));
+    expect(onSelectIssue).toHaveBeenCalledWith(v10First);
     cleanupRuntime(runtimeResult.runtime);
   });
 
   it('keeps issue panel and toolbar layout contracts compact', () => {
     const css = readFileSync(resolve(process.cwd(), 'src/modules/final-cut-review/styles/fj-review.css'), 'utf8');
     expect(css).toMatch(/\.fj-review-issue-scroll\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
+    expect(css).toMatch(/\.fj-review-issue-scroll\s*\{[^}]*overflow-y:\s*auto;[^}]*overscroll-behavior-y:\s*contain;/s);
     expect(css).toMatch(/\.fj-review-issue-card\s*\{[^}]*align-content:\s*start;/s);
+    expect(css).toMatch(/\.fj-review-issue-card\.is-historical\s*\{[^}]*var\(--fj-review-green\);/s);
+    expect(css).toMatch(/\.fj-review-issue-version-watermark\s*\{[^}]*pointer-events:\s*none;/s);
+    expect(css).toMatch(/\.fj-review-issue-select span\s*\{[^}]*white-space:\s*pre-wrap;/s);
     expect(css).toMatch(/\.fj-review-workspace-head\s*\{[^}]*grid-template-columns:\s*max-content minmax\(0,\s*1fr\) max-content;/s);
     expect(css).toMatch(/\.fj-review-toolbar-dock\s*\{[^}]*justify-self:\s*stretch;[^}]*width:\s*100%;/s);
     expect(css).not.toMatch(/\.fj-review-toolbar-dock\s*\{[^}]*padding-inline-end:/s);
@@ -574,12 +862,13 @@ describe('IssuePanel component', () => {
     expect(css).not.toContain('"panel panel"');
   });
 
-  it('hides create controls in edit entry and labels historical issues read-only', () => {
+  it('keeps the fixed create form visible but read-only in edit entry and labels historical issues read-only', () => {
     const seed = createSeedData();
     const runtimeResult = renderWithRuntime(
       <IssuePanel
         entryMode="edit"
         version={seed.versions[0]}
+        versions={seed.versions}
         issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v1')}
         historicalIssues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
         isCurrentVersion={false}
@@ -593,7 +882,11 @@ describe('IssuePanel component', () => {
       />,
     );
 
-    expect(screen.queryByTestId('issue-form')).not.toBeInTheDocument();
+    expect(screen.getByTestId('issue-form')).toBeInTheDocument();
+    expect(screen.getByLabelText('当前版本意见正文')).toBeDisabled();
+    expect(screen.getByLabelText('当前版本意见正文')).toHaveAttribute('aria-readonly', 'true');
+    expect(screen.getByRole('button', { name: '提交意见' })).toBeDisabled();
+    expect(screen.getByText('剪辑入口可查看意见并标记“已修改”。')).toBeInTheDocument();
     expect(screen.getAllByText('历史版本只读').length).toBeGreaterThan(0);
     cleanupRuntime(runtimeResult.runtime);
   });
@@ -1485,6 +1778,8 @@ describe('ProjectDetailPage archive workflow', () => {
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
     expect(screen.queryByTestId('create-item-upload')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '删除项目' })).toBeInTheDocument();
+    expect(screen.getAllByTestId('package-project')).toHaveLength(1);
+    expect(screen.getByTestId('package-project')).toBeEnabled();
     expect(screen.queryByText('进入')).not.toBeInTheDocument();
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
@@ -1495,6 +1790,7 @@ describe('ProjectDetailPage archive workflow', () => {
 
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
     expect(screen.queryByTestId('create-item-upload')).not.toBeInTheDocument();
+    expect(screen.getByTestId('package-project')).toBeEnabled();
 
     await userEvent.click(screen.getByRole('button', { name: '归档项目' }));
     const readonlyNotice = await screen.findByTestId('archived-readonly-notice');
@@ -1502,6 +1798,7 @@ describe('ProjectDetailPage archive workflow', () => {
     expect(readonlyNotice).toHaveTextContent('恢复项目后才能创建成片');
     expect(screen.queryByTestId('create-item-upload')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '恢复项目' })).toBeInTheDocument();
+    expect(screen.getByTestId('package-project')).toBeDisabled();
     expect(screen.queryByRole('button', { name: '删除项目' })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: '恢复项目' }));
@@ -1516,10 +1813,12 @@ describe('ProjectDetailPage archive workflow', () => {
 
     expect(await screen.findByTestId('review-player')).toBeInTheDocument();
     expect(await screen.findByTestId('archived-workspace-readonly-notice')).toHaveTextContent('归档项目只读');
-    expect(screen.queryByTestId('issue-form')).not.toBeInTheDocument();
+    expect(screen.getByTestId('issue-form')).toBeInTheDocument();
+    expect(screen.getByLabelText('当前版本意见正文')).toBeDisabled();
+    expect(screen.getByLabelText('当前版本意见正文')).toHaveAttribute('aria-readonly', 'true');
     expect(screen.queryByRole('button', { name: '要求修改' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('finalize-current')).not.toBeInTheDocument();
-    expect(screen.getByTestId('package-project')).toBeInTheDocument();
+    expect(screen.queryByTestId('package-project')).not.toBeInTheDocument();
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
@@ -1966,14 +2265,27 @@ describe('ReviewWorkspacePage issue playback', () => {
         ).toHaveTextContent('1');
       });
     };
+    const assertPreviousCurrentPromotedToHistory = () => {
+      expect(screen.getByText('当前版本未修改 1')).toBeInTheDocument();
+      expect(screen.getByText('历史意见 4')).toBeInTheDocument();
+      const previousCurrentCard = screen.getByTestId('issue-issue_v2_001');
+      expect(previousCurrentCard).toHaveClass('is-historical');
+      expect(within(previousCurrentCard).getByText('未修改')).toBeInTheDocument();
+      expect(within(previousCurrentCard).getByTestId('issue-watermark-issue_v2_001')).toHaveTextContent('V2');
+      expect(within(previousCurrentCard).getByTestId('issue-watermark-issue_v2_001')).toHaveAttribute('aria-hidden', 'true');
+      expect(within(previousCurrentCard).queryByRole('button', { name: '编辑意见' })).not.toBeInTheDocument();
+      expect(within(previousCurrentCard).queryByRole('button', { name: '标记已修改' })).not.toBeInTheDocument();
+    };
 
     await screen.findByTestId('review-player');
     await assertFreshCurrentCard();
+    assertPreviousCurrentPromotedToHistory();
     await userEvent.click(screen.getByTestId('version-V1'));
     await waitFor(() =>
       expect(screen.getByTestId('version-V1')).toHaveAttribute('aria-pressed', 'true'),
     );
     await assertFreshCurrentCard();
+    assertPreviousCurrentPromotedToHistory();
 
     rendered.unmount();
     cleanupRuntime(rendered.runtime, rendered.queryClient);

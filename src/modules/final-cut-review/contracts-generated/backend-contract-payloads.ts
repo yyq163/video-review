@@ -69,6 +69,7 @@ export interface SoftDeleteReviewIssuePayload {
 
 export interface PrepareFinalizedPackagePayload {
   project_ref_id: string;
+  unified_name: string;
 }
 
 export interface CreateProjectPayload {

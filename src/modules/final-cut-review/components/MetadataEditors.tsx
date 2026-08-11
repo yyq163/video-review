@@ -143,14 +143,15 @@ export function ReviewItemMetadataEditor(props: {
 }) {
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const displayedEpisode = props.item.episode || props.item.itemCode;
   const form = useForm<ReviewItemMetadataValues>({
     resolver: zodResolver(reviewItemMetadataSchema),
-    defaultValues: { title: props.item.title, episode: props.item.episode },
+    defaultValues: { title: props.item.title, episode: displayedEpisode },
   });
   const finalized = props.item.status === 'finalized';
 
   const beginEditing = () => {
-    form.reset({ title: props.item.title, episode: props.item.episode });
+    form.reset({ title: props.item.title, episode: displayedEpisode });
     setError(null);
     setEditing(true);
   };

@@ -27,6 +27,7 @@ export interface IssueCardProps {
   issue: ReviewIssue;
   version: ReviewVersion;
   selected?: boolean;
+  historical?: boolean;
   readonlyReason?: string;
   statusReadonlyReason?: string;
   showReadonlyReason?: boolean;

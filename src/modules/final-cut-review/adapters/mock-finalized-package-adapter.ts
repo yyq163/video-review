@@ -1,12 +1,20 @@
 import type { FinalizedPackagePort } from '../ports';
 import type { PackageResult } from '../contracts/types';
-import { sanitizeDownloadFileName, sanitizeFileSegment } from '../core/file-names';
+import { sanitizeFileSegment } from '../core/file-names';
 import { ReviewDomainError } from '../core/errors';
 import { createUuid } from '../core/uuid';
+import {
+  originalFileExtension,
+  positiveEpisodeNumber,
+  validateUnifiedPackageName,
+} from '../core/package-name';
 
 const ZIP32_MAX = 0xffffffff;
 const ZIP_UTF8_FLAG = 0x0800;
 const ZIP_STORE_METHOD = 0;
+const ZIP_MAX_NAME_BYTES = 0xffff;
+const PACKAGE_MAX_FILES = 200;
+const PACKAGE_MAX_SOURCE_BYTES = 50 * 1024 * 1024 * 1024;
 
 interface ZipEntrySource {
   name: string;
@@ -172,6 +180,9 @@ async function buildZipEntries(sources: ZipEntrySource[]): Promise<ZipEntry[]> {
   const entries: ZipEntry[] = [];
   for (const source of sources) {
     const nameBytes = encoder.encode(source.name);
+    if (nameBytes.byteLength > ZIP_MAX_NAME_BYTES) {
+      throw new ReviewDomainError('ZIP 条目名称过长，不能生成定稿包', 'PACKAGE_ARCHIVE_NAME_TOO_LONG');
+    }
     const size = source.blob.size;
     assertZip32Size(size, source.name);
     entries.push({
@@ -214,27 +225,89 @@ async function createStoredZipBlob(sources: ZipEntrySource[]): Promise<Blob> {
 
 export class MockFinalizedPackageAdapter implements FinalizedPackagePort {
   async createProjectPackage(input: Parameters<FinalizedPackagePort['createProjectPackage']>[0]): Promise<PackageResult> {
+    const unifiedNameError = validateUnifiedPackageName(input.unifiedName);
+    if (unifiedNameError) {
+      throw new ReviewDomainError(unifiedNameError, 'PACKAGE_UNIFIED_NAME_INVALID');
+    }
+    if (input.finalizations.length === 0) {
+      throw new ReviewDomainError('项目无定稿原片', 'PACKAGE_NO_FINALIZED_FILES');
+    }
+    if (input.finalizations.length > PACKAGE_MAX_FILES) {
+      throw new ReviewDomainError('定稿原片数量超过 200 个', 'PACKAGE_FILE_COUNT_LIMIT_EXCEEDED');
+    }
     const entries: PackageResult['entries'] = [];
     const sources: ZipEntrySource[] = [];
     const versionsById = new Map(input.versions.map((version) => [version.versionId, version]));
     const itemsById = new Map(input.items.map((item) => [item.reviewItemId, item]));
+    const episodeOwners = new Map<number, string[]>();
+    const resolved: Array<{
+      finalization: (typeof input.finalizations)[number];
+      item: (typeof input.items)[number];
+      episodeNo: number;
+      extension: string;
+    }> = [];
+    const problems: string[] = [];
 
     for (const finalization of input.finalizations) {
       const item = itemsById.get(finalization.reviewItemId);
       const version = versionsById.get(finalization.versionId);
-      if (!item || !version || item.activeFinalizationId !== finalization.finalizationId) {
+      if (
+        !item ||
+        !version ||
+        item.status !== 'finalized' ||
+        item.currentVersionId !== finalization.versionId ||
+        item.activeFinalizationId !== finalization.finalizationId
+      ) {
+        problems.push(`${finalization.reviewItemId} 的定稿身份不唯一或已失效`);
         continue;
       }
-      const original = await input.fileStorage.getOriginal(finalization.originalFileId);
-      const projectSegment = sanitizeFileSegment(input.project.code, 'project');
-      const itemSegment = sanitizeFileSegment(`${item.episode}-${item.title}`, 'item');
-      const fileSegment = sanitizeDownloadFileName(`${version.label}-${original.fileName}`, `${version.label}-original.mp4`);
-      const entryName = `${projectSegment}/${itemSegment}/${fileSegment}`;
-      if (original.sha256 !== finalization.sha256) {
-        throw new ReviewDomainError('定稿原片快照与当前原片记录不一致，不能生成定稿包', 'PACKAGE_SOURCE_HASH_MISMATCH');
+      const episodeNo = positiveEpisodeNumber(item.episode);
+      if (episodeNo === null) {
+        problems.push(`${item.reviewItemId} 缺少唯一正整数集数`);
+        continue;
       }
+      let extension: string;
+      try {
+        extension = originalFileExtension(finalization.fileName);
+      } catch {
+        problems.push(`${item.reviewItemId} 的定稿原片缺少有效原扩展名`);
+        continue;
+      }
+      episodeOwners.set(episodeNo, [...(episodeOwners.get(episodeNo) ?? []), item.reviewItemId]);
+      resolved.push({ finalization, item, episodeNo, extension });
+    }
+    for (const [episodeNo, ownerIds] of episodeOwners) {
+      if (ownerIds.length > 1) problems.push(`第 ${episodeNo} 集重复：${ownerIds.join('、')}`);
+    }
+    if (problems.length > 0 || resolved.length !== input.finalizations.length) {
+      throw new ReviewDomainError(
+        `项目定稿项校验失败：${problems.join('；')}`,
+        'PACKAGE_EPISODE_INVALID',
+      );
+    }
+
+    resolved.sort((left, right) => left.episodeNo - right.episodeNo);
+    let totalSourceBytes = 0;
+    for (const { finalization, episodeNo, extension } of resolved) {
+      const original = await input.fileStorage.getOriginal(finalization.originalFileId);
+      const entryName = `${input.unifiedName}-第${episodeNo}集${extension}`;
       if (!original.blob) {
         throw new ReviewDomainError('定稿原片内容不可用，不能生成定稿包', 'PACKAGE_SOURCE_UNREADABLE');
+      }
+      if (
+        original.fileName !== finalization.fileName ||
+        original.fileName !== finalization.originalMedia.originalFilename ||
+        original.size !== finalization.originalMedia.fileSize ||
+        original.blob.size !== original.size ||
+        original.mimeType !== finalization.originalMedia.mimeType ||
+        original.sha256 !== finalization.sha256 ||
+        original.sha256 !== finalization.originalMedia.sha256
+      ) {
+        throw new ReviewDomainError('定稿原片快照与当前原片身份不一致，不能生成定稿包', 'PACKAGE_SOURCE_HASH_MISMATCH');
+      }
+      totalSourceBytes += original.blob.size;
+      if (totalSourceBytes > PACKAGE_MAX_SOURCE_BYTES) {
+        throw new ReviewDomainError('定稿原片总大小超过 50 GiB', 'PACKAGE_SIZE_LIMIT_EXCEEDED');
       }
       sources.push({ name: entryName, blob: original.blob });
       entries.push({

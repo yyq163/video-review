@@ -74,7 +74,7 @@ describe('ProjectDetailPage uncertain finalization revocation reconciliation', (
 
     expect(await screen.findByText('撤回结果确认中')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '下载单片定稿原片' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '打包项目定稿原片' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '打包项目定稿原片' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '最终通过' })).not.toBeInTheDocument();
 
     await queryClient.invalidateQueries({
@@ -83,7 +83,7 @@ describe('ProjectDetailPage uncertain finalization revocation reconciliation', (
     await waitFor(() => expect(getWorkspace.mock.calls.length).toBeGreaterThanOrEqual(2));
     expect(screen.getByText('撤回结果确认中')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '下载单片定稿原片' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '打包项目定稿原片' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '打包项目定稿原片' })).not.toBeInTheDocument();
   });
 
   it('isolates authority cache across revoke, refinalize, and a second uncertain revoke', async () => {
@@ -174,7 +174,7 @@ describe('ProjectDetailPage uncertain finalization revocation reconciliation', (
       getRevokeFinalizationProtectionState('prj_seed_final_cut', 'item_ep28'),
     ).toBe('required');
     expect(screen.getByRole('button', { name: '下载单片定稿原片' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '打包项目定稿原片' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '打包项目定稿原片' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '最终通过' })).not.toBeInTheDocument();
   });
 
@@ -446,7 +446,7 @@ describe('ProjectDetailPage uncertain finalization revocation reconciliation', (
     });
     expect(screen.getByText('撤回结果确认中')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '下载单片定稿原片' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '打包项目定稿原片' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '打包项目定稿原片' })).not.toBeInTheDocument();
   });
 
   it('starts authoritative polling immediately when a clicked revoke loses its response', async () => {
@@ -788,7 +788,7 @@ describe('ProjectDetailPage uncertain finalization revocation reconciliation', (
       getRevokeFinalizationProtectionState('prj_seed_final_cut', 'item_ep28'),
     ).toBe('storage-unavailable');
     expect(screen.getByRole('button', { name: '下载单片定稿原片' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '打包项目定稿原片' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '打包项目定稿原片' })).not.toBeInTheDocument();
     await waitFor(() => expect(getReviewItem).toHaveBeenCalled());
   });
 
@@ -842,7 +842,7 @@ describe('ProjectDetailPage uncertain finalization revocation reconciliation', (
       getRevokeFinalizationProtectionState('prj_seed_final_cut', 'item_ep28'),
     ).toBe('storage-unavailable');
     expect(screen.getByRole('button', { name: '下载单片定稿原片' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '打包项目定稿原片' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '打包项目定稿原片' })).not.toBeInTheDocument();
     await waitFor(() => expect(getReviewItem).toHaveBeenCalled());
   });
 

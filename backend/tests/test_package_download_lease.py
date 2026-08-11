@@ -387,3 +387,97 @@ def test_old_download_lease_cannot_renew_or_release_current_lease(client: TestCl
         assert package.download_lease_expires_at is not None
         assert aware(package.download_lease_expires_at) == current_expiry
         assert package.last_download_finished_at is None
+
+
+def test_current_download_lease_release_without_completion_clears_lease_without_cooldown(
+    client: TestClient,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel, utcnow
+    from backend.app.settings import get_settings
+
+    package_id = f"pkg_{uuid.uuid4().hex}"
+    current_lease_id = uuid.uuid4().hex
+    _create_package_with_lease(
+        package_id,
+        current_lease_id,
+        utcnow() + timedelta(minutes=5),
+    )
+
+    with SessionLocal() as session:
+        repository = SqlAlchemyReviewRepository(session, get_settings())
+        assert repository.release_package_download_lease(
+            package_id,
+            current_lease_id,
+            completed=False,
+        ) is True
+        session.commit()
+
+    with SessionLocal() as session:
+        package = session.get(FinalCutPackageSnapshotModel, package_id)
+        assert package is not None
+        assert package.download_lease_id is None
+        assert package.download_lease_expires_at is None
+        assert package.last_download_finished_at is None
+
+
+def test_early_eof_marks_stream_and_response_incomplete_and_releases_without_cooldown(
+    client: TestClient,
+) -> None:
+    from backend.app.modules.final_cut_review.domain.errors import ReviewError
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel, utcnow
+    from backend.app.modules.review_http.query_routes import regular_file_response
+    from backend.app.settings import get_settings
+
+    package_id = f"pkg_{uuid.uuid4().hex}"
+    current_lease_id = uuid.uuid4().hex
+    package_path, _project_id = _create_package_with_lease(
+        package_id,
+        current_lease_id,
+        utcnow() + timedelta(minutes=5),
+    )
+    stream_completed = threading.Event()
+    response_completions: list[bool] = []
+    lease_releases: list[bool] = []
+
+    def release_current_lease(response_completed: bool) -> None:
+        response_completions.append(response_completed)
+        with SessionLocal() as session:
+            released = SqlAlchemyReviewRepository(
+                session,
+                get_settings(),
+            ).release_package_download_lease(
+                package_id,
+                current_lease_id,
+                completed=response_completed and stream_completed.is_set(),
+            )
+            if released:
+                session.commit()
+            else:
+                session.rollback()
+            lease_releases.append(released)
+
+    response = regular_file_response(
+        package_path,
+        get_settings().package_root,
+        media_type="application/zip",
+        on_stream_complete=stream_completed.set,
+        on_response_complete=release_current_lease,
+    )
+    package_path.write_bytes(b"")
+
+    with pytest.raises(ReviewError, match="文件读取提前结束"):
+        _run_response(response)
+
+    assert stream_completed.is_set() is False
+    assert response_completions == [False]
+    assert lease_releases == [True]
+    with SessionLocal() as session:
+        package = session.get(FinalCutPackageSnapshotModel, package_id)
+        assert package is not None
+        assert package.download_lease_id is None
+        assert package.download_lease_expires_at is None
+        assert package.last_download_finished_at is None

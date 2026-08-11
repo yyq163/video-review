@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageSquarePlus } from 'lucide-react';
 import { CapabilityGate } from './shared';
 import { IssueCard } from './issue-panel-card';
-import { versionForIssue } from './issue-panel-helpers';
+import { sortedHistoricalIssues } from './issue-panel-helpers';
 import type { IssuePanelProps } from './issue-panel-types';
+import { useReviewRuntime } from '../entry/runtime';
 
 export function IssuePanel(props: IssuePanelProps) {
+  const runtime = useReviewRuntime();
   const { onSubmittingChange } = props;
   const [body, setBody] = useState('请调整当前时间点的字幕安全边距。');
   const [submitting, setSubmitting] = useState(false);
@@ -15,11 +17,34 @@ export function IssuePanel(props: IssuePanelProps) {
   const [batchResolvedIssueIds, setBatchResolvedIssueIds] = useState<Set<string>>(() => new Set());
   const [batchResolvePending, setBatchResolvePending] = useState(false);
   const createDraftRef = useRef<HTMLTextAreaElement | null>(null);
-  const displayedIssues = props.issues.map((issue) =>
-    batchResolvedIssueIds.has(issue.issueId) ? { ...issue, status: 'resolved' as const } : issue,
+  const displayedIssues = props.issues
+    .filter((issue) => !issue.deletedAt)
+    .map((issue) =>
+      batchResolvedIssueIds.has(issue.issueId) ? { ...issue, status: 'resolved' as const } : issue,
+    );
+  const historicalIssueEntries = sortedHistoricalIssues(
+    props.historicalIssues,
+    props.versions,
+    props.version,
   );
+  const historicalIssueGroups = historicalIssueEntries.reduce<
+    Array<{ version: (typeof historicalIssueEntries)[number]['version']; issues: typeof historicalIssueEntries }>
+  >((groups, entry) => {
+    const activeGroup = groups.at(-1);
+    if (activeGroup?.version.versionId === entry.version.versionId) {
+      activeGroup.issues.push(entry);
+    } else {
+      groups.push({ version: entry.version, issues: [entry] });
+    }
+    return groups;
+  }, []);
   const unresolvedCount = displayedIssues.filter((issue) => issue.status === 'unresolved').length;
-  const canWriteCurrentVersion = !props.readonlyReason && props.isCurrentVersion && props.version.status !== 'finalized';
+  const canCreateIssue = runtime.permissions.can(props.entryMode, 'review.issue.create');
+  const canWriteCurrentVersion =
+    canCreateIssue && !props.readonlyReason && props.isCurrentVersion && props.version.status !== 'finalized';
+  const createReadonlyReason = props.readonlyReason ?? (
+    !canCreateIssue ? '剪辑入口可查看意见并标记“已修改”。' : '历史版本只读'
+  );
   const canBatchResolve =
     props.entryMode === 'edit' &&
     props.isCurrentVersion &&
@@ -83,67 +108,71 @@ export function IssuePanel(props: IssuePanelProps) {
         <MessageSquarePlus />
         意见反馈
       </div>
-      {props.readonlyReason ? (
-        <div className="fj-review-readonly-note">{props.readonlyReason}</div>
-      ) : (
-        <CapabilityGate
-          entryMode={props.entryMode}
-          capability="review.issue.create"
-          fallback={<div className="fj-review-readonly-note">剪辑入口可查看意见并标记“已修改”。</div>}
-        >
-          {canWriteCurrentVersion ? (
-            <form
-              className="fj-review-comment-box"
-              data-testid="issue-form"
-              aria-busy={submitting}
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (props.pending || submitting) return;
-                setSubmitting(true);
-                void (async () => {
-                  try {
-                    await props.onCreateIssue(body);
-                    setBody('');
-                  } catch {
-                    window.requestAnimationFrame(() => createDraftRef.current?.focus());
-                    return;
-                  } finally {
-                    setSubmitting(false);
-                  }
-                })();
-              }}
-            >
-              <textarea
-                aria-label="当前版本意见正文"
-                disabled={props.pending || submitting}
-                ref={createDraftRef}
-                value={body}
-                onChange={(event) => setBody(event.target.value)}
-                onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-                placeholder="针对当前版本输入意见"
-              />
-              <div>
-                <span>针对 {props.version.label}</span>
-                <button className="fj-review-primary" disabled={!body.trim() || props.pending || submitting} type="submit">
-                  {submitting ? '提交中...' : '提交意见'}
-                </button>
-              </div>
-            </form>
-          ) : (
-            <div className="fj-review-readonly-note">历史版本只读</div>
-          )}
-        </CapabilityGate>
-      )}
-      <div className="fj-review-issue-scroll" data-testid="issue-panel-scroll">
-        <div className="fj-review-issue-summary">
-          <span>当前版本未修改 {unresolvedCount}</span>
-          <span>历史意见 {props.historicalIssues.length}</span>
+      <form
+        className="fj-review-comment-box"
+        data-testid="issue-form"
+        aria-busy={submitting}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!canWriteCurrentVersion || props.pending || submitting) return;
+          setSubmitting(true);
+          void (async () => {
+            try {
+              await props.onCreateIssue(body);
+              setBody('');
+            } catch {
+              window.requestAnimationFrame(() => createDraftRef.current?.focus());
+              return;
+            } finally {
+              setSubmitting(false);
+            }
+          })();
+        }}
+      >
+        <textarea
+          aria-label="当前版本意见正文"
+          aria-readonly={!canWriteCurrentVersion || undefined}
+          disabled={!canWriteCurrentVersion || props.pending || submitting}
+          ref={createDraftRef}
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          placeholder="针对当前版本输入意见"
+        />
+        <div>
+          <span>
+            针对 {props.version.label}
+            {!props.isCurrentVersion ? '（当前查看历史版本，只读）' : ''}
+          </span>
+          <button
+            className="fj-review-primary"
+            disabled={
+              !canWriteCurrentVersion ||
+              !body.trim() ||
+              props.pending ||
+              submitting
+            }
+            type="submit"
+          >
+            {submitting ? '提交中...' : '提交意见'}
+          </button>
         </div>
+      </form>
+      {!canWriteCurrentVersion ? (
+        <div className="fj-review-readonly-note">
+          {createReadonlyReason}
+        </div>
+      ) : null}
+      <div className="fj-review-issue-summary">
+        <span>当前版本未修改 {unresolvedCount}</span>
+        <span>历史意见 {historicalIssueEntries.length}</span>
+      </div>
+      <div className="fj-review-issue-scroll" data-testid="issue-panel-scroll">
         {canBatchResolve && batchCandidates.length ? (
           <CapabilityGate entryMode={props.entryMode} capability="review.issue.resolve">
             <div className="fj-review-issue-bulk-toolbar" aria-label="剪辑意见批量操作">
@@ -244,27 +273,39 @@ export function IssuePanel(props: IssuePanelProps) {
             />
           ))}
         </div>
-        {props.historicalIssues.length ? (
+        {historicalIssueGroups.length ? (
           <section className="fj-review-historical-issues" data-testid="historical-issues">
             <div className="fj-review-panel-title">历史版本意见</div>
-            {props.historicalIssues.map((issue) => (
-              <IssueCard
-                key={issue.issueId}
-                issue={issue}
-                version={versionForIssue(props.versions, props.version, issue)}
-                selected={issue.issueId === props.selectedIssueId}
-                readonlyReason="历史版本只读"
-                statusReadonlyReason="历史版本只读"
-                entryMode="edit"
-                pending={props.pending}
-                onSubmittingChange={(isSubmitting) => handleCardSubmittingChange(issue.issueId, isSubmitting)}
-                onSelect={props.onSelectIssue}
-                onEdit={props.onEditIssue}
-                onReply={props.onReplyIssue}
-                onResolve={props.onResolve}
-                onReopen={props.onReopen}
-                onDelete={props.onDeleteIssue}
-              />
+            {historicalIssueGroups.map((group) => (
+              <section
+                aria-label={`V${group.version.versionNo} 历史意见`}
+                className="fj-review-historical-issue-group"
+                data-version-id={group.version.versionId}
+                key={group.version.versionId}
+              >
+                <h3>{group.version.label}</h3>
+                {group.issues.map(({ issue, version }) => (
+                  <IssueCard
+                    key={issue.issueId}
+                    issue={issue}
+                    version={version}
+                    selected={issue.issueId === props.selectedIssueId}
+                    historical
+                    readonlyReason="历史版本只读"
+                    showReadonlyReason={false}
+                    statusReadonlyReason="历史版本只读"
+                    entryMode={props.entryMode}
+                    pending={props.pending}
+                    onSubmittingChange={(isSubmitting) => handleCardSubmittingChange(issue.issueId, isSubmitting)}
+                    onSelect={props.onSelectIssue}
+                    onEdit={props.onEditIssue}
+                    onReply={props.onReplyIssue}
+                    onResolve={props.onResolve}
+                    onReopen={props.onReopen}
+                    onDelete={props.onDeleteIssue}
+                  />
+                ))}
+              </section>
             ))}
           </section>
         ) : null}
