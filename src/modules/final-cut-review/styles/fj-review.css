@@ -276,6 +276,28 @@
   margin: 0 0 12px;
 }
 
+.fj-review-modal {
+  box-shadow: var(--fj-review-shadow);
+  color: var(--fj-review-text);
+  margin: auto;
+  max-width: calc(100vw - 32px);
+  padding: 20px;
+  width: 420px;
+}
+
+.fj-review-modal::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.fj-review-modal small {
+  color: var(--fj-review-muted);
+  line-height: 1.5;
+}
+
+.fj-review-root .fj-review-modal button:disabled {
+  opacity: 0.64;
+}
+
 .fj-review-form,
 .fj-review-upload-panel,
 .fj-review-inline-upload {

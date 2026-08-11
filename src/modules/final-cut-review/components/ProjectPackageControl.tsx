@@ -69,7 +69,7 @@ export function ProjectPackageControl(props: {
       {open ? (
         <dialog
           aria-labelledby={titleId}
-          className="fj-review-side-form"
+          className="fj-review-side-form fj-review-modal"
           data-testid="project-package-name-dialog"
           onCancel={(event) => {
             if (pending) event.preventDefault();

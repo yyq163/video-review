@@ -43,6 +43,40 @@ function renderControl(overrides?: Partial<React.ComponentProps<typeof ProjectPa
 }
 
 describe('ProjectPackageControl', () => {
+  it('uses the dedicated centered modal surface instead of only the inline side-form styling', async () => {
+    renderControl();
+    await userEvent.click(screen.getByTestId('package-project'));
+
+    expect(screen.getByRole('dialog', { name: '统一命名定稿原片' })).toHaveClass(
+      'fj-review-side-form',
+      'fj-review-modal',
+    );
+  });
+
+  it('keeps the dedicated modal visible and all actions locked while preparation is pending', async () => {
+    let resolveCreate!: (value: PackageResult) => void;
+    const onCreate = vi.fn(
+      () =>
+        new Promise<PackageResult>((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    renderControl({ onCreate });
+
+    await userEvent.click(screen.getByTestId('package-project'));
+    await userEvent.type(screen.getByLabelText('统一名称'), '准备中视觉状态');
+    await userEvent.click(screen.getByRole('button', { name: '确认并下载' }));
+
+    const dialog = screen.getByRole('dialog', { name: '统一命名定稿原片' });
+    expect(dialog).toHaveClass('fj-review-modal');
+    expect(screen.getByLabelText('统一名称')).toBeDisabled();
+    expect(screen.getByRole('button', { name: '准备中' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '取消' })).toBeDisabled();
+
+    resolveCreate(result);
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  });
+
   it('closes on cancel without preparing, downloading, or changing data', async () => {
     const props = renderControl();
     await userEvent.click(screen.getByTestId('package-project'));
