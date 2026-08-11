@@ -447,7 +447,33 @@ describe('IssuePanel component', () => {
     });
     Object.defineProperty(video, 'videoWidth', { configurable: true, value: seed.versions[0].width });
     Object.defineProperty(video, 'videoHeight', { configurable: true, value: seed.versions[0].height });
-    Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 0 });
+    let currentTime = 0;
+    let pendingVideoFrame:
+      | ((now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => void)
+      | null = null;
+    Object.defineProperty(video, 'requestVideoFrameCallback', {
+      configurable: true,
+      value: vi.fn(
+        (callback: (now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => void) => {
+          pendingVideoFrame = callback;
+          return 1;
+        },
+      ),
+    });
+    Object.defineProperty(video, 'cancelVideoFrameCallback', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: (nextTime: number) => {
+        currentTime = nextTime;
+        const callback = pendingVideoFrame;
+        pendingVideoFrame = null;
+        callback?.(performance.now(), { mediaTime: nextTime } as VideoFrameCallbackMetadata);
+      },
+    });
     Object.defineProperty(video, 'paused', { configurable: true, value: true });
     Object.defineProperty(video, 'seeking', { configurable: true, value: false });
     Object.defineProperty(video, 'pause', { configurable: true, value: vi.fn() });
@@ -462,6 +488,7 @@ describe('IssuePanel component', () => {
     act(() => fireEvent.seeked(video));
 
     await waitFor(() => {
+      expect(screen.queryByText('正在定位意见画面...')).not.toBeInTheDocument();
       expect(screen.getByTestId('current-frame')).toHaveTextContent(String(historicalIssue.frameNumber));
       expect(screen.getByTestId('current-timecode')).toHaveTextContent('00:00:00:02');
       expect(screen.getByTestId('saved-annotation-layer')).toHaveAttribute(
@@ -4261,6 +4288,82 @@ describe('ReviewPlayer component', () => {
 
     await waitFor(() => expect(screen.getByTestId('current-timecode')).toHaveTextContent('00:00:00:04'));
     expect(onTimeChange).toHaveBeenLastCalledWith(issue.timestampMs);
+  });
+
+  it('aborts concurrent seek and frame waits cleanly when a newer issue target wins', async () => {
+    const seed = createSeedData();
+    const issue = seed.issues.find((candidate) => candidate.issueId === 'issue_v2_001');
+    if (!issue) throw new Error('missing seed issue');
+    const ref = createRef<ReviewPlayerHandle>();
+    const { container } = render(
+      <ReviewPlayer
+        ref={ref}
+        version={seed.versions[1]}
+        issues={[issue]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+    const video = container.querySelector('video') as HTMLVideoElement;
+    let currentTime = 0;
+    let nextFrameHandle = 0;
+    const frameCallbacks = new Map<
+      number,
+      (now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => void
+    >();
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 4 });
+    Object.defineProperty(video, 'paused', { configurable: true, value: true });
+    Object.defineProperty(video, 'pause', { configurable: true, value: vi.fn() });
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: (nextTime: number) => {
+        currentTime = nextTime;
+      },
+    });
+    Object.defineProperty(video, 'requestVideoFrameCallback', {
+      configurable: true,
+      value: vi.fn(
+        (callback: (now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => void) => {
+          nextFrameHandle += 1;
+          frameCallbacks.set(nextFrameHandle, callback);
+          return nextFrameHandle;
+        },
+      ),
+    });
+    Object.defineProperty(video, 'cancelVideoFrameCallback', {
+      configurable: true,
+      value: vi.fn((handle: number) => frameCallbacks.delete(handle)),
+    });
+
+    const firstTarget = playbackTargetFromIssue(issue);
+    const secondTarget = {
+      ...firstTarget,
+      timestampMs: firstTarget.timestampMs + 1000,
+      frameNumber: firstTarget.frameNumber + 25,
+    };
+    let firstPositioning!: Promise<void>;
+    let firstFailure!: Promise<unknown>;
+    let secondPositioning!: Promise<void>;
+    await act(async () => {
+      firstPositioning = ref.current!.playbackToTarget(firstTarget);
+      firstFailure = firstPositioning.catch((error: unknown) => error);
+      await Promise.resolve();
+      await Promise.resolve();
+      secondPositioning = ref.current!.playbackToTarget(secondTarget);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await expect(firstFailure).resolves.toMatchObject({ name: 'AbortError' });
+    const currentFrame = frameCallbacks.get(nextFrameHandle);
+    if (!currentFrame) throw new Error('missing current video-frame callback');
+    currentFrame(performance.now(), { mediaTime: currentTime } as VideoFrameCallbackMetadata);
+    fireEvent.seeked(video);
+    await expect(secondPositioning).resolves.toBeUndefined();
   });
 
   it('keeps a play request started during issue positioning benign when positioning pauses it', async () => {

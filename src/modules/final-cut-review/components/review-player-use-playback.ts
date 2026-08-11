@@ -257,9 +257,12 @@ export function useReviewPlayerPlayback(options: PlaybackOptions) {
       explicitSeekTargetMsRef.current = targetMs;
       if (Math.abs(video.currentTime * 1000 - targetMs) >= 1) {
         const seekPromise = waitForEvent(video, 'seeked', controller.signal);
+        // Register before assigning currentTime. Chromium can present the sought
+        // frame before it dispatches `seeked`; registering afterwards leaves a
+        // paused video waiting forever for a frame that was already presented.
+        const videoFramePromise = waitForVideoFrame(video, controller.signal);
         video.currentTime = targetMs / 1000;
-        await seekPromise;
-        await waitForVideoFrame(video, controller.signal);
+        await Promise.all([seekPromise, videoFramePromise]);
       }
       playRequestSequencerRef.current.cancel();
       video.pause();
