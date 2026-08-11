@@ -961,13 +961,26 @@ paths:
     get:
       operationId: download_package
       tags: [package]
-      description: Streams the ready ZIP only after atomically consuming the one-shot, path-scoped browser download session cookie. One active lease per package limits concurrent integrity scans and streams.
+      description: Streams the ready ZIP through a short-lived, path-scoped browser download session cookie. A session may resume an interrupted stream only after an initial request has started and the package identity remains unchanged; completed downloads remain cooldown-limited and one active lease per package prevents concurrent scans or streams.
       parameters:
         - $ref: "#/components/parameters/ProjectRefId"
         - $ref: "#/components/parameters/PackageId"
+        - $ref: "#/components/parameters/RangeHeader"
       responses:
         "200":
           description: Finalized originals ZIP package.
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial finalized originals ZIP package for an authorized browser resume.
+          headers:
+            Accept-Ranges:
+              schema: {type: string}
+            Content-Range:
+              schema: {type: string}
           content:
             application/zip:
               schema:

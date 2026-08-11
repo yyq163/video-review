@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import re
 import threading
 from collections.abc import Callable, Iterator
@@ -100,15 +101,21 @@ class LifecycleStreamingResponse(StreamingResponse):
         media_type: str,
         headers: dict[str, str],
         on_close: Callable[[], None],
+        on_response_complete: Callable[[bool], None] | None = None,
     ) -> None:
         super().__init__(content, status_code=status_code, media_type=media_type, headers=headers)
         self._on_close = on_close
+        self._on_response_complete = on_response_complete
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        completed = False
         try:
             await super().__call__(scope, receive, send)
+            completed = True
         finally:
             self._on_close()
+            if self._on_response_complete is not None:
+                self._on_response_complete(completed)
 
 
 def query_service(session: Session) -> FinalCutReviewQueryService:
@@ -207,6 +214,11 @@ def regular_file_response(
     headers: dict[str, str] | None = None,
     expected_sha256: str | None = None,
     on_close: Callable[[], None] | None = None,
+    on_response_complete: Callable[[bool], None] | None = None,
+    on_stream_complete: Callable[[], None] | None = None,
+    on_sha256_verified: Callable[[tuple[int, int, int, int, int]], None] | None = None,
+    force_sha256_verification: bool = False,
+    expected_file_identity: tuple[int, int, int, int, int] | None = None,
     stream_guard: Callable[[], None] | None = None,
 ) -> StreamingResponse:
     pinned_context = pin_regular_file(path, root)
@@ -242,14 +254,45 @@ def regular_file_response(
         handle_context = pinned.open_readonly()
         handle = handle_context.__enter__()
         handle_entered = True
-        # A partial response must not amplify a tiny Range into a full-file scan.
-        # Upload publication is immutable and full downloads still verify the digest.
-        if expected_sha256 is not None and status_code == 200 and start == 0:
+        opened_metadata = os.fstat(handle.fileno())
+        opened_identity = (
+            opened_metadata.st_dev,
+            opened_metadata.st_ino,
+            opened_metadata.st_ctime_ns,
+            opened_metadata.st_mtime_ns,
+            opened_metadata.st_size,
+        )
+        if expected_file_identity is not None and opened_identity != expected_file_identity:
+            raise ReviewError("FILE_HASH_MISMATCH", "文件完整性校验失败")
+        # Only a package session whose current file identity has already passed
+        # a full digest may serve a partial response without rehashing the file.
+        if expected_sha256 is not None and (force_sha256_verification or (status_code == 200 and start == 0)):
             verify_open_handle_sha256(handle, expected_sha256, stream_guard)
+            final_metadata = os.fstat(handle.fileno())
+            verified_identity = (
+                final_metadata.st_dev,
+                final_metadata.st_ino,
+                final_metadata.st_ctime_ns,
+                final_metadata.st_mtime_ns,
+                final_metadata.st_size,
+            )
+            expected_identity = (
+                pinned.device,
+                pinned.inode,
+                pinned.ctime_ns,
+                pinned.mtime_ns,
+                pinned.size,
+            )
+            if verified_identity != expected_identity:
+                raise ReviewError("FILE_HASH_MISMATCH", "文件完整性校验失败")
+            if on_sha256_verified is not None:
+                on_sha256_verified(verified_identity)
         if start < 0 or final_end < start or final_end >= pinned.size:
             raise ReviewError("VALIDATION_ERROR", "文件读取范围越界")
     except Exception:
         close_once()
+        if on_response_complete is not None:
+            on_response_complete(False)
         raise
 
     def iterator():
@@ -261,9 +304,11 @@ def regular_file_response(
                     stream_guard()
                 chunk = handle.read(min(1024 * 1024, remaining))
                 if not chunk:
-                    break
+                    raise ReviewError("STORAGE_UNAVAILABLE", "文件读取提前结束")
                 remaining -= len(chunk)
                 yield chunk
+            if remaining == 0 and on_stream_complete is not None:
+                on_stream_complete()
         finally:
             close_once()
 
@@ -276,6 +321,7 @@ def regular_file_response(
         media_type=media_type,
         headers=response_headers,
         on_close=close_once,
+        on_response_complete=on_response_complete,
     )
 
 
@@ -354,6 +400,8 @@ def release_package_download_lease(
     package_id: str,
     lease_id: str,
     runtime_writer_lock: RuntimeWriterLock,
+    *,
+    completed: bool,
 ) -> bool:
     try:
         with bind_runtime_writer_lock(runtime_writer_lock):
@@ -361,6 +409,7 @@ def release_package_download_lease(
                 released = SqlAlchemyReviewRepository(lease_session, get_settings()).release_package_download_lease(
                     package_id,
                     lease_id,
+                    completed=completed,
                 )
                 if released:
                     lease_session.commit()
@@ -369,6 +418,34 @@ def release_package_download_lease(
                 return released
     except Exception as exc:
         LOGGER.error("package_download_lease_release_failed", extra={"error_type": type(exc).__name__})
+        return False
+
+
+def mark_package_download_session_verified(
+    package_id: str,
+    lease_id: str,
+    session_token: str,
+    expected_sha256: str,
+    file_identity: tuple[int, int, int, int, int],
+    runtime_writer_lock: RuntimeWriterLock,
+) -> bool:
+    try:
+        with bind_runtime_writer_lock(runtime_writer_lock):
+            with SessionLocal() as lease_session:
+                verified = SqlAlchemyReviewRepository(lease_session, get_settings()).mark_package_download_session_verified(
+                    package_id,
+                    lease_id,
+                    session_token,
+                    expected_sha256,
+                    file_identity,
+                )
+                if verified:
+                    lease_session.commit()
+                else:
+                    lease_session.rollback()
+                return verified
+    except Exception as exc:
+        LOGGER.error("package_download_session_verification_failed", extra={"error_type": type(exc).__name__})
         return False
 
 
@@ -716,16 +793,27 @@ def download_package(
     request: Request,
     session: Session = Depends(session_dependency),
     request_id: str = Depends(get_request_id),
+    range_header: str | None = Header(default=None, alias="Range"),
 ) -> StreamingResponse:
     authorize_query(query_context(request, request_id), "review.package.download", project_ref_id)
     settings = get_settings()
-    secure_cookie = trusted_request_scheme(request, settings) == "https"
     cookie_name = package_download_cookie_name(package_id)
     candidate_token = request.cookies.get(cookie_name)
     if not candidate_token:
         raise ReviewError("PRINCIPAL_PERMISSION_DENIED", "包下载 session 缺失")
     repo = SqlAlchemyReviewRepository(session, settings)
-    lease = repo.begin_package_download(project_ref_id, package_id, candidate_token)
+    package_storage_bytes = repo.lock_package_download_storage_bytes(project_ref_id, package_id)
+    start, end, status_code = parse_range_header(range_header, package_storage_bytes)
+    if start == 0 and end == package_storage_bytes - 1:
+        status_code = 200
+    lease = repo.begin_package_download(
+        project_ref_id,
+        package_id,
+        candidate_token,
+        is_resume_request=status_code == 206 and start > 0,
+    )
+    if lease["storage_bytes"] != package_storage_bytes:
+        raise ReviewError("RESOURCE_STATE_CONFLICT", "临时包大小在下载准备期间发生变化")
     session.commit()
     runtime_writer_lock = current_runtime_writer_lock()
     heartbeat = PackageDownloadLeaseHeartbeat(
@@ -733,9 +821,34 @@ def download_package(
         interval_seconds=package_download_heartbeat_interval(settings.package_download_lease_seconds),
     )
 
-    def release_lease() -> None:
+    stream_completed = threading.Event()
+    release_lock = threading.Lock()
+    lease_released = False
+
+    def release_lease(response_completed: bool = False) -> None:
+        nonlocal lease_released
+        with release_lock:
+            if lease_released:
+                return
+            lease_released = True
         heartbeat.stop()
-        release_package_download_lease(package_id, lease["lease_id"], runtime_writer_lock)
+        release_package_download_lease(
+            package_id,
+            lease["lease_id"],
+            runtime_writer_lock,
+            completed=response_completed and stream_completed.is_set(),
+        )
+
+    def mark_integrity_verified(file_identity: tuple[int, int, int, int, int]) -> None:
+        if not mark_package_download_session_verified(
+            package_id,
+            lease["lease_id"],
+            candidate_token,
+            lease["sha256"],
+            file_identity,
+            runtime_writer_lock,
+        ):
+            raise ReviewError("STORAGE_UNAVAILABLE", "下载 session 完整性状态更新失败")
 
     try:
         heartbeat.start()
@@ -744,23 +857,27 @@ def download_package(
             settings.package_root,
             expected_path=Path(f"{package_id}.zip"),
         )
+        headers = {"Accept-Ranges": "bytes"}
+        if status_code == 206:
+            headers["Content-Range"] = f"bytes {start}-{end}/{lease['storage_bytes']}"
         response = regular_file_response(
             path,
             settings.package_root,
             media_type="application/zip",
             filename=lease["package_filename"],
+            start=start,
+            end=end,
+            status_code=status_code,
+            headers=headers,
             expected_sha256=lease["sha256"],
-            on_close=release_lease,
+            on_response_complete=release_lease,
+            on_stream_complete=stream_completed.set,
+            on_sha256_verified=(None if lease["integrity_verified"] else mark_integrity_verified),
+            force_sha256_verification=not lease["integrity_verified"],
+            expected_file_identity=lease["file_identity"],
             stream_guard=heartbeat.assert_healthy,
         )
     except Exception:
-        release_lease()
+        release_lease(False)
         raise
-    response.delete_cookie(
-        cookie_name,
-        path=f"/api/v1/final-cut-review/review/projects/{project_ref_id}/finalized-originals/packages/{package_id}/download",
-        secure=secure_cookie,
-        httponly=True,
-        samesite="strict",
-    )
     return response

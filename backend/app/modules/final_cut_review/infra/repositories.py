@@ -2395,7 +2395,10 @@ class SqlAlchemyReviewRepository:
                 FinalCutPackageSnapshotModel.status == "ready",
                 FinalCutPackageSnapshotModel.expires_at > utcnow(),
             )
-            .order_by(FinalCutPackageSnapshotModel.created_at.desc())
+            .order_by(
+                FinalCutPackageSnapshotModel.created_at.desc(),
+                FinalCutPackageSnapshotModel.id.desc(),
+            )
             .limit(self.settings.max_pending_package_builds)
         )
         scanned_reusable_packages: list[
@@ -2446,6 +2449,11 @@ class SqlAlchemyReviewRepository:
                     self._ready_package_reuse_integrity(reusable),
                 )
             )
+            # Ready packages are ordered newest-first. Hashing every historical
+            # multi-gigabyte archive before returning 202 can exceed the proxy
+            # timeout, while an invalid newest candidate is safely failed and
+            # replaced below. Validate at most one candidate per request.
+            break
         if self.session.get_bind().dialect.name == "postgresql":
             self.session.execute(
                 text("SELECT pg_advisory_xact_lock(:lock_key)"),
@@ -2987,6 +2995,7 @@ class SqlAlchemyReviewRepository:
                 FinalCutPackageSnapshotModel.project_ref_id == project_ref_id,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if package is None:
             raise not_found()
@@ -2997,18 +3006,93 @@ class SqlAlchemyReviewRepository:
             raise ReviewError("PACKAGE_NOT_READY", "临时包尚未就绪")
         if package.sha256 is None:
             raise ReviewError("STORAGE_UNAVAILABLE", "临时包缺少完整性摘要")
+        if package.download_lease_id is not None and package.download_lease_expires_at is not None and aware(package.download_lease_expires_at) > now:
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "同一临时包已有下载进行中")
+        file_identity = self._package_download_file_identity(package)
         token = secrets.token_urlsafe(32)
         expires_at = min(
             aware(package.expires_at),
             now + timedelta(seconds=self.settings.package_download_session_ttl_seconds),
         )
-        package.download_session_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        package.download_session_hash = self._package_download_session_hash(token, "fresh", file_identity)
         package.download_session_expires_at = expires_at
         package.updated_at = now
         self.session.flush()
         return token, expires_at
 
-    def begin_package_download(self, project_ref_id: str, package_id: str, session_token: str) -> dict[str, Any]:
+    @staticmethod
+    def _package_download_session_hash(
+        session_token: str,
+        state: str,
+        file_identity: tuple[int, int, int, int, int],
+    ) -> str:
+        payload = json.dumps(
+            [state, *file_identity, session_token],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def _package_download_file_identity(
+        self,
+        package: FinalCutPackageSnapshotModel,
+    ) -> tuple[int, int, int, int, int]:
+        if re.fullmatch(r"pkg_[0-9a-f]{32}", package.id) is None:
+            raise ReviewError("STORAGE_UNAVAILABLE", "临时包标识非法")
+        try:
+            expected_path = contained_path(Path(f"{package.id}.zip"), self.settings.package_root)
+            if contained_path(package.storage_path, self.settings.package_root) != expected_path:
+                raise ReviewError("STORAGE_UNAVAILABLE", "临时包路径非法")
+            if package.storage_reclaimed_at is not None:
+                raise ReviewError("PACKAGE_SOURCE_MISSING", "包文件缺失")
+            with pin_regular_file(expected_path, self.settings.package_root) as pinned:
+                if pinned is None or not pinned.exists:
+                    raise ReviewError("PACKAGE_SOURCE_MISSING", "包文件缺失")
+                identity = (
+                    pinned.device,
+                    pinned.inode,
+                    pinned.ctime_ns,
+                    pinned.mtime_ns,
+                    pinned.size,
+                )
+                if any(value is None for value in identity):
+                    raise ReviewError("STORAGE_UNAVAILABLE", "临时包文件身份不可用")
+                return cast(tuple[int, int, int, int, int], identity)
+        except UnsafeFilePathError as exc:
+            raise ReviewError("STORAGE_UNAVAILABLE", "临时包路径非法") from exc
+        except OSError as exc:
+            raise ReviewError("STORAGE_UNAVAILABLE", "临时包存储不可用") from exc
+
+    def lock_package_download_storage_bytes(self, project_ref_id: str, package_id: str) -> int:
+        self._assert_project_visible(self._get_project(project_ref_id))
+        row = self.session.execute(
+            select(
+                FinalCutPackageSnapshotModel.storage_bytes,
+                FinalCutPackageSnapshotModel.status,
+                FinalCutPackageSnapshotModel.expires_at,
+            )
+            .where(
+                FinalCutPackageSnapshotModel.id == package_id,
+                FinalCutPackageSnapshotModel.project_ref_id == project_ref_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if row is None:
+            raise not_found()
+        storage_bytes, status, expires_at = row
+        if aware(expires_at) <= utcnow():
+            raise ReviewError("PACKAGE_EXPIRED", "临时包已过期")
+        if status != "ready":
+            raise ReviewError("PACKAGE_NOT_READY", "临时包尚未就绪")
+        return int(storage_bytes)
+
+    def begin_package_download(
+        self,
+        project_ref_id: str,
+        package_id: str,
+        session_token: str,
+        *,
+        is_resume_request: bool = False,
+    ) -> dict[str, Any]:
         self._assert_project_visible(self._get_project(project_ref_id))
         package = self.session.scalar(
             select(FinalCutPackageSnapshotModel)
@@ -3017,20 +3101,38 @@ class SqlAlchemyReviewRepository:
                 FinalCutPackageSnapshotModel.project_ref_id == project_ref_id,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if package is None:
             raise not_found()
         now = utcnow()
         if aware(package.expires_at) <= now:
             raise ReviewError("PACKAGE_EXPIRED", "临时包已过期")
-        candidate_hash = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
-        if (
-            package.download_session_hash is None
-            or package.download_session_expires_at is None
-            or aware(package.download_session_expires_at) <= now
-            or not hmac.compare_digest(package.download_session_hash, candidate_hash)
-        ):
+        if package.download_session_hash is None or package.download_session_expires_at is None or aware(package.download_session_expires_at) <= now:
             raise ReviewError("PRINCIPAL_PERMISSION_DENIED", "包下载 session 无效或已过期")
+        if package.status != "ready" or package.sha256 is None:
+            raise ReviewError("PACKAGE_NOT_READY", "临时包尚未就绪")
+        file_identity = self._package_download_file_identity(package)
+        if file_identity[-1] != package.storage_bytes:
+            raise ReviewError("FILE_HASH_MISMATCH", "临时包大小与存储记录不一致")
+        session_state = next(
+            (
+                state
+                for state in ("fresh", "started", "verified")
+                if hmac.compare_digest(
+                    package.download_session_hash,
+                    self._package_download_session_hash(session_token, state, file_identity),
+                )
+            ),
+            None,
+        )
+        legacy_hash = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+        if session_state is None and hmac.compare_digest(package.download_session_hash, legacy_hash):
+            session_state = "fresh"
+        if session_state is None:
+            raise ReviewError("PRINCIPAL_PERMISSION_DENIED", "包下载 session 无效或文件身份已变化")
+        if is_resume_request and session_state == "fresh":
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "请先开始完整下载后再续传")
         if package.download_lease_id is not None and package.download_lease_expires_at is not None and aware(package.download_lease_expires_at) > now:
             raise ReviewError("RESOURCE_STATE_CONFLICT", "同一临时包已有下载进行中")
         if (
@@ -3038,11 +3140,9 @@ class SqlAlchemyReviewRepository:
             and aware(package.last_download_finished_at) + timedelta(seconds=self.settings.package_download_cooldown_seconds) > now
         ):
             raise ReviewError("RESOURCE_STATE_CONFLICT", "临时包下载过于频繁，请稍后重试")
-        if package.status != "ready" or package.sha256 is None:
-            raise ReviewError("PACKAGE_NOT_READY", "临时包尚未就绪")
         lease_id = secrets.token_hex(32)
-        package.download_session_hash = None
-        package.download_session_expires_at = None
+        if session_state == "fresh":
+            package.download_session_hash = self._package_download_session_hash(session_token, "started", file_identity)
         package.download_lease_id = lease_id
         package.download_lease_expires_at = now + timedelta(seconds=self.settings.package_download_lease_seconds)
         package.updated_at = now
@@ -3052,7 +3152,45 @@ class SqlAlchemyReviewRepository:
             "package_filename": package.package_filename,
             "sha256": package.sha256,
             "lease_id": lease_id,
+            "storage_bytes": package.storage_bytes,
+            "integrity_verified": session_state == "verified",
+            "file_identity": file_identity,
         }
+
+    def mark_package_download_session_verified(
+        self,
+        package_id: str,
+        lease_id: str,
+        session_token: str,
+        expected_sha256: str,
+        verified_file_identity: tuple[int, int, int, int, int],
+    ) -> bool:
+        package = self.session.scalar(
+            select(FinalCutPackageSnapshotModel)
+            .where(
+                FinalCutPackageSnapshotModel.id == package_id,
+                FinalCutPackageSnapshotModel.download_lease_id == lease_id,
+                FinalCutPackageSnapshotModel.status == "ready",
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if package is None or package.download_session_hash is None or package.sha256 != expected_sha256:
+            return False
+        current_identity = self._package_download_file_identity(package)
+        if current_identity != verified_file_identity or current_identity[-1] != package.storage_bytes:
+            return False
+        started_hash = self._package_download_session_hash(session_token, "started", current_identity)
+        verified_hash = self._package_download_session_hash(session_token, "verified", current_identity)
+        if not (
+            hmac.compare_digest(package.download_session_hash, started_hash)
+            or hmac.compare_digest(package.download_session_hash, verified_hash)
+        ):
+            return False
+        package.download_session_hash = verified_hash
+        package.updated_at = utcnow()
+        self.session.flush()
+        return True
 
     def renew_package_download_lease(self, package_id: str, lease_id: str) -> bool:
         package = self.session.scalar(
@@ -3073,7 +3211,7 @@ class SqlAlchemyReviewRepository:
         self.session.flush()
         return True
 
-    def release_package_download_lease(self, package_id: str, lease_id: str) -> bool:
+    def release_package_download_lease(self, package_id: str, lease_id: str, *, completed: bool) -> bool:
         package = self.session.scalar(
             select(FinalCutPackageSnapshotModel)
             .where(
@@ -3087,7 +3225,8 @@ class SqlAlchemyReviewRepository:
         now = utcnow()
         package.download_lease_id = None
         package.download_lease_expires_at = None
-        package.last_download_finished_at = now
+        if completed:
+            package.last_download_finished_at = now
         package.updated_at = now
         self.session.flush()
         return True

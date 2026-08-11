@@ -50,6 +50,7 @@ BINARY_MEDIA_RESPONSES: dict[str, dict[str, set[str]]] = {
     },
     "download_package": {
         "200": {"application/zip"},
+        "206": {"application/zip"},
     },
 }
 BODYLESS_OPERATION_IDS = {

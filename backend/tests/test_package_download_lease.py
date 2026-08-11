@@ -124,13 +124,20 @@ def test_runtime_writer_lock_serializes_shared_connection_probes() -> None:
     assert connection.max_active_calls == 1
 
 
-def _run_response(response: StreamingResponse, *, fail_during_send: bool = False) -> None:
+def _run_response(
+    response: StreamingResponse,
+    *,
+    fail_during_send: bool = False,
+    fail_on_final_send: bool = False,
+) -> None:
     async def receive() -> Message:
         raise AssertionError("ASGI receive must not be called for spec 2.4 streaming")
 
     async def send(message: Message) -> None:
         if fail_during_send and message["type"] == "http.response.body":
             raise OSError("synthetic client disconnect")
+        if fail_on_final_send and message["type"] == "http.response.body" and not message.get("more_body", False):
+            raise OSError("synthetic final response failure")
 
     scope = cast(Scope, {"type": "http", "asgi": {"spec_version": "2.4"}})
     asyncio.run(response(scope, receive, send))
@@ -224,16 +231,22 @@ def test_streaming_response_close_stops_download_heartbeat(tmp_path: Path) -> No
     heartbeat = _heartbeat(renew)
     heartbeat.start()
     assert renewed.wait(timeout=1)
+    stream_completed = threading.Event()
+    response_completions: list[bool] = []
     response = regular_file_response(
         source,
         tmp_path,
         media_type="application/zip",
         on_close=heartbeat.stop,
+        on_stream_complete=stream_completed.set,
+        on_response_complete=response_completions.append,
     )
 
     _run_response(response)
 
     assert heartbeat.is_alive is False
+    assert stream_completed.is_set()
+    assert response_completions == [True]
     stopped_count = renewal_count
     time.sleep(0.03)
     assert renewal_count == stopped_count
@@ -253,17 +266,45 @@ def test_streaming_response_send_error_stops_download_heartbeat(tmp_path: Path) 
     heartbeat = _heartbeat(renew)
     heartbeat.start()
     assert renewed.wait(timeout=1)
+    stream_completed = threading.Event()
+    response_completions: list[bool] = []
     response = regular_file_response(
         source,
         tmp_path,
         media_type="application/zip",
         on_close=heartbeat.stop,
+        on_stream_complete=stream_completed.set,
+        on_response_complete=response_completions.append,
     )
 
     with pytest.raises(ClientDisconnect):
         _run_response(response, fail_during_send=True)
 
     assert heartbeat.is_alive is False
+    assert not stream_completed.is_set()
+    assert response_completions == [False]
+
+
+def test_stream_completion_requires_successful_final_asgi_send(tmp_path: Path) -> None:
+    from backend.app.modules.review_http.query_routes import regular_file_response
+
+    source = tmp_path / "package.zip"
+    source.write_bytes(b"package-body")
+    interval_completed = threading.Event()
+    response_completions: list[bool] = []
+    response = regular_file_response(
+        source,
+        tmp_path,
+        media_type="application/zip",
+        on_stream_complete=interval_completed.set,
+        on_response_complete=response_completions.append,
+    )
+
+    with pytest.raises(ClientDisconnect):
+        _run_response(response, fail_on_final_send=True)
+
+    assert interval_completed.is_set()
+    assert response_completions == [False]
 
 
 def test_download_heartbeat_failure_aborts_stream_and_closes_resources(tmp_path: Path) -> None:
@@ -295,6 +336,33 @@ def test_download_heartbeat_failure_aborts_stream_and_closes_resources(tmp_path:
     assert heartbeat.is_alive is False
 
 
+def test_stream_rejects_file_identity_change_after_download_lease_is_granted(tmp_path: Path) -> None:
+    from backend.app.modules.final_cut_review.domain.errors import ReviewError
+    from backend.app.modules.review_http.query_routes import regular_file_response
+
+    source = tmp_path / "package.zip"
+    source.write_bytes(b"original-body")
+    original = source.stat()
+    expected_identity = (
+        original.st_dev,
+        original.st_ino,
+        original.st_ctime_ns,
+        original.st_mtime_ns,
+        original.st_size,
+    )
+    replacement = tmp_path / "replacement.zip"
+    replacement.write_bytes(b"tampered-body")
+    replacement.replace(source)
+
+    with pytest.raises(ReviewError, match="完整性校验失败"):
+        regular_file_response(
+            source,
+            tmp_path,
+            media_type="application/zip",
+            expected_file_identity=expected_identity,
+        )
+
+
 def test_old_download_lease_cannot_renew_or_release_current_lease(client: TestClient) -> None:
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
     from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository, aware
@@ -309,7 +377,7 @@ def test_old_download_lease_cannot_renew_or_release_current_lease(client: TestCl
     with SessionLocal() as session:
         repository = SqlAlchemyReviewRepository(session, get_settings())
         assert repository.renew_package_download_lease(package_id, "stale-lease") is False
-        assert repository.release_package_download_lease(package_id, "stale-lease") is False
+        assert repository.release_package_download_lease(package_id, "stale-lease", completed=False) is False
         session.commit()
 
     with SessionLocal() as session:

@@ -4265,6 +4265,7 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
     from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
         FinalCutPackageSnapshotModel,
         IdempotencyRecordModel,
+        utcnow,
     )
 
     with SessionLocal() as session:
@@ -4296,21 +4297,85 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
         headers={"X-Package-Download-Token": package_data["download_token"]},
     )
     assert authorize_zip.status_code == 200
-    one_shot_cookie = authorize_zip.cookies.get(f"fj_pkg_{package_data['id']}")
-    assert one_shot_cookie
+    download_cookie = authorize_zip.cookies.get(f"fj_pkg_{package_data['id']}")
+    assert download_cookie
+    first_request_cannot_skip_to_a_nonzero_range = client.get(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
+        headers={"Range": "bytes=4-15"},
+    )
+    assert first_request_cannot_skip_to_a_nonzero_range.status_code == 409
+    assert api_error(first_request_cannot_skip_to_a_nonzero_range)["code"] == "RESOURCE_STATE_CONFLICT"
     cookie_zip = client.get(f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download")
     assert cookie_zip.status_code == 200
     assert cookie_zip.content.startswith(b"PK")
+    completed_download_cannot_claim_resume = client.get(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
+        headers={"Range": "bytes=4-"},
+    )
+    assert completed_download_cannot_claim_resume.status_code == 409
+
+    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+    from backend.app.modules.review_http.query_routes import release_package_download_lease
+    from backend.app.settings import get_settings
+
+    with SessionLocal() as session:
+        package_row = session.get(FinalCutPackageSnapshotModel, package_data["id"])
+        assert package_row is not None
+        package_row.last_download_finished_at = utcnow() - timedelta(seconds=30)
+        session.commit()
+    resumed_authorization = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download-session",
+        headers={"X-Package-Download-Token": package_data["download_token"]},
+    )
+    assert resumed_authorization.status_code == 200
+    resume_cookie = resumed_authorization.cookies.get(f"fj_pkg_{package_data['id']}")
+    assert resume_cookie
+    with SessionLocal() as session:
+        interrupted_lease = SqlAlchemyReviewRepository(session, get_settings()).begin_package_download(
+            project["project_ref_id"],
+            package_data["id"],
+            resume_cookie,
+        )
+        session.commit()
+    app: Any = client.app
+    assert release_package_download_lease(
+        package_data["id"],
+        interrupted_lease["lease_id"],
+        app.state.runtime_writer_lock,
+        completed=False,
+    )
+    resumed_zip = client.get(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
+        headers={"Range": "bytes=4-"},
+    )
+    assert resumed_zip.status_code == 206
+    assert resumed_zip.headers["accept-ranges"] == "bytes"
+    assert resumed_zip.headers["content-range"].startswith("bytes 4-")
+    assert resumed_zip.content == cookie_zip.content[4:]
+    zero_start_replay = client.get(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
+        headers={"Range": "bytes=0-3"},
+    )
+    assert zero_start_replay.status_code == 409
+    full_range_replay = client.get(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
+        headers={"Range": "bytes=0-"},
+    )
+    assert full_range_replay.status_code == 409
     replayed_signed_token = client.get(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
-        headers={"X-Package-Download-Token": package_data["download_token"]},
+        headers={
+            "X-Package-Download-Token": package_data["download_token"],
+            "Cookie": f"fj_pkg_{package_data['id']}=not-the-session",
+        },
     )
     assert replayed_signed_token.status_code == 403
     replayed_session = client.get(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
-        headers={"Cookie": f"fj_pkg_{package_data['id']}={one_shot_cookie}"},
+        headers={"Cookie": f"fj_pkg_{package_data['id']}={resume_cookie}"},
     )
-    assert replayed_session.status_code == 403
+    assert replayed_session.status_code == 409
+    assert api_error(replayed_session)["code"] == "RESOURCE_STATE_CONFLICT"
 
     from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, FinalCutPackageSnapshotModel, utcnow
 
@@ -4318,7 +4383,10 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
         package_row = session.get(FinalCutPackageSnapshotModel, package_data["id"])
         original_row = session.get(FileObjectModel, fin["original_media"]["original_file_id"])
         assert package_row is not None and original_row is not None
-        Path(package_row.storage_path).write_bytes(b"tampered-package")
+        package_path = Path(package_row.storage_path)
+        package_bytes = package_path.read_bytes()
+        package_path.write_bytes(bytes([package_bytes[0] ^ 0x01]) + package_bytes[1:])
+        assert package_path.stat().st_size == len(package_bytes)
         Path(original_row.storage_path).write_bytes(b"tampered-original")
         package_row.last_download_finished_at = utcnow() - timedelta(seconds=30)
         session.commit()
@@ -4330,8 +4398,15 @@ def test_finalized_download_and_package_snapshot_do_not_drift(client: TestClient
         headers={"X-Package-Download-Token": refreshed_package["download_token"]},
     )
     assert tampered_authorize.status_code == 200
+    tampered_first_resume = client.get(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
+        headers={"Range": "bytes=1-"},
+    )
+    assert tampered_first_resume.status_code == 409
+    assert api_error(tampered_first_resume)["code"] == "RESOURCE_STATE_CONFLICT"
     tampered_package = client.get(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download"
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package_data['id']}/download",
+        headers={"Range": "bytes=0-"},
     )
     assert tampered_package.status_code == 409
     assert api_error(tampered_package)["code"] == "FILE_HASH_MISMATCH"
@@ -5320,6 +5395,7 @@ def test_package_publish_preserves_storage_unavailable_failure_semantics(
 def test_package_download_lease_blocks_concurrent_integrity_scan(client: TestClient) -> None:
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
     from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
     from backend.app.modules.review_http.query_routes import release_package_download_lease
     from backend.app.settings import get_settings
 
@@ -5345,17 +5421,143 @@ def test_package_download_lease_blocks_concurrent_integrity_scan(client: TestCli
             session_token,
         )
         session.commit()
+    with SessionLocal() as observer:
+        leased_package = observer.get(FinalCutPackageSnapshotModel, package["id"])
+        assert leased_package is not None
+        leased_session_hash = leased_package.download_session_hash
 
     refreshed = get_package_snapshot(client, project["project_ref_id"], package["id"])
     reauthorized = client.post(
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package['id']}/download-session",
         headers={"X-Package-Download-Token": refreshed["download_token"]},
     )
-    assert reauthorized.status_code == 200
+    assert reauthorized.status_code == 409
+    assert api_error(reauthorized)["code"] == "RESOURCE_STATE_CONFLICT"
+    with SessionLocal() as observer:
+        still_leased = observer.get(FinalCutPackageSnapshotModel, package["id"])
+        assert still_leased is not None
+        assert still_leased.download_lease_id == lease["lease_id"]
+        assert still_leased.download_session_hash == leased_session_hash
     blocked = client.get(f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{package['id']}/download")
     assert blocked.status_code == 409
     app: Any = client.app
-    release_package_download_lease(package["id"], lease["lease_id"], app.state.runtime_writer_lock)
+    release_package_download_lease(
+        package["id"],
+        lease["lease_id"],
+        app.state.runtime_writer_lock,
+        completed=False,
+    )
+
+
+def test_package_download_lock_refreshes_preloaded_state_before_granting_second_lease(client: TestClient) -> None:
+    from backend.app.modules.final_cut_review.domain.errors import ReviewError
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
+    from backend.app.modules.review_http.query_routes import release_package_download_lease
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client)
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    ready, _package_command = prepare_ready_package(client, project["project_ref_id"])
+    authorized = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{ready['id']}/download-session",
+        headers={"X-Package-Download-Token": ready["download_token"]},
+    )
+    session_token = authorized.cookies.get(f"fj_pkg_{ready['id']}")
+    assert session_token
+
+    with SessionLocal(expire_on_commit=False) as stale_session:
+        stale_repository = SqlAlchemyReviewRepository(stale_session, get_settings())
+        preloaded = stale_repository.get_package(project["project_ref_id"], ready["id"])
+        assert preloaded.download_lease_id is None
+        stale_session.commit()
+
+        with SessionLocal() as winner_session:
+            winning_lease = SqlAlchemyReviewRepository(winner_session, get_settings()).begin_package_download(
+                project["project_ref_id"],
+                ready["id"],
+                session_token,
+            )
+            winner_session.commit()
+
+        with pytest.raises(ReviewError, match="已有下载进行中"):
+            stale_repository.begin_package_download(
+                project["project_ref_id"],
+                ready["id"],
+                session_token,
+            )
+        stale_session.rollback()
+
+    with SessionLocal() as observer:
+        persisted = observer.get(FinalCutPackageSnapshotModel, ready["id"])
+        assert persisted is not None
+        assert persisted.download_lease_id == winning_lease["lease_id"]
+    app: Any = client.app
+    assert release_package_download_lease(
+        ready["id"],
+        winning_lease["lease_id"],
+        app.state.runtime_writer_lock,
+        completed=False,
+    )
+
+
+@pytest.mark.parametrize("storage_size_delta", [-1, 1])
+def test_package_download_rejects_snapshot_size_drift_before_streaming(
+    client: TestClient,
+    storage_size_delta: int,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel
+
+    project, item = create_project_item(client)
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    ready, _package_command = prepare_ready_package(client, project["project_ref_id"])
+    authorized = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{ready['id']}/download-session",
+        headers={"X-Package-Download-Token": ready["download_token"]},
+    )
+    assert authorized.status_code == 200
+    with SessionLocal() as session:
+        package = session.get(FinalCutPackageSnapshotModel, ready["id"])
+        assert package is not None
+        package.storage_bytes += storage_size_delta
+        assert package.storage_bytes > 0
+        session.commit()
+
+    response = client.get(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{ready['id']}/download"
+    )
+
+    assert response.status_code == 409
+    assert api_error(response)["code"] == "FILE_HASH_MISMATCH"
+    with SessionLocal() as observer:
+        package = observer.get(FinalCutPackageSnapshotModel, ready["id"])
+        assert package is not None
+        assert package.download_lease_id is None
+
+
+def test_package_download_identity_probe_maps_storage_oserror(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.modules.final_cut_review.infra import repositories as repository_module
+
+    project, item = create_project_item(client)
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    ready, _package_command = prepare_ready_package(client, project["project_ref_id"])
+
+    def fail_identity_probe(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic package storage failure")
+
+    monkeypatch.setattr(repository_module, "pin_regular_file", fail_identity_probe)
+    response = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalized-originals/packages/{ready['id']}/download-session",
+        headers={"X-Package-Download-Token": ready["download_token"]},
+    )
+
+    assert response.status_code == 503
+    assert api_error(response)["code"] == "STORAGE_UNAVAILABLE"
 
 
 def test_expired_package_idempotency_replay_never_reissues_download_token(client: TestClient) -> None:
@@ -6057,6 +6259,73 @@ def test_shared_storage_lock_is_taken_after_expensive_reuse_integrity_scan() -> 
     assert source.index("self._ready_package_reuse_integrity") < source.index(
         '{"lock_key": STORAGE_ADMISSION_ADVISORY_LOCK_KEY}'
     )
+
+
+@pytest.mark.parametrize("corrupt_newest", [False, True])
+def test_package_prepare_hashes_only_the_newest_matching_ready_archive(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    corrupt_newest: bool,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FinalCutPackageSnapshotModel, utcnow
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client)
+    finalize(client, project["project_ref_id"], item, if_match=item["lock_version"])
+    older, _package_command = prepare_ready_package(client, project["project_ref_id"])
+    newest_id = f"pkg_{uuid.uuid4().hex}"
+    newest_path = get_settings().package_root / f"{newest_id}.zip"
+    with SessionLocal() as session:
+        older_row = session.get(FinalCutPackageSnapshotModel, older["id"])
+        assert older_row is not None
+        newest_bytes = Path(older_row.storage_path).read_bytes()
+        newest_path.write_bytes(newest_bytes)
+        if corrupt_newest:
+            newest_path.write_bytes(bytes([newest_bytes[0] ^ 0x01]) + newest_bytes[1:])
+        newest_row = FinalCutPackageSnapshotModel(
+            id=newest_id,
+            project_ref_id=older_row.project_ref_id,
+            status="ready",
+            package_filename=f"{newest_id}.zip",
+            storage_path=str(newest_path),
+            expires_at=older_row.expires_at,
+            total_bytes=older_row.total_bytes,
+            storage_bytes=older_row.storage_bytes,
+            sha256=older_row.sha256,
+            items=json.loads(json.dumps(older_row.items)),
+            created_at=utcnow() + timedelta(seconds=1),
+            updated_at=utcnow() + timedelta(seconds=1),
+        )
+        session.add(newest_row)
+        session.commit()
+
+    integrity_calls: list[str] = []
+    original_integrity_check = SqlAlchemyReviewRepository._ready_package_reuse_integrity
+
+    def tracked_integrity_check(
+        repository: SqlAlchemyReviewRepository,
+        snapshot: FinalCutPackageSnapshotModel,
+    ) -> tuple[str | None, Path | None, int | None, tuple[int, int] | None]:
+        integrity_calls.append(snapshot.id)
+        return original_integrity_check(repository, snapshot)
+
+    monkeypatch.setattr(SqlAlchemyReviewRepository, "_ready_package_reuse_integrity", tracked_integrity_check)
+    result = request_package(client, project["project_ref_id"])
+
+    assert integrity_calls == [newest_id]
+    if corrupt_newest:
+        assert result["status"] == "preparing"
+        assert result["id"] not in {older["id"], newest_id}
+        with SessionLocal() as session:
+            failed_newest = session.get(FinalCutPackageSnapshotModel, newest_id)
+            still_ready_older = session.get(FinalCutPackageSnapshotModel, older["id"])
+            assert failed_newest is not None and failed_newest.status == "failed"
+            assert still_ready_older is not None and still_ready_older.status == "ready"
+    else:
+        assert result["status"] == "ready"
+        assert result["id"] == newest_id
 
 
 def test_upload_finalization_heavy_io_runs_without_database_checkout(
