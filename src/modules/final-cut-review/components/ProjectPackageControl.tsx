@@ -9,18 +9,30 @@ export function ProjectPackageControl(props: {
   disabled: boolean;
   createPending: boolean;
   downloadPending: boolean;
-  onCreate(input: { projectRefId: string; unifiedName: string }): Promise<PackageResult>;
-  onDownload(result: PackageResult): Promise<void>;
+  onCreate(
+    input: { projectRefId: string; unifiedName: string },
+    signal: AbortSignal,
+  ): Promise<PackageResult>;
+  onDownload(result: PackageResult, signal: AbortSignal): Promise<void>;
   onSuccess(): void;
 }) {
   const [open, setOpen] = useState(false);
   const [unifiedName, setUnifiedName] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [stage, setStage] = useState<'idle' | 'preparing' | 'downloading'>('idle');
+  const [stage, setStage] = useState<'idle' | 'preparing' | 'authorizing'>('idle');
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inFlightRef = useRef(false);
+  const operationAbortControllerRef = useRef<AbortController | null>(null);
+  const operationSequenceRef = useRef(0);
   const titleId = useId();
   const pending = props.createPending || props.downloadPending || stage !== 'idle';
+
+  useEffect(() => () => {
+    operationAbortControllerRef.current?.abort();
+    operationAbortControllerRef.current = null;
+    operationSequenceRef.current += 1;
+    inFlightRef.current = false;
+  }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -62,8 +74,8 @@ export function ProjectPackageControl(props: {
       >
         {stage === 'preparing'
           ? '项目包准备中'
-          : stage === 'downloading'
-            ? '项目包完成，正在下载'
+          : stage === 'authorizing'
+            ? '项目包完成，正在启动下载'
             : '打包项目定稿原片'}
       </button>
       {open ? (
@@ -89,17 +101,32 @@ export function ProjectPackageControl(props: {
               }
               if (inFlightRef.current) return;
               inFlightRef.current = true;
+              const operationSequence = operationSequenceRef.current + 1;
+              operationSequenceRef.current = operationSequence;
+              const operationAbortController = new AbortController();
+              operationAbortControllerRef.current = operationAbortController;
               setError(null);
               setStage('preparing');
-              void props.onCreate({ projectRefId: props.projectRefId, unifiedName })
+              void props.onCreate(
+                { projectRefId: props.projectRefId, unifiedName },
+                operationAbortController.signal,
+              )
                 .then(async (result) => {
-                  setStage('downloading');
-                  await props.onDownload(result);
+                  if (operationSequenceRef.current !== operationSequence) return;
+                  setStage('authorizing');
+                  await props.onDownload(result, operationAbortController.signal);
+                  if (operationSequenceRef.current !== operationSequence) return;
                   props.onSuccess();
                   setOpen(false);
                 })
-                .catch((caught: unknown) => setError(actionError(caught)))
+                .catch((caught: unknown) => {
+                  if (operationSequenceRef.current === operationSequence) {
+                    setError(actionError(caught));
+                  }
+                })
                 .finally(() => {
+                  if (operationSequenceRef.current !== operationSequence) return;
+                  operationAbortControllerRef.current = null;
                   inFlightRef.current = false;
                   setStage('idle');
                 });
@@ -119,7 +146,7 @@ export function ProjectPackageControl(props: {
               <small id={`${titleId}-help`}>ZIP 内文件将使用“统一名称-第实际集数集.原扩展名”。</small>
             </label>
             <button className="fj-review-primary" disabled={pending} type="submit">
-              {stage === 'preparing' ? '准备中' : stage === 'downloading' ? '正在下载' : '确认并下载'}
+              {stage === 'preparing' ? '准备中' : stage === 'authorizing' ? '正在启动下载' : '确认并下载'}
             </button>
             <button className="fj-review-secondary" disabled={pending} onClick={dismiss} type="button">
               取消

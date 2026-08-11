@@ -36,12 +36,15 @@ export class MockReviewDownloads implements DownloadApi {
   readonly createProjectFinalizedPackage: ReviewApiPort['createProjectFinalizedPackage'] = async (
     input,
     executionContext,
+    options,
   ) => {
+    options?.signal?.throwIfAborted();
     await this.context.ready();
+    options?.signal?.throwIfAborted();
     this.context.assertContext(executionContext, 'review.package.create');
     this.context.repository.ensureProjectNotDeleted(input.projectRefId);
     const summary = await this.context.repository.getProjectSummary(input.projectRefId);
-    return this.context.packageAdapter.createProjectPackage({
+    const result = await this.context.packageAdapter.createProjectPackage({
       unifiedName: input.unifiedName,
       project: summary.project,
       items: this.context.repository.getAllProjectItems(input.projectRefId),
@@ -49,13 +52,18 @@ export class MockReviewDownloads implements DownloadApi {
       finalizations: this.context.repository.getActiveFinalizations(input.projectRefId),
       fileStorage: this.context.fileStorage,
     });
+    options?.signal?.throwIfAborted();
+    return result;
   };
 
   readonly downloadProjectFinalizedPackage: ReviewApiPort['downloadProjectFinalizedPackage'] = async (
     result,
     executionContext,
+    options,
   ) => {
+    options?.signal?.throwIfAborted();
     await this.context.ready();
+    options?.signal?.throwIfAborted();
     this.context.assertContext(executionContext, 'review.package.download');
     if (!result.blob) throw new Error('本地项目包内容不可用');
     this.context.hostBridge.downloadBlob(result.blob, result.fileName);

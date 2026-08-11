@@ -43,13 +43,15 @@ function revocationSuccessMessage(
   return `第 ${item.episode} 集已撤回定稿；关联包已失效，物理清理正在进行。`;
 }
 
+type ProjectActionMessage = string | { kind: 'package-download' };
+
 export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const navigate = useNavigate();
   const { projectRefId = '' } = useParams();
   const detail = useProjectSummary(props.entryMode, projectRefId);
   const mutations = useReviewMutations(props.entryMode);
   const [projectActionError, setProjectActionError] = useState<string | null>(null);
-  const [projectActionMessage, setProjectActionMessage] = useState<string | null>(null);
+  const [projectActionMessage, setProjectActionMessage] = useState<ProjectActionMessage | null>(null);
   const [bulkActionsHost, setBulkActionsHost] = useState<HTMLSpanElement | null>(null);
   const v1ListRefreshSequenceRef = useRef(0);
   const thumbnailAuthorityRefreshRef = useRef<Promise<unknown> | null>(null);
@@ -579,12 +581,16 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
             downloadPending={mutations.downloadProjectFinalizedPackage.isPending}
             entryMode={props.entryMode}
             projectRefId={projectRefId}
-            onCreate={(input) => mutations.createProjectFinalizedPackage.mutateAsync(input)}
-            onDownload={(result) => mutations.downloadProjectFinalizedPackage.mutateAsync(result)}
+            onCreate={(input, signal) => {
+              setProjectActionMessage(null);
+              return mutations.createProjectFinalizedPackage.mutateAsync({ input, signal });
+            }}
+            onDownload={(result, signal) =>
+              mutations.downloadProjectFinalizedPackage.mutateAsync({ result, signal })}
             onSuccess={() => {
               mutations.createProjectFinalizedPackage.reset();
               setProjectActionError(null);
-              setProjectActionMessage('项目定稿原片包已完成并开始下载。');
+              setProjectActionMessage({ kind: 'package-download' });
             }}
           />
           {isArchived ? (
@@ -631,7 +637,31 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
           </div>
           <p>{project.description || '暂无项目说明'}</p>
         </div>
-        {projectActionMessage && <div className="fj-review-notice">{projectActionMessage}</div>}
+        {projectActionMessage !== null
+          && typeof projectActionMessage === 'object'
+          && projectActionMessage.kind === 'package-download' ? (
+          <section
+            aria-live="polite"
+            className="fj-review-notice fj-review-download-feedback"
+            data-testid="package-download-feedback"
+            role="status"
+          >
+            <span aria-hidden="true" className="fj-review-download-feedback-indicator" />
+            <span className="fj-review-download-feedback-copy">
+              <strong>下载已向浏览器发起</strong>
+              <span>首次下载会在发送文件前校验整包完整性；保存窗口或下载任务可能稍后出现。</span>
+            </span>
+            <button
+              className="fj-review-secondary"
+              onClick={() => setProjectActionMessage(null)}
+              type="button"
+            >
+              关闭提示
+            </button>
+          </section>
+        ) : typeof projectActionMessage === 'string' ? (
+          <div className="fj-review-notice">{projectActionMessage}</div>
+        ) : null}
         {projectActionError && <div className="fj-review-error">{projectActionError}</div>}
         {v1ListConfirmationRequired ? (
           <section className="fj-review-readonly-notice" data-testid="v1-list-confirmation-required" role="alert">

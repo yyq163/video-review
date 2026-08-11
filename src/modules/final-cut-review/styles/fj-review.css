@@ -256,6 +256,32 @@
   color: var(--fj-review-aqua);
 }
 
+.fj-review-download-feedback {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.fj-review-download-feedback-indicator {
+  animation: fj-review-spin 0.8s linear infinite;
+  border: 2px solid var(--fj-review-line);
+  border-radius: 999px;
+  border-top-color: var(--fj-review-aqua);
+  flex: 0 0 auto;
+  height: 20px;
+  width: 20px;
+}
+
+.fj-review-download-feedback-copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 4px;
+}
+
+.fj-review-download-feedback-copy > span {
+  color: var(--fj-review-muted);
+}
+
 .fj-review-readonly-notice {
   display: grid;
   gap: 4px;

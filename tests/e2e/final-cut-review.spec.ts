@@ -908,9 +908,14 @@ test('version isolation keeps history read-only and unresolved current issues do
   await page.getByLabel('统一名称').fill('E2E 定稿原片');
   const packageDownloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '确认并下载' }).click();
+  const packageDownloadFeedback = page.getByTestId('package-download-feedback');
+  await expect(packageDownloadFeedback).toContainText('下载已向浏览器发起');
+  await expect(packageDownloadFeedback).toContainText('保存窗口或下载任务可能稍后出现');
+  await expect(packageDownloadFeedback.locator('.fj-review-download-feedback-indicator')).toBeVisible();
   const packageDownload = await packageDownloadPromise;
   expect(packageDownload.suggestedFilename()).toContain('finalized-originals.zip');
-  await expect(page.getByText('项目定稿原片包已完成并开始下载。')).toBeVisible();
+  await packageDownloadFeedback.getByRole('button', { name: '关闭提示' }).click();
+  await expect(packageDownloadFeedback).toHaveCount(0);
 });
 
 test('entry capability boundary hides review writes and project delete in edit entry while hiding project creation in review entry', async ({ page }) => {

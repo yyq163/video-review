@@ -736,12 +736,16 @@ export function useReviewMutations(mode: EntryMode) {
         api.downloadFinalizedOriginal(input, context()),
     }),
     createProjectFinalizedPackage: useMutation({
-      mutationFn: (input: Parameters<typeof api.createProjectFinalizedPackage>[0]) =>
-        api.createProjectFinalizedPackage(input, context()),
+      mutationFn: ({ input, signal }: {
+        input: Parameters<typeof api.createProjectFinalizedPackage>[0];
+        signal?: AbortSignal;
+      }) => api.createProjectFinalizedPackage(input, context(), { signal }),
     }),
     downloadProjectFinalizedPackage: useMutation({
-      mutationFn: (result: Parameters<typeof api.downloadProjectFinalizedPackage>[0]) =>
-        api.downloadProjectFinalizedPackage(result, context()),
+      mutationFn: ({ result, signal }: {
+        result: Parameters<typeof api.downloadProjectFinalizedPackage>[0];
+        signal?: AbortSignal;
+      }) => api.downloadProjectFinalizedPackage(result, context(), { signal }),
     }),
   };
 }

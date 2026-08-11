@@ -77,6 +77,109 @@ describe('ProjectPackageControl', () => {
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
   });
 
+  it('describes the real download-launch stage without claiming the file is already downloading', async () => {
+    let resolveDownload!: () => void;
+    const onDownload = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDownload = resolve;
+        }),
+    );
+    renderControl({ onDownload });
+
+    await userEvent.click(screen.getByTestId('package-project'));
+    await userEvent.type(screen.getByLabelText('统一名称'), '启动下载反馈');
+    await userEvent.click(screen.getByRole('button', { name: '确认并下载' }));
+
+    expect(await screen.findByRole('button', { name: '正在启动下载' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '正在下载' })).not.toBeInTheDocument();
+
+    resolveDownload();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '统一命名定稿原片' })).not.toBeInTheDocument());
+  });
+
+  it('does not start a hidden download after the user leaves during package preparation', async () => {
+    let resolveCreate!: (value: PackageResult) => void;
+    const onCreate = vi.fn(
+      () =>
+        new Promise<PackageResult>((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const onDownload = vi.fn().mockResolvedValue(undefined);
+    const onSuccess = vi.fn();
+    runtime = createReviewRuntime();
+    const { unmount } = render(
+      <ReviewRuntimeProvider runtime={runtime}>
+        <ProjectPackageControl
+          createPending={false}
+          disabled={false}
+          downloadPending={false}
+          entryMode="review"
+          projectRefId="prj_test"
+          onCreate={onCreate}
+          onDownload={onDownload}
+          onSuccess={onSuccess}
+        />
+      </ReviewRuntimeProvider>,
+    );
+
+    await userEvent.click(screen.getByTestId('package-project'));
+    await userEvent.type(screen.getByLabelText('统一名称'), '离开页面不自动下载');
+    await userEvent.click(screen.getByRole('button', { name: '确认并下载' }));
+    expect(onCreate).toHaveBeenCalledOnce();
+
+    unmount();
+    resolveCreate(result);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onDownload).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it('aborts the download session when the user leaves during download authorization', async () => {
+    let resolveDownload!: () => void;
+    let downloadSignal: AbortSignal | undefined;
+    const onDownload = vi.fn(
+      (_result: PackageResult, signal: AbortSignal) =>
+        new Promise<void>((resolve) => {
+          downloadSignal = signal;
+          resolveDownload = resolve;
+        }),
+    );
+    const onSuccess = vi.fn();
+    runtime = createReviewRuntime();
+    const { unmount } = render(
+      <ReviewRuntimeProvider runtime={runtime}>
+        <ProjectPackageControl
+          createPending={false}
+          disabled={false}
+          downloadPending={false}
+          entryMode="review"
+          projectRefId="prj_test"
+          onCreate={vi.fn().mockResolvedValue(result)}
+          onDownload={onDownload}
+          onSuccess={onSuccess}
+        />
+      </ReviewRuntimeProvider>,
+    );
+
+    await userEvent.click(screen.getByTestId('package-project'));
+    await userEvent.type(screen.getByLabelText('统一名称'), '离开授权不自动下载');
+    await userEvent.click(screen.getByRole('button', { name: '确认并下载' }));
+    await waitFor(() => expect(onDownload).toHaveBeenCalledOnce());
+    expect(downloadSignal?.aborted).toBe(false);
+
+    unmount();
+    expect(downloadSignal?.aborted).toBe(true);
+    resolveDownload();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
   it('closes on cancel without preparing, downloading, or changing data', async () => {
     const props = renderControl();
     await userEvent.click(screen.getByTestId('package-project'));
@@ -110,8 +213,8 @@ describe('ProjectPackageControl', () => {
     expect(onCreate).toHaveBeenCalledWith({
       projectRefId: 'prj_test',
       unifiedName: '  中文 Name.标点!  ',
-    });
-    expect(onDownload).toHaveBeenCalledWith(result);
+    }, expect.any(AbortSignal));
+    expect(onDownload).toHaveBeenCalledWith(result, expect.any(AbortSignal));
     expect(sequence).toEqual(['prepare:  中文 Name.标点!  ', 'download', 'success']);
     expect(screen.queryByRole('dialog', { name: '统一命名定稿原片' })).not.toBeInTheDocument();
   });
@@ -147,8 +250,16 @@ describe('ProjectPackageControl', () => {
 
     await waitFor(() => expect(onDownload).toHaveBeenCalledOnce());
     expect(onCreate).toHaveBeenCalledTimes(2);
-    expect(onCreate).toHaveBeenNthCalledWith(1, { projectRefId: 'prj_test', unifiedName: '失败后重试' });
-    expect(onCreate).toHaveBeenNthCalledWith(2, { projectRefId: 'prj_test', unifiedName: '失败后重试' });
+    expect(onCreate).toHaveBeenNthCalledWith(
+      1,
+      { projectRefId: 'prj_test', unifiedName: '失败后重试' },
+      expect.any(AbortSignal),
+    );
+    expect(onCreate).toHaveBeenNthCalledWith(
+      2,
+      { projectRefId: 'prj_test', unifiedName: '失败后重试' },
+      expect.any(AbortSignal),
+    );
   });
 
   it('keeps the name and error visible after download fails, then prepares and downloads safely again', async () => {
@@ -169,6 +280,9 @@ describe('ProjectPackageControl', () => {
 
     await waitFor(() => expect(onDownload).toHaveBeenCalledTimes(2));
     expect(onCreate).toHaveBeenCalledTimes(2);
-    expect(onCreate).toHaveBeenLastCalledWith({ projectRefId: 'prj_test', unifiedName: '下载重试' });
+    expect(onCreate).toHaveBeenLastCalledWith(
+      { projectRefId: 'prj_test', unifiedName: '下载重试' },
+      expect.any(AbortSignal),
+    );
   });
 });

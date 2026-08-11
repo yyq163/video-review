@@ -307,6 +307,11 @@ export interface ReviewApiPort extends ReviewQueryPort, ReviewCommandPort {
   createProjectFinalizedPackage(
     input: { projectRefId: ProjectRefId; unifiedName: string },
     context: ExecutionContext,
+    options?: QueryOptions,
   ): Promise<PackageResult>;
-  downloadProjectFinalizedPackage(result: PackageResult, context: ExecutionContext): Promise<void>;
+  downloadProjectFinalizedPackage(
+    result: PackageResult,
+    context: ExecutionContext,
+    options?: QueryOptions,
+  ): Promise<void>;
 }

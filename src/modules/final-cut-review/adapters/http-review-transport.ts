@@ -34,6 +34,13 @@ class ListSnapshotChangedError extends Error {
   }
 }
 
+export class ReviewRequestTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReviewRequestTimeoutError';
+  }
+}
+
 export function randomId(prefix: string): string {
   return `${prefix}_${createUuid()}`;
 }
@@ -74,7 +81,12 @@ export class HttpReviewTransport {
     payload: TPayload,
     context: ExecutionContext,
     expectedAggregateVersion?: number,
-    options: { method?: 'POST' | 'PATCH'; idempotent?: boolean; commandId?: string } = {},
+    options: {
+      method?: 'POST' | 'PATCH';
+      idempotent?: boolean;
+      commandId?: string;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<TData> {
     this.assertWriteContext(context, ['edit', 'review']);
     const commandId = options.commandId ?? randomId(commandType);
@@ -96,6 +108,7 @@ export class HttpReviewTransport {
       method: options.method ?? 'POST',
       headers,
       credentials: 'include',
+      signal: options.signal,
     });
   }
 
@@ -226,19 +239,31 @@ export class HttpReviewTransport {
     });
   }
 
-  async requestJsonWithTimeout<T>(path: string, timeoutMs: number): Promise<T> {
+  async requestJsonWithTimeout<T>(path: string, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
     const controller = new AbortController();
     let timeoutId = 0;
+    let timeoutTriggered = false;
+    const timeoutError = new ReviewRequestTimeoutError('项目包状态查询超时，请重试。');
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = window.setTimeout(() => {
+        timeoutTriggered = true;
+        reject(timeoutError);
         controller.abort();
-        reject(new Error('项目包状态查询超时，请重试。'));
       }, timeoutMs);
     });
+    const abortFromCaller = () => controller.abort(signal?.reason);
+    signal?.addEventListener('abort', abortFromCaller, { once: true });
     try {
       return await Promise.race([this.requestJson<T>(path, { signal: controller.signal }), timeout]);
+    } catch (error) {
+      if (timeoutTriggered && isAbortError(error)) {
+        throw timeoutError;
+      }
+      throw error;
     } finally {
       window.clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', abortFromCaller);
     }
   }
 
@@ -390,6 +415,10 @@ export class HttpReviewTransport {
     }
     return body as Envelope<T>;
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

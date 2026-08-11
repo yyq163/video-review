@@ -775,6 +775,94 @@ describe('generated HTTP envelope client', () => {
     );
   });
 
+  it('does not trigger the hidden package URL after download authorization is aborted', async () => {
+    let resolveSession!: (response: Response) => void;
+    let markSessionStarted!: () => void;
+    const sessionStarted = new Promise<void>((resolve) => {
+      markSessionStarted = resolve;
+    });
+    const downloadUrl = vi.fn();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/v1/final-cut-review/review/projects/prj_http/finalized-originals/packages')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              data: {
+                id: 'pkg_abort_session',
+                project_ref_id: 'prj_http',
+                status: 'ready',
+                package_filename: 'abort-session.zip',
+                expires_at: '2099-07-10T01:00:00.000Z',
+                file_count: 1,
+                total_bytes: 12,
+                sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+                download_token: 'abort-session-token',
+                download_token_expires_at: '2099-07-10T00:10:00.000Z',
+                created_at: '2026-07-10T00:00:00.000Z',
+                updated_at: '2026-07-10T00:00:00.000Z',
+                items: [
+                  {
+                    review_item_id: 'item_http',
+                    version_id: 'ver_http',
+                    finalization_id: 'fin_http',
+                    original_file_id: 'file_http',
+                    original_filename: 'clip.mp4',
+                    sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+                    archive_name: 'clip.mp4',
+                  },
+                ],
+              },
+              meta: { request_id: 'req-package-abort-session', contract_version: '1.0' },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        );
+      }
+      if (url.endsWith('/pkg_abort_session/download-session')) {
+        markSessionStarted();
+        return new Promise<Response>((resolve) => {
+          resolveSession = resolve;
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const entryPolicy = new NoAccountEntryPolicyAdapter();
+    const api = new HttpReviewApiAdapter(
+      'review',
+      new FinalCutReviewClient('https://review.example'),
+      entryPolicy,
+      'https://review.example',
+      { entryMode: 'review', notify: () => undefined, downloadBlob: () => undefined, downloadUrl },
+    );
+    const result = await api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 离开授权' },
+      entryPolicy.createContext('review'),
+    );
+    const controller = new AbortController();
+    const download = api.downloadProjectFinalizedPackage(
+      result,
+      entryPolicy.createContext('review'),
+      { signal: controller.signal },
+    );
+    await sessionStarted;
+
+    controller.abort();
+    resolveSession(
+      new Response(
+        JSON.stringify({
+          data: { status: 'ready' },
+          meta: { request_id: 'req-package-abort-session-download', contract_version: '1.0' },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await expect(download).rejects.toMatchObject({ name: 'AbortError' });
+    expect(downloadUrl).not.toHaveBeenCalled();
+  });
+
   it('rejects a failed HTTP package snapshot instead of presenting it as download-ready', async () => {
     vi.stubGlobal(
       'fetch',
@@ -895,7 +983,169 @@ describe('generated HTTP envelope client', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('aborts a package status poll that never returns', async () => {
+  it('stops observing package status when the caller leaves the page', async () => {
+    let markStatusStarted!: () => void;
+    const statusStarted = new Promise<void>((resolve) => {
+      markStatusStarted = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              id: 'pkg_abort_observation',
+              project_ref_id: 'prj_http',
+              status: 'preparing',
+              package_filename: 'abort-observation.zip',
+              expires_at: '2099-07-10T01:00:00.000Z',
+              file_count: 0,
+              total_bytes: 0,
+              created_at: '2026-07-10T00:00:00.000Z',
+              updated_at: '2026-07-10T00:00:00.000Z',
+              items: [],
+            },
+            meta: { request_id: 'req-package-abort-observation', contract_version: '1.0' },
+          }),
+          { status: 202, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockImplementation(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            markStatusStarted();
+            const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+            if (init?.signal?.aborted) abort();
+            else init?.signal?.addEventListener('abort', abort, { once: true });
+          }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const entryPolicy = new NoAccountEntryPolicyAdapter();
+    const api = new HttpReviewApiAdapter(
+      'review',
+      new FinalCutReviewClient('https://review.example'),
+      entryPolicy,
+      'https://review.example',
+      { entryMode: 'review', notify: () => undefined, downloadBlob: () => undefined, downloadUrl: () => undefined },
+    );
+    const controller = new AbortController();
+    const preparation = api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 离开观察' },
+      entryPolicy.createContext('review'),
+      { signal: controller.signal },
+    );
+    await statusStarted;
+
+    controller.abort();
+
+    await expect(preparation).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not hide a package status authorization error behind the 300-second retry budget', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              id: 'pkg_poll_forbidden',
+              project_ref_id: 'prj_http',
+              status: 'preparing',
+              package_filename: 'poll-forbidden.zip',
+              expires_at: '2099-07-10T01:00:00.000Z',
+              file_count: 0,
+              total_bytes: 0,
+              created_at: '2026-07-10T00:00:00.000Z',
+              updated_at: '2026-07-10T00:00:00.000Z',
+              items: [],
+            },
+            meta: { request_id: 'req-package-poll-forbidden', contract_version: '1.0' },
+          }),
+          { status: 202, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'PRINCIPAL_AUTHENTICATION_REQUIRED',
+              message: 'package status authorization expired',
+              http_status: 403,
+              details: {},
+              request_id: 'req-package-poll-forbidden-status',
+              timestamp: '2026-07-10T00:00:01.000Z',
+              contract_version: '1.0',
+            },
+          }),
+          { status: 403, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const entryPolicy = new NoAccountEntryPolicyAdapter();
+    const api = new HttpReviewApiAdapter(
+      'review',
+      new FinalCutReviewClient('https://review.example'),
+      entryPolicy,
+      'https://review.example',
+      { entryMode: 'review', notify: () => undefined, downloadBlob: () => undefined, downloadUrl: () => undefined },
+    );
+
+    await expect(api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 权限终止' },
+      entryPolicy.createContext('review'),
+    )).rejects.toMatchObject({
+      message: 'package status authorization expired',
+      httpStatus: 403,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops polling immediately when a preparing package becomes server-confirmed failed', async () => {
+    const snapshotResponse = (status: 'preparing' | 'failed') =>
+      new Response(
+        JSON.stringify({
+          data: {
+            id: 'pkg_poll_failed',
+            project_ref_id: 'prj_http',
+            status,
+            package_filename: 'poll-failed.zip',
+            expires_at: '2099-07-10T01:00:00.000Z',
+            file_count: 0,
+            total_bytes: 0,
+            ...(status === 'failed'
+              ? { failure_details: { error_code: 'PACKAGE_SOURCE_MISSING' } }
+              : {}),
+            created_at: '2026-07-10T00:00:00.000Z',
+            updated_at: '2026-07-10T00:00:01.000Z',
+            items: [],
+          },
+          meta: { request_id: `req-package-poll-${status}`, contract_version: '1.0' },
+        }),
+        { status: status === 'preparing' ? 202 : 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(snapshotResponse('preparing'))
+      .mockResolvedValueOnce(snapshotResponse('failed'));
+    vi.stubGlobal('fetch', fetchMock);
+    const entryPolicy = new NoAccountEntryPolicyAdapter();
+    const api = new HttpReviewApiAdapter(
+      'review',
+      new FinalCutReviewClient('https://review.example'),
+      entryPolicy,
+      'https://review.example',
+      { entryMode: 'review', notify: () => undefined, downloadBlob: () => undefined, downloadUrl: () => undefined },
+    );
+
+    await expect(api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 服务端失败' },
+      entryPolicy.createContext('review'),
+    )).rejects.toThrow('项目包准备失败，请重试。');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries timed-out package status requests until the exact 300-second preparation deadline', async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn()
@@ -919,7 +1169,14 @@ describe('generated HTTP envelope client', () => {
           { status: 202, headers: { 'Content-Type': 'application/json' } },
         ),
       )
-      .mockImplementationOnce(() => new Promise<Response>(() => undefined));
+      .mockImplementation(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+            if (init?.signal?.aborted) abort();
+            else init?.signal?.addEventListener('abort', abort, { once: true });
+          }),
+      );
     vi.stubGlobal('fetch', fetchMock);
     const entryPolicy = new NoAccountEntryPolicyAdapter();
     const api = new HttpReviewApiAdapter(
@@ -934,9 +1191,100 @@ describe('generated HTTP envelope client', () => {
       { projectRefId: 'prj_http', unifiedName: 'HTTP 定稿' },
       entryPolicy.createContext('review'),
     );
-    const rejection = expect(preparation).rejects.toThrow('项目包状态查询超时，请重试。');
+    let rejectionMessage: string | null = null;
+    const observedPreparation = preparation.catch((error: unknown) => {
+      rejectionMessage = error instanceof Error ? error.message : String(error);
+    });
     await vi.advanceTimersByTimeAsync(10_000);
-    await rejection;
+    expect(rejectionMessage).toBeNull();
+    await vi.advanceTimersByTimeAsync(289_999);
+    expect(rejectionMessage).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await observedPreparation;
+    expect(rejectionMessage).toBe(
+      '项目包准备超过 300 秒，后台可能仍在处理，请使用相同名称重试。',
+    );
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  it('continues observing the same package beyond the former 60-second cutoff', async () => {
+    vi.useFakeTimers();
+    let statusRequestCount = 0;
+    const responseFor = (ready: boolean) =>
+      new Response(
+        JSON.stringify({
+          data: {
+            id: 'pkg_slow_ready',
+            project_ref_id: 'prj_http',
+            status: ready ? 'ready' : 'preparing',
+            package_filename: 'slow-ready.zip',
+            expires_at: '2099-07-10T01:00:00.000Z',
+            file_count: ready ? 1 : 0,
+            total_bytes: ready ? 12 : 0,
+            ...(ready
+              ? {
+                  sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+                  download_token: 'slow-ready-token',
+                  download_token_expires_at: '2099-07-10T00:10:00.000Z',
+                }
+              : {}),
+            created_at: '2026-07-10T00:00:00.000Z',
+            updated_at: '2026-07-10T00:00:00.000Z',
+            items: ready
+              ? [
+                  {
+                    review_item_id: 'item_http',
+                    version_id: 'ver_http',
+                    finalization_id: 'fin_http',
+                    original_file_id: 'file_http',
+                    original_filename: 'clip.mp4',
+                    sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+                    archive_name: 'clip.mp4',
+                  },
+                ]
+              : [],
+          },
+          meta: { request_id: 'req-package-slow-ready', contract_version: '1.0' },
+        }),
+        { status: ready ? 200 : 202, headers: { 'Content-Type': 'application/json' } },
+      );
+    const fetchMock = vi.fn(async () => {
+      if (statusRequestCount === 0) {
+        statusRequestCount += 1;
+        return responseFor(false);
+      }
+      const ready = statusRequestCount >= 122;
+      statusRequestCount += 1;
+      return responseFor(ready);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const entryPolicy = new NoAccountEntryPolicyAdapter();
+    const api = new HttpReviewApiAdapter(
+      'review',
+      new FinalCutReviewClient('https://review.example'),
+      entryPolicy,
+      'https://review.example',
+      { entryMode: 'review', notify: () => undefined, downloadBlob: () => undefined, downloadUrl: () => undefined },
+    );
+
+    const preparation = api.createProjectFinalizedPackage(
+      { projectRefId: 'prj_http', unifiedName: 'HTTP 慢包' },
+      entryPolicy.createContext('review'),
+    );
+    let settled = false;
+    void preparation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(preparation).resolves.toMatchObject({ packageId: 'pkg_slow_ready' });
+    expect(fetchMock).toHaveBeenCalledTimes(123);
   });
 
   it('removes an unused package authorization when its server expiry is reached', async () => {

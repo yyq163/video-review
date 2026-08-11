@@ -5,10 +5,10 @@ import type {
 } from '../contracts-generated/backend-contract';
 import type { ReviewApiPort, ReviewHostBridge } from '../ports';
 import { originalMediaFromDto, packageFromDto } from './http-review-project-mappers';
-import type { HttpReviewTransport } from './http-review-transport';
+import { ReviewRequestTimeoutError, type HttpReviewTransport } from './http-review-transport';
 
 const PACKAGE_PREPARATION_POLL_INTERVAL_MS = 500;
-const PACKAGE_PREPARATION_MAX_POLLS = 120;
+const PACKAGE_PREPARATION_TIMEOUT_MS = 300_000;
 const PACKAGE_PREPARATION_REQUEST_TIMEOUT_MS = 10_000;
 
 type DownloadApi = Pick<
@@ -54,7 +54,9 @@ export class HttpReviewDownloads implements DownloadApi {
   readonly createProjectFinalizedPackage: ReviewApiPort['createProjectFinalizedPackage'] = async (
     input,
     context,
+    options,
   ) => {
+    options?.signal?.throwIfAborted();
     this.transport.assertWriteContext(context, ['review']);
     const snapshot = await this.transport.command<PackageSnapshotDTO, { project_ref_id: string; unified_name: string }>(
       `/api/v1/final-cut-review/review/projects/${input.projectRefId}/finalized-originals/packages`,
@@ -62,25 +64,35 @@ export class HttpReviewDownloads implements DownloadApi {
       { project_ref_id: input.projectRefId, unified_name: input.unifiedName },
       context,
       undefined,
-      { idempotent: true },
+      { idempotent: true, signal: options?.signal },
     );
     let current = snapshot;
-    for (
-      let attempt = 0;
-      current.status === 'preparing' && attempt < PACKAGE_PREPARATION_MAX_POLLS;
-      attempt += 1
-    ) {
+    const preparationDeadlineMs = performance.now() + PACKAGE_PREPARATION_TIMEOUT_MS;
+    let attempt = 0;
+    while (current.status === 'preparing' && performance.now() < preparationDeadlineMs) {
       if (attempt > 0) {
-        await wait(PACKAGE_PREPARATION_POLL_INTERVAL_MS);
+        await wait(
+          Math.min(PACKAGE_PREPARATION_POLL_INTERVAL_MS, preparationDeadlineMs - performance.now()),
+          options?.signal,
+        );
       }
-      current = await this.transport.requestJsonWithTimeout<PackageSnapshotDTO>(
-        `/api/v1/final-cut-review/review/projects/${input.projectRefId}/finalized-originals/packages/${snapshot.id}`,
-        PACKAGE_PREPARATION_REQUEST_TIMEOUT_MS,
-      );
+      const remainingMs = preparationDeadlineMs - performance.now();
+      if (remainingMs <= 0) break;
+      try {
+        current = await this.transport.requestJsonWithTimeout<PackageSnapshotDTO>(
+          `/api/v1/final-cut-review/review/projects/${input.projectRefId}/finalized-originals/packages/${snapshot.id}`,
+          Math.min(PACKAGE_PREPARATION_REQUEST_TIMEOUT_MS, remainingMs),
+          options?.signal,
+        );
+      } catch (error) {
+        if (!(error instanceof ReviewRequestTimeoutError)) throw error;
+      }
+      attempt += 1;
     }
     if (current.status === 'preparing') {
-      throw new Error('项目包准备超时，请重试。');
+      throw new Error('项目包准备超过 300 秒，后台可能仍在处理，请使用相同名称重试。');
     }
+    options?.signal?.throwIfAborted();
     const result = packageFromDto(current);
     if (!current.download_token || !current.download_token_expires_at) {
       throw new Error('项目包下载授权缺失，请重新准备。');
@@ -92,7 +104,9 @@ export class HttpReviewDownloads implements DownloadApi {
   readonly downloadProjectFinalizedPackage: ReviewApiPort['downloadProjectFinalizedPackage'] = async (
     result,
     context,
+    options,
   ) => {
+    options?.signal?.throwIfAborted();
     this.transport.assertWriteContext(context, ['review']);
     const authorization = this.packageDownloadTokens.get(result.packageId);
     if (!authorization || authorization.expiresAtMs <= Date.now()) {
@@ -105,7 +119,9 @@ export class HttpReviewDownloads implements DownloadApi {
     await this.transport.requestJson<PackageDownloadSessionDTO>(`${downloadPath}-session`, {
       method: 'POST',
       headers: { 'X-Package-Download-Token': token },
+      signal: options?.signal,
     });
+    options?.signal?.throwIfAborted();
     this.hostBridge.downloadUrl(`${this.transport.baseUrl}${downloadPath}`, result.fileName);
   };
 
@@ -134,6 +150,18 @@ export class HttpReviewDownloads implements DownloadApi {
   }
 }
 
-function wait(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      window.clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', abort);
+      reject(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
