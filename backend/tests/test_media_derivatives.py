@@ -195,6 +195,131 @@ def test_first_frame_signature_command_and_dhash_are_deterministic(tmp_path: Pat
         _thumbnail_dhash(b"short")
 
 
+def test_cuda_thumbnail_decode_is_codec_gated_and_keeps_prores_on_cpu(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        media_transform_command="/usr/bin/ffmpeg",
+        media_thumbnail_hwaccel="cuda",
+        media_thumbnail_hwaccel_device=2,
+    )
+    output = tmp_path / "thumbnail.jpg"
+    h264 = _ffmpeg_command(
+        _claim(tmp_path),
+        settings,
+        12,
+        output,
+        source_video_codec="h264",
+    )
+    hevc = _ffmpeg_signature_command(
+        settings,
+        13,
+        source_video_codec="hevc",
+    )
+    prores = _ffmpeg_command(
+        _claim(tmp_path),
+        settings,
+        14,
+        output,
+        source_video_codec="prores",
+    )
+
+    assert h264[h264.index("-hwaccel") : h264.index("-protocol_whitelist")] == [
+        "-hwaccel",
+        "cuda",
+        "-hwaccel_device",
+        "2",
+    ]
+    assert hevc[hevc.index("-hwaccel") : hevc.index("-protocol_whitelist")] == [
+        "-hwaccel",
+        "cuda",
+        "-hwaccel_device",
+        "2",
+    ]
+    assert "-hwaccel" not in prores
+
+
+def test_cuda_thumbnail_process_failure_retries_once_on_cpu(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    settings = _settings(tmp_path, media_thumbnail_hwaccel="cuda")
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "output.jpg"
+    source.write_bytes(b"source")
+    output.write_bytes(b"partial")
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        _settings_value: Settings,
+        _source_descriptor: int,
+        output_descriptor: int,
+        _renew_lease: Any,
+    ) -> None:
+        commands.append(command)
+        if len(commands) == 1:
+            os.write(output_descriptor, b"gpu-partial")
+            raise media_derivatives.MediaDerivativeError(
+                "MEDIA_TRANSFORM_FAILED",
+                "transform",
+                retryable=True,
+            )
+        os.write(output_descriptor, b"cpu-result")
+
+    monkeypatch.setattr(media_derivatives, "_run_ffmpeg", fake_run)
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        acceleration = media_derivatives._run_thumbnail_transform(
+            _claim(tmp_path),
+            settings,
+            source_handle.fileno(),
+            output_handle.fileno(),
+            output,
+            "h264",
+            lambda: True,
+            force_cpu=False,
+        )
+        output_handle.seek(0)
+        payload = output_handle.read()
+
+    assert acceleration == "cpu_fallback"
+    assert "-hwaccel" in commands[0]
+    assert "-hwaccel" not in commands[1]
+    assert payload == b"cpu-result"
+
+
+def test_cuda_timeout_is_not_hidden_by_cpu_fallback(tmp_path: Path, monkeypatch: Any) -> None:
+    settings = _settings(tmp_path, media_thumbnail_hwaccel="cuda")
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "output.jpg"
+    source.write_bytes(b"source")
+    output.write_bytes(b"")
+    attempts = 0
+
+    def fake_run(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise media_derivatives.MediaDerivativeError(
+            "MEDIA_TRANSFORM_TIMEOUT",
+            "transform",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(media_derivatives, "_run_ffmpeg", fake_run)
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_TIMEOUT"):
+            media_derivatives._run_thumbnail_transform(
+                _claim(tmp_path),
+                settings,
+                source_handle.fileno(),
+                output_handle.fileno(),
+                output,
+                "hevc",
+                lambda: True,
+                force_cpu=False,
+            )
+    assert attempts == 1
+
+
 def test_transform_process_is_shell_free_session_isolated_and_fd_pinned(
     tmp_path: Path,
     monkeypatch: Any,

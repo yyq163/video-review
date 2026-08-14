@@ -28,6 +28,7 @@ def _delivery_script_sandbox(tmp_path: Path, script_name: str) -> tuple[Path, Pa
     shutil.copy2(ROOT / "scripts/validate-delivery-image-ref.sh", scripts_dir / "validate-delivery-image-ref.sh")
     (sandbox_root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     (sandbox_root / "docker-compose.delivery.yml").write_text("services: {}\n", encoding="utf-8")
+    (sandbox_root / "docker-compose.gpu.yml").write_text("services: {}\n", encoding="utf-8")
     env_file = sandbox_root / ".env"
     env_file.write_text("", encoding="utf-8")
     env_file.chmod(0o600)
@@ -154,6 +155,86 @@ def test_worker_metrics_are_management_only_and_prometheus_scraped() -> None:
         {"subnet": "${MANAGEMENT_NETWORK_SUBNET:-172.30.0.0/24}"}
     ]
     assert "ports" not in compose["services"]["prometheus"]
+
+
+def test_media_worker_gpu_overlay_is_explicit_codec_scoped_and_unprivileged() -> None:
+    root = Path(__file__).resolve().parents[2]
+    base = yaml.safe_load((root / "docker-compose.yml").read_text(encoding="utf-8"))
+    overlay = yaml.safe_load((root / "docker-compose.gpu.yml").read_text(encoding="utf-8"))
+    base_worker = base["services"]["media-worker"]
+    gpu_worker = overlay["services"]["media-worker"]
+
+    assert base_worker["environment"]["MEDIA_THUMBNAIL_HWACCEL"] == "none"
+    assert base_worker["environment"]["MEDIA_THUMBNAIL_HWACCEL_DEVICE"] == "0"
+    assert gpu_worker["environment"] == {
+        "MEDIA_THUMBNAIL_HWACCEL": "cuda",
+        "MEDIA_THUMBNAIL_HWACCEL_DEVICE": "0",
+        "NVIDIA_VISIBLE_DEVICES": "0",
+        "NVIDIA_DRIVER_CAPABILITIES": "compute,video,utility",
+    }
+    reservations = gpu_worker["deploy"]["resources"]["reservations"]
+    assert reservations["memory"] == "128m"
+    device = reservations["devices"][0]
+    assert device == {"driver": "nvidia", "device_ids": ["0"], "capabilities": ["gpu"]}
+    assert "privileged" not in gpu_worker
+    assert "devices" not in gpu_worker
+
+
+def test_delivery_wrapper_adds_only_fixed_gpu_overlay_when_explicitly_enabled(
+    tmp_path: Path,
+) -> None:
+    root, wrapper = _delivery_script_sandbox(tmp_path, "compose-delivery.sh")
+    docker_log = tmp_path / "docker.log"
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$DOCKER_LOG\"\nexit 0\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    result = subprocess.run(
+        ["sh", str(wrapper), "config", "--quiet"],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(docker_log),
+            "FCR_MEDIA_GPU_ENABLED": "1",
+            "BACKEND_IMAGE_REPOSITORY": "final-cut-review",
+            "BACKEND_IMAGE_DIGEST": "a" * 64,
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    compose_lines = docker_log.read_text(encoding="utf-8").splitlines()
+    assert compose_lines
+    for line in compose_lines:
+        tokens = shlex.split(line)
+        compose_files = [Path(tokens[index + 1]) for index, token in enumerate(tokens) if token == "-f"]
+        assert [path.name for path in compose_files] == [
+            "docker-compose.yml",
+            "docker-compose.delivery.yml",
+            "docker-compose.gpu.yml",
+        ]
+
+    rejected = subprocess.run(
+        ["sh", str(wrapper), "config", "--quiet"],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(docker_log),
+            "FCR_MEDIA_GPU_ENABLED": "yes",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode == 2
+    assert "must be exactly 0 or 1" in rejected.stderr
 
 
 def test_nginx_range_metrics_are_bounded_management_only_and_best_effort() -> None:

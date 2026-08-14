@@ -30,6 +30,7 @@
 
 - [前端入口与 SPEC 对齐说明](./frontend/front-main/README.md)
 - [私密测试素材规则](./testing/PRIVATE_TEST_ASSETS.md)
+- [缩略图 GPU 与既有 currentVersionId 回填](./operations/THUMBNAIL_GPU_BACKFILL.md)
 
 ## 历史归档
 

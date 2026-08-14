@@ -198,6 +198,8 @@ class Settings(BaseSettings):
     media_worker_lease_seconds: int = Field(default=3600, ge=60, le=7200)
     media_worker_concurrency: int = Field(default=1, ge=1, le=4)
     media_thumbnail_width: int = Field(default=320, ge=160, le=1920)
+    media_thumbnail_hwaccel: str = Field(default="none", pattern="^(none|cuda)$")
+    media_thumbnail_hwaccel_device: int = Field(default=0, ge=0, le=15)
     protected_media_direct_stream_enabled: bool = False
     package_ttl_seconds: int = Field(default=24 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
     max_package_files: int = Field(default=MAX_PACKAGE_FILES_LIMIT, ge=1, le=MAX_PACKAGE_FILES_LIMIT)

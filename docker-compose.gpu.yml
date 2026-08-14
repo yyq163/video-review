@@ -1,0 +1,17 @@
+services:
+  media-worker:
+    environment:
+      MEDIA_THUMBNAIL_HWACCEL: cuda
+      MEDIA_THUMBNAIL_HWACCEL_DEVICE: "0"
+      NVIDIA_VISIBLE_DEVICES: "0"
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          memory: 128m
+          devices:
+            - driver: nvidia
+              device_ids:
+                - "0"
+              capabilities:
+                - gpu
