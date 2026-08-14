@@ -81,6 +81,88 @@ def _claim(tmp_path: Path, kind: str = "thumbnail") -> MediaDerivativeClaim:
     )
 
 
+def _seed_claimable_media_derivative(
+    session: Session,
+    claim: MediaDerivativeClaim,
+    *,
+    project_deleted: bool = False,
+) -> None:
+    now = utcnow()
+    session.connection().exec_driver_sql("PRAGMA foreign_keys=OFF")
+    session.add(
+        ProjectRefModel(
+            id=claim.project_ref_id,
+            project_code="MEDIA",
+            project_name="Media project",
+            deleted_at=now if project_deleted else None,
+        )
+    )
+    session.add(
+        FileObjectModel(
+            id=claim.source_file_id,
+            original_filename=claim.source_filename,
+            mime_type=claim.source_mime_type,
+            file_size=claim.source_size,
+            sha256=claim.source_sha256,
+            storage_path=claim.source_storage_path,
+            owner_principal_id=claim.source_owner_id,
+            owner_principal_kind=claim.source_owner_kind,
+            duration_ms=claim.duration_ms,
+            width=claim.width,
+            height=claim.height,
+            fps_num=claim.fps_num,
+            fps_den=claim.fps_den,
+            media_probe_version="test",
+        )
+    )
+    session.add(
+        ReviewItemModel(
+            id=claim.review_item_id,
+            project_ref_id=claim.project_ref_id,
+            item_code="MEDIA-1",
+            episode_no=1,
+            title="Media item",
+            workflow_status="pending_review",
+            current_version_id=claim.version_id,
+        )
+    )
+    session.add(
+        ReviewVersionModel(
+            id=claim.version_id,
+            project_ref_id=claim.project_ref_id,
+            review_item_id=claim.review_item_id,
+            previous_version_id=None,
+            version_no=1,
+            version_label="V1",
+            is_current=True,
+            original_file_id=claim.source_file_id,
+            original_filename=claim.source_filename,
+            mime_type=claim.source_mime_type,
+            file_size=claim.source_size,
+            sha256=claim.source_sha256,
+            duration_ms=claim.duration_ms,
+            width=claim.width,
+            height=claim.height,
+            fps_num=claim.fps_num,
+            fps_den=claim.fps_den,
+            media_probe_version="test",
+        )
+    )
+    session.add(
+        MediaDerivativeTaskModel(
+            id=claim.task_id,
+            project_ref_id=claim.project_ref_id,
+            review_item_id=claim.review_item_id,
+            version_id=claim.version_id,
+            kind=claim.kind,
+            status="queued",
+            attempts=0,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
 def _jpeg(width: int, height: int) -> bytes:
     sof_payload = (
         b"\x08"
@@ -688,6 +770,116 @@ def test_persistent_claim_lease_and_attempt_exhaustion(tmp_path: Path) -> None:
         assert task is not None
         assert task.status == "failed"
         assert task.error_code == "MEDIA_DERIVATIVE_ATTEMPTS_EXHAUSTED"
+
+
+def test_deleted_project_task_fails_instead_of_being_claimed(tmp_path: Path) -> None:
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            cast(Table, ProjectRefModel.__table__),
+            cast(Table, FileObjectModel.__table__),
+            cast(Table, ReviewItemModel.__table__),
+            cast(Table, ReviewVersionModel.__table__),
+            cast(Table, MediaDerivativeTaskModel.__table__),
+        ],
+    )
+    claim = _claim(tmp_path)
+    with Session(engine) as session:
+        _seed_claimable_media_derivative(session, claim, project_deleted=True)
+        session.commit()
+
+        status, result = _claim_task(session, _settings(tmp_path), claim.task_id)
+        session.commit()
+
+        assert status == "failed"
+        assert result is None
+        task = session.get(MediaDerivativeTaskModel, claim.task_id)
+        assert task is not None
+        assert task.status == "failed"
+        assert task.attempts == 0
+        assert task.lease_id is None
+        assert task.lease_expires_at is None
+        assert task.next_attempt_at is None
+        assert task.error_code == "MEDIA_DERIVATIVE_PROJECT_DELETED"
+        assert task.failure_details == {"stage": "claim"}
+
+
+def test_project_deleted_after_claim_rejects_renew_and_database_publish(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            cast(Table, ProjectRefModel.__table__),
+            cast(Table, FileObjectModel.__table__),
+            cast(Table, ReviewItemModel.__table__),
+            cast(Table, ReviewVersionModel.__table__),
+            cast(Table, MediaDerivativeTaskModel.__table__),
+        ],
+    )
+    initial_claim = _claim(tmp_path)
+    settings = _settings(tmp_path)
+    with Session(engine) as session:
+        _seed_claimable_media_derivative(session, initial_claim)
+        session.commit()
+        status, claimed = _claim_task(session, settings, initial_claim.task_id)
+        session.commit()
+        assert status == "claimed"
+        assert claimed is not None
+
+    with Session(engine) as session:
+        project = session.get(ProjectRefModel, claimed.project_ref_id)
+        assert project is not None
+        project.deleted_at = utcnow()
+        project.lock_version += 1
+        project.updated_at = utcnow()
+        session.commit()
+
+    @contextmanager
+    def worker_session() -> Any:
+        with Session(engine) as session:
+            yield session
+
+    monkeypatch.setattr(media_derivatives, "_worker_session", worker_session)
+    assert media_derivatives._renew_lease(claimed, settings) is False
+
+    output = settings.storage_root / "files" / "media_deleted_project_race"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(_jpeg(320, 180))
+    metadata = output.stat()
+    prepared = media_derivatives.PreparedDerivative(
+        task_id=claimed.task_id,
+        lease_id=claimed.lease_id,
+        kind=claimed.kind,
+        output_file_id="media_deleted_project_race",
+        storage_path=output,
+        staging_path=None,
+        sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
+        size=metadata.st_size,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        ctime_ns=metadata.st_ctime_ns,
+        duration_ms=claimed.duration_ms,
+        width=320,
+        height=180,
+        fps_num=claimed.fps_num,
+        fps_den=claimed.fps_den,
+        mime_type="image/jpeg",
+        published_new=True,
+    )
+
+    assert media_derivatives._publish_database(claimed, prepared) == "skipped"
+    with Session(engine) as session:
+        task = session.get(MediaDerivativeTaskModel, claimed.task_id)
+        version = session.get(ReviewVersionModel, claimed.version_id)
+        assert task is not None and version is not None
+        assert task.status == "running"
+        assert task.lease_id == claimed.lease_id
+        assert version.thumbnail_asset_id is None
+        assert session.get(FileObjectModel, prepared.output_file_id) is None
 
 
 def test_thumbnail_publish_is_rejected_after_current_version_switch(

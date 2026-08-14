@@ -823,6 +823,15 @@ def _claim_task(
     )
     if not task_is_eligible:
         return task.status, None
+    if project.deleted_at is not None:
+        task.status = "failed"
+        task.next_attempt_at = None
+        task.lease_id = None
+        task.lease_expires_at = None
+        task.error_code = "MEDIA_DERIVATIVE_PROJECT_DELETED"
+        task.failure_details = {"stage": "claim"}
+        task.updated_at = now
+        return "failed", None
     if task.kind not in SUPPORTED_KINDS:
         task.status = "failed"
         task.lease_id = None
@@ -935,6 +944,30 @@ def _claim_task(
 
 def _renew_lease(claim: MediaDerivativeClaim, settings: Settings) -> bool:
     with _worker_session() as session:
+        # Match claim/publication's project -> item -> version -> task lock
+        # order so project deletion cannot race a long-running renewal.
+        project = session.scalar(
+            select(ProjectRefModel)
+            .where(ProjectRefModel.id == claim.project_ref_id)
+            .with_for_update()
+        )
+        item = session.scalar(
+            select(ReviewItemModel)
+            .where(
+                ReviewItemModel.id == claim.review_item_id,
+                ReviewItemModel.project_ref_id == claim.project_ref_id,
+            )
+            .with_for_update()
+        )
+        version = session.scalar(
+            select(ReviewVersionModel)
+            .where(
+                ReviewVersionModel.id == claim.version_id,
+                ReviewVersionModel.project_ref_id == claim.project_ref_id,
+                ReviewVersionModel.review_item_id == claim.review_item_id,
+            )
+            .with_for_update()
+        )
         task = session.scalar(
             select(MediaDerivativeTaskModel)
             .where(MediaDerivativeTaskModel.id == claim.task_id)
@@ -942,7 +975,11 @@ def _renew_lease(claim: MediaDerivativeClaim, settings: Settings) -> bool:
         )
         now = utcnow()
         if (
-            task is None
+            project is None
+            or project.deleted_at is not None
+            or item is None
+            or version is None
+            or task is None
             or task.status != "running"
             or task.lease_id != claim.lease_id
             or not _lease_deadline_is_future(task.lease_expires_at, now)
@@ -950,12 +987,8 @@ def _renew_lease(claim: MediaDerivativeClaim, settings: Settings) -> bool:
             session.rollback()
             return False
         if claim.kind == "thumbnail":
-            version = session.get(ReviewVersionModel, claim.version_id)
-            item = session.get(ReviewItemModel, claim.review_item_id)
             if (
-                version is None
-                or item is None
-                or not version.is_current
+                not version.is_current
                 or item.current_version_id != version.id
             ):
                 session.rollback()
@@ -1490,6 +1523,9 @@ def _publish_database(
             .with_for_update()
         )
         if project is None or item is None or version is None or task is None:
+            session.rollback()
+            return "skipped"
+        if project.deleted_at is not None:
             session.rollback()
             return "skipped"
         if task.status == "ready" and task.output_file_id == prepared.output_file_id:
