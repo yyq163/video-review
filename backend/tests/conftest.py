@@ -32,6 +32,7 @@ import json
 print(json.dumps({
     "streams": [{
         "codec_type": "video",
+        "codec_name": "h264",
         "width": 1920,
         "height": 1080,
         "duration": "10.000",

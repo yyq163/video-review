@@ -5,6 +5,7 @@ import base64
 import hashlib
 import importlib.metadata
 import json
+import os
 import re
 import urllib.parse
 import uuid
@@ -21,8 +22,23 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPLIANCE_ROOT = ROOT / "compliance"
 SBOM_ROOT = COMPLIANCE_ROOT / "sbom"
 LICENSE_ROOT = COMPLIANCE_ROOT / "license-texts"
-PYTHON_SITE_PACKAGES = ROOT / "backend" / ".venv" / "lib" / "python3.13" / "site-packages"
-LICENSE_NAME = re.compile(r"^(licen[cs]e|copying|notice|copyright)(?:[._-].*)?$", re.IGNORECASE)
+PYTHON_SITE_PACKAGES_LOGICAL = Path("backend/.venv/lib/python3.13/site-packages")
+PYTHON_SITE_PACKAGES = Path(
+    os.environ.get(
+        "COMPLIANCE_PYTHON_SITE_PACKAGES",
+        str(ROOT / PYTHON_SITE_PACKAGES_LOGICAL),
+    )
+)
+NODE_MODULES_LOGICAL = Path("node_modules")
+NODE_MODULES_ROOT = Path(
+    os.environ.get(
+        "COMPLIANCE_NODE_MODULES",
+        str(ROOT / NODE_MODULES_LOGICAL),
+    )
+)
+LICENSE_NAME = re.compile(
+    r"^(licen[cs]e|copying|notice|copyright)(?:[._-].*)?$", re.IGNORECASE
+)
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 APACHE_INFRA_COMPONENTS = frozenset({"prometheus", "cadvisor"})
 APACHE_UPSTREAMS = {
@@ -39,7 +55,9 @@ APACHE_UPSTREAMS = {
 
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _license_expression(metadata: importlib.metadata.PackageMetadata) -> str:
@@ -50,13 +68,17 @@ def _license_expression(metadata: importlib.metadata.PackageMetadata) -> str:
     if value and "\n" not in value and len(value) <= 128:
         return value
     classifiers = metadata.get_all("Classifier", [])
-    licenses = [item.rsplit("::", 1)[-1].strip() for item in classifiers if "License ::" in item]
+    licenses = [
+        item.rsplit("::", 1)[-1].strip() for item in classifiers if "License ::" in item
+    ]
     return " OR ".join(sorted(set(licenses))) if licenses else "NOASSERTION"
 
 
 def _direct_python_requirements() -> list[Requirement]:
     result: list[Requirement] = []
-    for line in (ROOT / "backend" / "requirements.txt").read_text(encoding="utf-8").splitlines():
+    for line in (
+        (ROOT / "backend" / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    ):
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
             result.append(Requirement(stripped))
@@ -93,14 +115,18 @@ def _resolved_python_names(
                 requirement.marker.evaluate(environment) for environment in environments
             ):
                 continue
-            queue.append((canonicalize_name(requirement.name), frozenset(requirement.extras)))
+            queue.append(
+                (canonicalize_name(requirement.name), frozenset(requirement.extras))
+            )
     return sorted(selected)
 
 
 def _python_dependency_closure() -> list[importlib.metadata.Distribution]:
     installed = {
         canonicalize_name(distribution.metadata["Name"]): distribution
-        for distribution in importlib.metadata.distributions(path=[str(PYTHON_SITE_PACKAGES)])
+        for distribution in importlib.metadata.distributions(
+            path=[str(PYTHON_SITE_PACKAGES)]
+        )
         if distribution.metadata.get("Name")
     }
     names = _resolved_python_names(
@@ -131,11 +157,15 @@ def _npm_components() -> tuple[list[dict[str, Any]], dict[str, Path]]:
             "bom-ref": bom_ref,
             "name": name,
             "version": version,
-            "purl": f"pkg:npm/{urllib.parse.quote(name, safe='@')}" f"@{urllib.parse.quote(version)}",
+            "purl": f"pkg:npm/{urllib.parse.quote(name, safe='@')}"
+            f"@{urllib.parse.quote(version)}",
             "licenses": [{"license": {"id": entry.get("license", "NOASSERTION")}}],
             "properties": [
                 {"name": "npm:package-path", "value": package_path},
-                {"name": "npm:development", "value": str(bool(entry.get("dev"))).lower()},
+                {
+                    "name": "npm:development",
+                    "value": str(bool(entry.get("dev"))).lower(),
+                },
             ],
         }
         integrity = entry.get("integrity", "")
@@ -143,11 +173,14 @@ def _npm_components() -> tuple[list[dict[str, Any]], dict[str, Path]]:
             component["hashes"] = [
                 {
                     "alg": "SHA-512",
-                    "content": base64.b64decode(integrity.removeprefix("sha512-")).hex(),
+                    "content": base64.b64decode(
+                        integrity.removeprefix("sha512-")
+                    ).hex(),
                 }
             ]
         components.append(component)
-        package_paths[bom_ref] = ROOT / package_path
+        relative_package_path = Path(package_path).relative_to(NODE_MODULES_LOGICAL)
+        package_paths[bom_ref] = NODE_MODULES_ROOT / relative_package_path
     return components, package_paths
 
 
@@ -167,7 +200,9 @@ def _python_components(
                 "name": name,
                 "version": version,
                 "purl": f"pkg:pypi/{urllib.parse.quote(canonicalize_name(name))}@{urllib.parse.quote(version)}",
-                "licenses": [{"license": {"id": _license_expression(distribution.metadata)}}],
+                "licenses": [
+                    {"license": {"id": _license_expression(distribution.metadata)}}
+                ],
             }
         )
         by_ref[bom_ref] = distribution
@@ -175,7 +210,12 @@ def _python_components(
 
 
 def _infrastructure_components(distribution_form: str) -> list[dict[str, Any]]:
-    lock = json.loads((COMPLIANCE_ROOT / "component-lock.json").read_text(encoding="utf-8"))
+    lock = json.loads(
+        (COMPLIANCE_ROOT / "component-lock.json").read_text(encoding="utf-8")
+    )
+    candidate_backend_image_digest = (
+        f"sha256:{_sha256_value(lock.get('candidate_backend_image_digest'))}"
+    )
     components: list[dict[str, Any]] = []
     for entry in lock["components"]:
         if distribution_form not in entry["distribution"]:
@@ -191,22 +231,37 @@ def _infrastructure_components(distribution_form: str) -> list[dict[str, Any]]:
             "name": entry["name"],
             "version": entry["version"],
             "licenses": [{"license": {"id": entry["license"]}}],
-            "externalReferences": [
-                {"type": "distribution", "url": entry["source"]}
-            ],
+            "externalReferences": [{"type": "distribution", "url": entry["source"]}],
             "properties": properties,
         }
         hashes: list[dict[str, str]] = []
         if digest:
-            hashes.append(
-                {"alg": "SHA-256", "content": _sha256_value(digest)}
-            )
+            hashes.append({"alg": "SHA-256", "content": _sha256_value(digest)})
         source_sha256 = entry.get("source_sha256")
         if source_sha256:
             normalized_source = _sha256_value(source_sha256)
             hashes.append({"alg": "SHA-256", "content": normalized_source})
+            properties.append({"name": "fcr:source-sha256", "value": normalized_source})
+        signature_sha256 = entry.get("signature_sha256")
+        if signature_sha256:
+            normalized_signature = _sha256_value(signature_sha256)
+            hashes.append({"alg": "SHA-256", "content": normalized_signature})
             properties.append(
-                {"name": "fcr:source-sha256", "value": normalized_source}
+                {
+                    "name": "fcr:signature-sha256",
+                    "value": normalized_signature,
+                }
+            )
+        signing_key_fingerprint = entry.get("signing_key_fingerprint")
+        if signing_key_fingerprint:
+            normalized_fingerprint = str(signing_key_fingerprint)
+            if re.fullmatch(r"[0-9A-F]{40}", normalized_fingerprint) is None:
+                raise RuntimeError("invalid signing-key fingerprint in component lock")
+            properties.append(
+                {
+                    "name": "fcr:signing-key-fingerprint",
+                    "value": normalized_fingerprint,
+                }
             )
         for architecture, artifact_digest in sorted(
             entry.get("artifact_hashes", {}).items()
@@ -219,12 +274,34 @@ def _infrastructure_components(distribution_form: str) -> list[dict[str, Any]]:
                     "value": normalized_artifact,
                 }
             )
+        binary_artifact_hashes = entry.get("binary_artifact_hashes", {})
+        if not isinstance(binary_artifact_hashes, dict):
+            raise RuntimeError("binary artifact hashes must be grouped by architecture")
+        for architecture, binaries in sorted(binary_artifact_hashes.items()):
+            if not isinstance(binaries, dict) or not binaries:
+                raise RuntimeError("binary artifact hash group is empty")
+            for binary_name, binary_digest in sorted(binaries.items()):
+                normalized_binary = _sha256_value(binary_digest)
+                hashes.append({"alg": "SHA-256", "content": normalized_binary})
+                properties.append(
+                    {
+                        "name": (
+                            f"fcr:binary-artifact-sha256:{architecture}:{binary_name}"
+                        ),
+                        "value": normalized_binary,
+                    }
+                )
         candidate_image_digest = entry.get("candidate_image_digest")
         if candidate_image_digest:
+            normalized_candidate = f"sha256:{_sha256_value(candidate_image_digest)}"
+            if normalized_candidate != candidate_backend_image_digest:
+                raise RuntimeError(
+                    "locked component candidate does not match backend candidate"
+                )
             properties.append(
                 {
                     "name": "fcr:candidate-image-digest",
-                    "value": f"sha256:{_sha256_value(candidate_image_digest)}",
+                    "value": candidate_backend_image_digest,
                 }
             )
         if hashes:
@@ -294,6 +371,7 @@ def _record_license(
     source: Path,
     expected_sha256: str | None = None,
     upstream_source: str | None = None,
+    source_label: str | None = None,
 ) -> None:
     content = source.read_bytes()
     digest = hashlib.sha256(content).hexdigest()
@@ -305,7 +383,7 @@ def _record_license(
         target.write_bytes(content)
     item = {
         "component": bom_ref,
-        "source": source.relative_to(ROOT).as_posix(),
+        "source": source_label or source.relative_to(ROOT).as_posix(),
         "sha256": digest,
         "bundled_file": target.relative_to(ROOT).as_posix(),
     }
@@ -365,9 +443,7 @@ def _record_apache_infrastructure_materials(
         notice = material.get("notice", {})
         notice_status = notice.get("status")
         if notice_status == "present":
-            if notice.get("source_url") != (
-                f"{raw_repository}/{commit_sha}/NOTICE"
-            ):
+            if notice.get("source_url") != (f"{raw_repository}/{commit_sha}/NOTICE"):
                 raise RuntimeError(f"unverifiable upstream NOTICE source: {name}")
             notice_path = ROOT / str(notice.get("path", ""))
             _record_license(
@@ -381,8 +457,7 @@ def _record_apache_infrastructure_materials(
         elif notice_status == "absent":
             if (
                 notice.get("path") is not None
-                or notice.get("immutable_tree_url")
-                != f"{repository}/tree/{commit_sha}"
+                or notice.get("immutable_tree_url") != f"{repository}/tree/{commit_sha}"
                 or notice.get("expected_notice_url")
                 != f"{raw_repository}/{commit_sha}/NOTICE"
                 or not str(notice.get("checked_at", ""))
@@ -394,34 +469,35 @@ def _record_apache_infrastructure_materials(
     return recorded_paths
 
 
-def _record_ffmpeg_materials(index: list[dict[str, str]]) -> set[Path]:
+def _record_locked_component_materials(
+    index: list[dict[str, str]],
+) -> set[Path]:
     lock = json.loads(
         (COMPLIANCE_ROOT / "component-lock.json").read_text(encoding="utf-8")
     )
-    ffmpeg = next(
-        (entry for entry in lock["components"] if entry["name"] == "ffmpeg"),
-        None,
-    )
-    if ffmpeg is None or ffmpeg.get("license") != "GPL-2.0-or-later":
-        raise RuntimeError("locked FFmpeg GPL identity is absent")
-    materials = ffmpeg.get("license_materials", [])
-    expected_paths = {
-        "compliance/upstream-license-texts/FFmpeg-GPL-2.txt",
-        "compliance/upstream-license-texts/FFmpeg-Debian-copyright.txt",
-    }
-    if {material.get("path") for material in materials} != expected_paths:
-        raise RuntimeError("FFmpeg GPL/copyright material coverage is incomplete")
     recorded_paths: set[Path] = set()
-    for material in materials:
-        path = ROOT / str(material["path"])
-        _record_license(
-            index,
-            bom_ref="locked:deb:ffmpeg",
-            source=path,
-            expected_sha256=_sha256_value(material["sha256"]),
-            upstream_source=str(material["source"]),
-        )
-        recorded_paths.add(path)
+    for component in lock["components"]:
+        materials = component.get("license_materials", [])
+        if not isinstance(materials, list):
+            raise RuntimeError("locked component license materials are invalid")
+        bom_ref = f"locked:{component['type']}:{component['name']}"
+        for material in materials:
+            if not isinstance(material, dict):
+                raise RuntimeError("locked component license material is invalid")
+            path = ROOT / str(material.get("path", ""))
+            if path in recorded_paths:
+                raise RuntimeError("locked component license material is duplicated")
+            upstream_source = str(material.get("source", ""))
+            if not upstream_source:
+                raise RuntimeError("locked component license provenance is absent")
+            _record_license(
+                index,
+                bom_ref=bom_ref,
+                source=path,
+                expected_sha256=_sha256_value(material.get("sha256")),
+                upstream_source=upstream_source,
+            )
+            recorded_paths.add(path)
     return recorded_paths
 
 
@@ -432,16 +508,40 @@ def _generate_license_index(
     index: list[dict[str, str]] = []
     discovered: set[str] = set()
     material_paths = _record_apache_infrastructure_materials(index)
-    material_paths.update(_record_ffmpeg_materials(index))
+    material_paths.update(_record_locked_component_materials(index))
     for bom_ref, distribution in sorted(python_distributions.items()):
         for item in distribution.files or ():
             path = Path(str(distribution.locate_file(item)))
             if path.is_file() and LICENSE_NAME.fullmatch(path.name):
-                _record_license(index, bom_ref=bom_ref, source=path)
+                try:
+                    relative_path = path.relative_to(PYTHON_SITE_PACKAGES)
+                except ValueError as error:
+                    raise RuntimeError(
+                        "Python license path is outside the selected environment"
+                    ) from error
+                _record_license(
+                    index,
+                    bom_ref=bom_ref,
+                    source=path,
+                    source_label=(
+                        PYTHON_SITE_PACKAGES_LOGICAL / relative_path
+                    ).as_posix(),
+                )
                 discovered.add(bom_ref)
     for bom_ref, package_path in sorted(npm_paths.items()):
         for path in _candidate_license_files(package_path):
-            _record_license(index, bom_ref=bom_ref, source=path)
+            try:
+                relative_path = path.relative_to(NODE_MODULES_ROOT)
+            except ValueError as error:
+                raise RuntimeError(
+                    "npm license path is outside the selected environment"
+                ) from error
+            _record_license(
+                index,
+                bom_ref=bom_ref,
+                source=path,
+                source_label=(NODE_MODULES_LOGICAL / relative_path).as_posix(),
+            )
             discovered.add(bom_ref)
     for path in sorted((COMPLIANCE_ROOT / "upstream-license-texts").iterdir()):
         if path in material_paths:
@@ -467,9 +567,7 @@ def main() -> int:
     python_components, python_by_ref = _python_components(python_distributions)
     npm_components, npm_paths = _npm_components()
     generated_at = (
-        datetime.now(timezone.utc)
-        .isoformat(timespec="seconds")
-        .replace("+00:00", "Z")
+        datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     )
     _write_json(
         SBOM_ROOT / "saas.cdx.json",

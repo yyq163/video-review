@@ -36,6 +36,20 @@
       "upstream_source": "candidate-image:/usr/share/doc/ffmpeg/copyright"
     },
     {
+      "bundled_file": "compliance/license-texts/2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af.txt",
+      "component": "locked:source:ffmpeg-apv",
+      "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af",
+      "source": "compliance/upstream-license-texts/FFmpeg-APV-LICENSE.md",
+      "upstream_source": "candidate-image:/opt/ffmpeg-apv/share/licenses/FFmpeg-LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30.txt",
+      "component": "locked:source:ffmpeg-apv",
+      "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
+      "source": "compliance/upstream-license-texts/FFmpeg-APV-LGPL-2.1.txt",
+      "upstream_source": "candidate-image:/opt/ffmpeg-apv/share/licenses/FFmpeg-COPYING.LGPLv2.1"
+    },
+    {
       "bundled_file": "compliance/license-texts/35ea9c3419b261faf1be448c4f47d9255281bf6b36b5ffea55052227d4ba54de.txt",
       "component": "python:alembic",
       "sha256": "35ea9c3419b261faf1be448c4f47d9255281bf6b36b5ffea55052227d4ba54de",

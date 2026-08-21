@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPLIANCE = ROOT / "compliance"
 IMAGE_PATTERN = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SIGNING_KEY_FINGERPRINT_PATTERN = re.compile(r"^[0-9A-F]{40}$")
 APACHE_INFRA_COMPONENTS = frozenset({"prometheus", "cadvisor"})
 APACHE_UPSTREAMS = {
     "prometheus": (
@@ -54,6 +55,47 @@ def file_sha256(path: str) -> str:
     return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
 
 
+def binary_artifact_hashes(
+    component: dict[str, Any],
+) -> dict[tuple[str, str], str]:
+    raw_hashes = component.get("binary_artifact_hashes")
+    require(
+        isinstance(raw_hashes, dict) and bool(raw_hashes),
+        "APV FFmpeg binary artifact hashes are absent",
+    )
+    normalized: dict[tuple[str, str], str] = {}
+    for architecture, binaries in raw_hashes.items():
+        require(
+            isinstance(architecture, str)
+            and re.fullmatch(r"[a-z0-9][a-z0-9._-]*", architecture) is not None
+            and isinstance(binaries, dict)
+            and set(binaries) == {"ffmpeg", "ffprobe"},
+            "APV FFmpeg binary artifact hash inventory is invalid",
+        )
+        for binary_name, digest in binaries.items():
+            normalized[(architecture, str(binary_name))] = sha256_value(digest)
+    return normalized
+
+
+def unique_properties(raw_properties: object, context: str) -> dict[str, object]:
+    require(isinstance(raw_properties, list), f"{context} properties are invalid")
+    properties: dict[str, object] = {}
+    for item in raw_properties:
+        require(
+            isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and "value" in item,
+            f"{context} property is invalid",
+        )
+        property_name = str(item["name"])
+        require(
+            property_name not in properties,
+            f"{context} contains duplicate property names",
+        )
+        properties[property_name] = item["value"]
+    return properties
+
+
 def utc_timestamp(value: object) -> datetime:
     require(isinstance(value, str), "SBOM timestamp is not a string")
     try:
@@ -61,7 +103,8 @@ def utc_timestamp(value: object) -> datetime:
     except ValueError as error:
         raise RuntimeError("SBOM timestamp is not RFC 3339") from error
     require(
-        parsed.tzinfo is not None and parsed.utcoffset() == timezone.utc.utcoffset(parsed),
+        parsed.tzinfo is not None
+        and parsed.utcoffset() == timezone.utc.utcoffset(parsed),
         "SBOM timestamp is not UTC",
     )
     return parsed
@@ -76,16 +119,25 @@ def verify_compose() -> None:
     compose = yaml.safe_load(read("docker-compose.yml"))
     services = compose["services"]
     for name in ("nginx", "prometheus", "cadvisor"):
-        require(IMAGE_PATTERN.fullmatch(services[name]["image"]) is not None, f"{name} image is mutable")
+        require(
+            IMAGE_PATTERN.fullmatch(services[name]["image"]) is not None,
+            f"{name} image is mutable",
+        )
 
     backend = services["backend"]
-    require(backend["environment"]["PROTECTED_MEDIA_DIRECT_STREAM_ENABLED"] == "0", "backend bypasses NGINX")
+    require(
+        backend["environment"]["PROTECTED_MEDIA_DIRECT_STREAM_ENABLED"] == "0",
+        "backend bypasses NGINX",
+    )
     require(
         backend["environment"]["REVERSE_PROXY_TRUSTED_HOSTS"]
         == "${NGINX_INTERNAL_IP:-172.29.0.10}",
         "backend proxy trust is not bound to the exact NGINX address contract",
     )
-    require("ports" not in backend and backend.get("expose") == ["8000"], "backend is published outside NGINX")
+    require(
+        "ports" not in backend and backend.get("expose") == ["8000"],
+        "backend is published outside NGINX",
+    )
     require(
         compose_network_names(backend) == {"app-internal", "management"},
         "backend network boundary drifted",
@@ -93,9 +145,17 @@ def verify_compose() -> None:
 
     nginx = services["nginx"]
     require(nginx["read_only"] is True, "NGINX root filesystem is writable")
-    require(nginx["user"] == "10001:10001", "NGINX cannot read private app-owned media safely")
-    require("edge_handoff_secret" in nginx["secrets"], "NGINX edge handoff secret is absent")
-    require(all(str(volume).endswith(":ro") for volume in nginx["volumes"]), "NGINX mounts must be read-only")
+    require(
+        nginx["user"] == "10001:10001",
+        "NGINX cannot read private app-owned media safely",
+    )
+    require(
+        "edge_handoff_secret" in nginx["secrets"], "NGINX edge handoff secret is absent"
+    )
+    require(
+        all(str(volume).endswith(":ro") for volume in nginx["volumes"]),
+        "NGINX mounts must be read-only",
+    )
     nginx_command = "\n".join(nginx["command"])
     require(
         'test "$${#edge_secret}" -ge 32' in nginx_command
@@ -111,18 +171,32 @@ def verify_compose() -> None:
     )
 
     cadvisor = services["cadvisor"]
-    require(cadvisor["profiles"] == ["observability-host-approved"], "cAdvisor approval profile drifted")
+    require(
+        cadvisor["profiles"] == ["observability-host-approved"],
+        "cAdvisor approval profile drifted",
+    )
     require(cadvisor["privileged"] is False, "cAdvisor is privileged")
-    require(cadvisor["cap_drop"] == ["ALL"], "cAdvisor Linux capabilities are not dropped")
-    require(all(str(volume).endswith(":ro") for volume in cadvisor["volumes"]), "cAdvisor mounts must be read-only")
+    require(
+        cadvisor["cap_drop"] == ["ALL"], "cAdvisor Linux capabilities are not dropped"
+    )
+    require(
+        all(str(volume).endswith(":ro") for volume in cadvisor["volumes"]),
+        "cAdvisor mounts must be read-only",
+    )
     require(
         compose_network_names(cadvisor) == {"management"},
         "cAdvisor is outside the management network",
     )
 
     postgres_command = " ".join(services["postgres"]["command"])
-    require("shared_preload_libraries=pg_stat_statements" in postgres_command, "pg_stat_statements is not preloaded")
-    require("compute_query_id=on" in postgres_command, "PostgreSQL query identifiers are disabled")
+    require(
+        "shared_preload_libraries=pg_stat_statements" in postgres_command,
+        "pg_stat_statements is not preloaded",
+    )
+    require(
+        "compute_query_id=on" in postgres_command,
+        "PostgreSQL query identifiers are disabled",
+    )
 
 
 def verify_nginx() -> None:
@@ -136,25 +210,50 @@ def verify_nginx() -> None:
             f"{temp_name}_temp_path /tmp/" in config,
             f"NGINX {temp_name} temp path is not on the non-root tmpfs",
         )
-    require("location = /internal/metrics" in config, "exact metrics deny location is absent")
-    metrics_block = config.split("location = /internal/metrics", 1)[1].split("}", 1)[0]
-    require("return 404;" in metrics_block, "exact metrics location does not deny access")
-    require("proxy_pass" not in metrics_block and "alias " not in metrics_block, "metrics deny can reach an upstream")
     require(
-        'location ~ "^/_protected_media/(?<opaque_file_id>(?:file|media)_[0-9a-f]{32})$"' in config,
+        "location = /internal/metrics" in config,
+        "exact metrics deny location is absent",
+    )
+    metrics_block = config.split("location = /internal/metrics", 1)[1].split("}", 1)[0]
+    require(
+        "return 404;" in metrics_block, "exact metrics location does not deny access"
+    )
+    require(
+        "proxy_pass" not in metrics_block and "alias " not in metrics_block,
+        "metrics deny can reach an upstream",
+    )
+    require(
+        'location ~ "^/_protected_media/(?<opaque_file_id>(?:file|media)_[0-9a-f]{32})$"'
+        in config,
         "protected media identifier is not bounded",
     )
     protected = config.split('location ~ "^/_protected_media/', 1)[1].split(
         "location /_protected_media/",
         1,
     )[0]
-    require("internal;" in protected, "protected media location is externally reachable")
-    require("alias /data/storage/files/$opaque_file_id;" in protected, "protected media alias is not fixed")
-    require("$uri" not in protected and "$request_uri" not in protected, "request path reaches the filesystem")
-    log_line = next(line for line in config.splitlines() if "log_format bounded" in line)
+    require(
+        "internal;" in protected, "protected media location is externally reachable"
+    )
+    require(
+        "alias /data/storage/files/$opaque_file_id;" in protected,
+        "protected media alias is not fixed",
+    )
+    require(
+        "$uri" not in protected and "$request_uri" not in protected,
+        "request path reaches the filesystem",
+    )
+    log_line = next(
+        line for line in config.splitlines() if "log_format bounded" in line
+    )
     for forbidden in ("$remote_addr", "$uri", "$request_uri", "$args", "$http_"):
-        require(forbidden not in log_line, f"NGINX access log includes sensitive/high-cardinality {forbidden}")
-    require("${FCR_EDGE_HANDOFF_SECRET}" in config, "edge secret is not part of the fail-closed map")
+        require(
+            forbidden not in log_line,
+            f"NGINX access log includes sensitive/high-cardinality {forbidden}",
+        )
+    require(
+        "${FCR_EDGE_HANDOFF_SECRET}" in config,
+        "edge secret is not part of the fail-closed map",
+    )
     proxy_location = config.split("location / {", 1)[1]
     reject_offset = proxy_location.index("if ($edge_handoff_valid = 0)")
     proxy_offset = proxy_location.index("proxy_pass http://fcr_backend;")
@@ -172,13 +271,17 @@ def verify_nginx() -> None:
 def verify_prometheus() -> None:
     config = yaml.safe_load(read("ops/prometheus/prometheus.yml"))
     jobs = {job["job_name"]: job for job in config["scrape_configs"]}
-    require(set(jobs) == {
-        "fj-final-cut-review-backend",
-        "fj-final-cut-review-package-worker",
-        "fj-final-cut-review-media-worker",
-        "fj-final-cut-review-nginx-range",
-        "fj-final-cut-review-cadvisor",
-    }, "Prometheus scrape scope drifted")
+    require(
+        set(jobs)
+        == {
+            "fj-final-cut-review-backend",
+            "fj-final-cut-review-package-worker",
+            "fj-final-cut-review-media-worker",
+            "fj-final-cut-review-nginx-range",
+            "fj-final-cut-review-cadvisor",
+        },
+        "Prometheus scrape scope drifted",
+    )
     expected_targets = {
         "fj-final-cut-review-backend": ["backend:8000"],
         "fj-final-cut-review-package-worker": ["package-worker:9101"],
@@ -191,13 +294,25 @@ def verify_prometheus() -> None:
             f"Prometheus target drifted for {job_name}",
         )
     cadvisor_relabels = jobs["fj-final-cut-review-cadvisor"]["metric_relabel_configs"]
-    require(any(rule.get("action") == "labeldrop" for rule in cadvisor_relabels), "cAdvisor labels are not bounded")
-    require(any(rule.get("action") == "keep" for rule in cadvisor_relabels), "cAdvisor scrape is not project-scoped")
+    require(
+        any(rule.get("action") == "labeldrop" for rule in cadvisor_relabels),
+        "cAdvisor labels are not bounded",
+    )
+    require(
+        any(rule.get("action") == "keep" for rule in cadvisor_relabels),
+        "cAdvisor scrape is not project-scoped",
+    )
 
 
 def verify_observability() -> None:
     source = read("backend/app/observability.py")
-    require("queryid" not in str(next(line for line in source.splitlines() if "SELECT calls" in line)), "query id selected")
+    require(
+        "queryid"
+        not in str(
+            next(line for line in source.splitlines() if "SELECT calls" in line)
+        ),
+        "query id selected",
+    )
     require(
         "fcr_observability.fcr_pg_stat_summary()" in source,
         "safe PostgreSQL aggregate is not used",
@@ -209,13 +324,21 @@ def verify_observability() -> None:
         and "FROM PUBLIC" in bootstrap,
         "SQL text remains public",
     )
-    require("SECURITY DEFINER" in bootstrap and "SET search_path = pg_catalog" in bootstrap, "safe aggregate is not hardened")
-    require("pg_read_all_stats" in bootstrap, "runtime diagnostic-role denial is absent")
+    require(
+        "SECURITY DEFINER" in bootstrap and "SET search_path = pg_catalog" in bootstrap,
+        "safe aggregate is not hardened",
+    )
+    require(
+        "pg_read_all_stats" in bootstrap, "runtime diagnostic-role denial is absent"
+    )
 
 
 def verify_supply_chain() -> dict[str, int]:
     lock = load_json("compliance/component-lock.json")
-    require(lock["commercial_release_status"] == "BLOCKED", "commercial release was incorrectly approved")
+    require(
+        lock["commercial_release_status"] == "BLOCKED",
+        "commercial release was incorrectly approved",
+    )
     blockers = lock.get("commercial_release_blockers", [])
     require(
         isinstance(blockers, list)
@@ -235,14 +358,34 @@ def verify_supply_chain() -> dict[str, int]:
         any("GPL corresponding-source" in str(item) for item in blockers),
         "FFmpeg GPL corresponding-source release blocker is absent",
     )
-    locked_components = {component["name"]: component for component in lock["components"]}
+    locked_components = {
+        component["name"]: component for component in lock["components"]
+    }
+    require(
+        len(locked_components) == len(lock["components"]),
+        "component-lock contains duplicate component names",
+    )
+    locked_ffmpeg = locked_components.get("ffmpeg")
+    locked_apv = locked_components.get("ffmpeg-apv")
+    require(
+        isinstance(locked_ffmpeg, dict) and isinstance(locked_apv, dict),
+        "both FFmpeg runtimes must be locked",
+    )
+    candidate_image_digest = str(lock.get("candidate_backend_image_digest", ""))
+    require(
+        re.fullmatch(r"sha256:[0-9a-f]{64}", candidate_image_digest) is not None
+        and locked_ffmpeg.get("candidate_image_digest") == candidate_image_digest
+        and locked_apv.get("candidate_image_digest") == candidate_image_digest,
+        "both FFmpeg runtimes must share one candidate backend image digest",
+    )
     for component in lock["components"]:
         if component["type"] == "container":
-            require(re.fullmatch(r"sha256:[0-9a-f]{64}", component["digest"]) is not None, "container digest missing")
+            require(
+                re.fullmatch(r"sha256:[0-9a-f]{64}", component["digest"]) is not None,
+                "container digest missing",
+            )
 
-    materials = load_json("compliance/upstream-component-materials.json")[
-        "components"
-    ]
+    materials = load_json("compliance/upstream-component-materials.json")["components"]
     require(
         set(materials) == APACHE_INFRA_COMPONENTS,
         "Apache infrastructure LICENSE/NOTICE coverage is incomplete",
@@ -278,8 +421,7 @@ def verify_supply_chain() -> dict[str, int]:
             notice_hash = sha256_value(notice["sha256"])
             require(
                 file_sha256(notice["path"]) == notice_hash
-                and notice["source_url"]
-                == f"{raw_repository}/{commit_sha}/NOTICE",
+                and notice["source_url"] == f"{raw_repository}/{commit_sha}/NOTICE",
                 f"Apache NOTICE provenance mismatch: {name}",
             )
             required_license_entries.add(
@@ -299,8 +441,47 @@ def verify_supply_chain() -> dict[str, int]:
             )
 
     dockerfile = read("backend/Dockerfile")
-    require("FFMPEG_PACKAGE_VERSION=7:7.1.5-0+deb13u1" in dockerfile, "FFmpeg package is not locked")
-    require("--enable-nonfree" in dockerfile and "! ffmpeg -buildconf" in dockerfile, "nonfree build rejection is absent")
+    require(
+        "FFMPEG_PACKAGE_VERSION=7:7.1.5-0+deb13u1" in dockerfile,
+        "FFmpeg package is not locked",
+    )
+    require(
+        "--enable-nonfree" in dockerfile and "! ffmpeg -buildconf" in dockerfile,
+        "nonfree build rejection is absent",
+    )
+    require(
+        f"FFMPEG_APV_VERSION={locked_apv['version']}" in dockerfile,
+        "the isolated APV FFmpeg version is not locked",
+    )
+    require(
+        f"FFMPEG_APV_SOURCE_SHA256={sha256_value(locked_apv['source_sha256'])}"
+        in dockerfile
+        and f"FFMPEG_APV_SIGNATURE_SHA256={sha256_value(locked_apv['signature_sha256'])}"
+        in dockerfile,
+        "the isolated APV FFmpeg source is not hash locked",
+    )
+    require(
+        f"FFMPEG_APV_SIGNING_KEY_FINGERPRINT={locked_apv['signing_key_fingerprint']}"
+        in dockerfile
+        and "gpg --batch --verify ffmpeg.tar.xz.asc ffmpeg.tar.xz" in dockerfile,
+        "the isolated APV FFmpeg release signature is not verified",
+    )
+    require(
+        all(
+            flag in dockerfile
+            for flag in (
+                "--disable-network",
+                "--disable-cuda-llvm",
+                "--disable-cuvid",
+                "--disable-ffnvcodec",
+                "--disable-nvdec",
+                "--disable-nvenc",
+                "--disable-vulkan",
+            )
+        )
+        and "--enable-liboapv" not in dockerfile,
+        "the isolated APV FFmpeg runtime is not capability bounded",
+    )
     for record in (
         "ffmpeg-version.txt",
         "ffmpeg-buildconf.txt",
@@ -309,6 +490,15 @@ def verify_supply_chain() -> dict[str, int]:
         "ffmpeg-dynamic-libraries.txt",
     ):
         require(record in dockerfile, f"FFmpeg build record is absent: {record}")
+    for record in (
+        "ffmpeg-apv-buildconf.txt",
+        "ffmpeg-apv-source-sha256.txt",
+        "ffmpeg-apv-dynamic-libraries.txt",
+    ):
+        require(
+            record in dockerfile,
+            f"isolated APV FFmpeg build record is absent: {record}",
+        )
 
     npm_expected = sum(1 for key in load_json("package-lock.json")["packages"] if key)
     python_requirements = [
@@ -317,7 +507,6 @@ def verify_supply_chain() -> dict[str, int]:
         if line.strip() and not line.lstrip().startswith("#")
     ]
     results: dict[str, int] = {}
-    locked_ffmpeg = locked_components["ffmpeg"]
     require(
         locked_ffmpeg.get("license") == "GPL-2.0-or-later",
         "the verified GPL FFmpeg candidate is not classified as GPL",
@@ -325,7 +514,7 @@ def verify_supply_chain() -> dict[str, int]:
     require(
         re.fullmatch(
             r"sha256:[0-9a-f]{64}",
-            str(locked_ffmpeg.get("candidate_image_digest", "")),
+            candidate_image_digest,
         )
         is not None,
         "candidate FFmpeg image digest is missing",
@@ -335,6 +524,25 @@ def verify_supply_chain() -> dict[str, int]:
         and set(locked_ffmpeg.get("artifact_hashes", {})) == {"amd64", "arm64"},
         "FFmpeg source and required architecture hashes are incomplete",
     )
+    require(
+        locked_apv.get("type") == "source"
+        and locked_apv.get("version") == "9.0.1"
+        and locked_apv.get("source")
+        == "https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz"
+        and locked_apv.get("license") == "LGPL-2.1-or-later"
+        and set(locked_apv.get("distribution", [])) == {"saas", "customer-container"},
+        "the isolated APV FFmpeg identity or distribution coverage is invalid",
+    )
+    apv_source_hash = sha256_value(locked_apv.get("source_sha256"))
+    apv_signature_hash = sha256_value(locked_apv.get("signature_sha256"))
+    require(
+        SIGNING_KEY_FINGERPRINT_PATTERN.fullmatch(
+            str(locked_apv.get("signing_key_fingerprint", ""))
+        )
+        is not None,
+        "the isolated APV FFmpeg signing-key fingerprint is invalid",
+    )
+    apv_binary_hashes = binary_artifact_hashes(locked_apv)
     ffmpeg_materials = locked_ffmpeg.get("license_materials", [])
     require(
         {material.get("path") for material in ffmpeg_materials}
@@ -348,24 +556,96 @@ def verify_supply_chain() -> dict[str, int]:
         material_hash = sha256_value(material["sha256"])
         require(
             file_sha256(material["path"]) == material_hash
-            and str(material.get("source", "")).startswith("candidate-image:/usr/share/"),
+            and str(material.get("source", "")).startswith(
+                "candidate-image:/usr/share/"
+            ),
             "FFmpeg GPL/copyright material provenance mismatch",
         )
         required_license_entries.add(
             ("locked:deb:ffmpeg", material_hash, material["path"])
         )
+    apv_materials = locked_apv.get("license_materials", [])
+    expected_apv_materials = {
+        "compliance/upstream-license-texts/FFmpeg-APV-LICENSE.md": (
+            "candidate-image:/opt/ffmpeg-apv/share/licenses/FFmpeg-LICENSE.md"
+        ),
+        "compliance/upstream-license-texts/FFmpeg-APV-LGPL-2.1.txt": (
+            "candidate-image:/opt/ffmpeg-apv/share/licenses/FFmpeg-COPYING.LGPLv2.1"
+        ),
+    }
+    require(
+        isinstance(apv_materials, list)
+        and {material.get("path") for material in apv_materials}
+        == set(expected_apv_materials),
+        "APV FFmpeg LGPL material coverage is incomplete",
+    )
+    apv_material_hashes: dict[str, str] = {}
+    apv_license_index_upstreams: dict[tuple[str, str, str], str] = {}
+    for material in apv_materials:
+        material_path = str(material["path"])
+        material_hash = sha256_value(material["sha256"])
+        require(
+            file_sha256(material_path) == material_hash
+            and material.get("source") == expected_apv_materials[material_path],
+            "APV FFmpeg LGPL material provenance mismatch",
+        )
+        apv_material_hashes[material_path] = material_hash
+        license_identity = (
+            "locked:source:ffmpeg-apv",
+            material_hash,
+            material_path,
+        )
+        required_license_entries.add(license_identity)
+        apv_license_index_upstreams[license_identity] = str(material["source"])
+    require(
+        (
+            "FFMPEG_APV_LICENSE_SHA256="
+            + apv_material_hashes[
+                "compliance/upstream-license-texts/FFmpeg-APV-LICENSE.md"
+            ]
+        )
+        in dockerfile
+        and (
+            "FFMPEG_APV_COPYING_SHA256="
+            + apv_material_hashes[
+                "compliance/upstream-license-texts/FFmpeg-APV-LGPL-2.1.txt"
+            ]
+        )
+        in dockerfile
+        and "FFmpeg-LICENSE.md" in dockerfile
+        and "FFmpeg-COPYING.LGPLv2.1" in dockerfile,
+        "the isolated APV FFmpeg license materials are not installed",
+    )
+    third_party_notices = read("compliance/THIRD_PARTY_NOTICES.md")
+    require(
+        candidate_image_digest in third_party_notices
+        and "locked:deb:ffmpeg" in third_party_notices
+        and "locked:source:ffmpeg-apv" in third_party_notices
+        and "9.0.1 source release" in third_party_notices
+        and "LGPL-2.1" in third_party_notices
+        and "customer-container SBOMs list both runtimes" in third_party_notices,
+        "third-party notices do not describe the locked dual FFmpeg candidate",
+    )
     lock_generated_at = utc_timestamp(lock["generated_at"])
     serial_numbers: set[str] = set()
     for name in ("saas", "customer-container"):
         sbom = load_json(f"compliance/sbom/{name}.cdx.json")
-        require(sbom["bomFormat"] == "CycloneDX" and sbom["specVersion"] == "1.6", f"{name} SBOM schema drifted")
+        require(
+            sbom["bomFormat"] == "CycloneDX" and sbom["specVersion"] == "1.6",
+            f"{name} SBOM schema drifted",
+        )
         serial_number = str(sbom.get("serialNumber", ""))
-        require(serial_number.startswith("urn:uuid:"), f"{name} SBOM serial number is invalid")
+        require(
+            serial_number.startswith("urn:uuid:"),
+            f"{name} SBOM serial number is invalid",
+        )
         try:
             uuid.UUID(serial_number.removeprefix("urn:uuid:"))
         except ValueError as error:
             raise RuntimeError(f"{name} SBOM serial number is invalid") from error
-        require(serial_number not in serial_numbers, "SBOM serial numbers are not unique")
+        require(
+            serial_number not in serial_numbers, "SBOM serial numbers are not unique"
+        )
         serial_numbers.add(serial_number)
         require(sbom.get("version") == 1, f"{name} SBOM version is invalid")
         require(
@@ -373,13 +653,12 @@ def verify_supply_chain() -> dict[str, int]:
             >= lock_generated_at,
             f"{name} SBOM predates the locked candidate image",
         )
-        metadata_properties = {
-            item["name"]: item["value"]
-            for item in sbom.get("metadata", {}).get("properties", [])
-        }
+        metadata_properties = unique_properties(
+            sbom.get("metadata", {}).get("properties", []),
+            f"{name} SBOM metadata",
+        )
         require(
-            metadata_properties.get("fcr:commercial-release-status")
-            == "BLOCKED",
+            metadata_properties.get("fcr:commercial-release-status") == "BLOCKED",
             f"{name} SBOM commercial release status is not blocked",
         )
         expected_locked_refs = {
@@ -387,9 +666,29 @@ def verify_supply_chain() -> dict[str, int]:
             for component in lock["components"]
             if name in component["distribution"]
         }
+        component_items = sbom.get("components")
+        require(
+            isinstance(component_items, list), f"{name} SBOM components are invalid"
+        )
+        component_refs = [
+            item.get("bom-ref") if isinstance(item, dict) else None
+            for item in component_items
+        ]
+        require(
+            all(isinstance(bom_ref, str) and bom_ref for bom_ref in component_refs)
+            and len(component_refs) == len(set(component_refs)),
+            f"{name} SBOM component bom-ref values are missing or duplicated",
+        )
+        component_properties = {
+            str(item["bom-ref"]): unique_properties(
+                item.get("properties", []),
+                f"{name} SBOM component {item['bom-ref']}",
+            )
+            for item in component_items
+        }
         locked_items = {
             item["bom-ref"]: item
-            for item in sbom["components"]
+            for item in component_items
             if item["bom-ref"].startswith("locked:")
         }
         require(
@@ -397,19 +696,27 @@ def verify_supply_chain() -> dict[str, int]:
             f"{name} SBOM locked component coverage is incomplete",
         )
         for bom_ref, item in locked_items.items():
-            properties = {
-                property_item["name"]: property_item["value"]
-                for property_item in item.get("properties", [])
-            }
+            properties = component_properties[bom_ref]
             require(
                 properties.get("fcr:release-state") == "BLOCKED",
                 f"{name} SBOM component release state is not blocked: {bom_ref}",
             )
-        npm_components = [item for item in sbom["components"] if item["bom-ref"].startswith("npm:")]
-        python_components = [item for item in sbom["components"] if item["bom-ref"].startswith("python:")]
-        require(len(npm_components) == npm_expected, f"{name} SBOM omits npm dependencies")
-        python_names = {item["name"].lower().replace("_", "-") for item in python_components}
-        require(set(python_requirements).issubset(python_names), f"{name} SBOM omits direct Python dependencies")
+        npm_components = [
+            item for item in sbom["components"] if item["bom-ref"].startswith("npm:")
+        ]
+        python_components = [
+            item for item in sbom["components"] if item["bom-ref"].startswith("python:")
+        ]
+        require(
+            len(npm_components) == npm_expected, f"{name} SBOM omits npm dependencies"
+        )
+        python_names = {
+            item["name"].lower().replace("_", "-") for item in python_components
+        }
+        require(
+            set(python_requirements).issubset(python_names),
+            f"{name} SBOM omits direct Python dependencies",
+        )
         ffmpeg = next(
             (
                 item
@@ -426,19 +733,14 @@ def verify_supply_chain() -> dict[str, int]:
                 for value in locked_ffmpeg["artifact_hashes"].values()
             ),
         }
-        actual_ffmpeg_hashes = {
-            item["content"] for item in ffmpeg.get("hashes", [])
-        }
+        actual_ffmpeg_hashes = {item["content"] for item in ffmpeg.get("hashes", [])}
         require(
             actual_ffmpeg_hashes == expected_ffmpeg_hashes,
             f"{name} SBOM FFmpeg hashes do not match component-lock",
         )
-        ffmpeg_properties = {
-            item["name"]: item["value"] for item in ffmpeg["properties"]
-        }
+        ffmpeg_properties = component_properties["locked:deb:ffmpeg"]
         require(
-            ffmpeg.get("licenses")
-            == [{"license": {"id": "GPL-2.0-or-later"}}],
+            ffmpeg.get("licenses") == [{"license": {"id": "GPL-2.0-or-later"}}],
             f"{name} SBOM does not classify the verified FFmpeg candidate as GPL",
         )
         require(
@@ -456,6 +758,40 @@ def verify_supply_chain() -> dict[str, int]:
             ),
             f"{name} SBOM FFmpeg hash roles are missing",
         )
+        apv = locked_items.get("locked:source:ffmpeg-apv")
+        require(apv is not None, f"{name} SBOM omits isolated APV FFmpeg")
+        expected_apv_hashes = {
+            apv_source_hash,
+            apv_signature_hash,
+            *apv_binary_hashes.values(),
+        }
+        actual_apv_hashes = {item["content"] for item in apv.get("hashes", [])}
+        require(
+            actual_apv_hashes == expected_apv_hashes,
+            f"{name} SBOM APV FFmpeg hashes do not match component-lock",
+        )
+        apv_properties = component_properties["locked:source:ffmpeg-apv"]
+        require(
+            apv.get("licenses") == [{"license": {"id": "LGPL-2.1-or-later"}}]
+            and apv.get("externalReferences")
+            == [{"type": "distribution", "url": locked_apv["source"]}],
+            f"{name} SBOM APV FFmpeg identity is invalid",
+        )
+        require(
+            apv_properties.get("fcr:candidate-image-digest") == candidate_image_digest
+            and apv_properties.get("fcr:source-sha256") == apv_source_hash
+            and apv_properties.get("fcr:signature-sha256") == apv_signature_hash
+            and apv_properties.get("fcr:signing-key-fingerprint")
+            == locked_apv["signing_key_fingerprint"]
+            and all(
+                apv_properties.get(
+                    f"fcr:binary-artifact-sha256:{architecture}:{binary_name}"
+                )
+                == digest
+                for (architecture, binary_name), digest in apv_binary_hashes.items()
+            ),
+            f"{name} SBOM APV FFmpeg hash roles are missing",
+        )
         results[f"{name}_components"] = len(sbom["components"])
 
     license_index = load_json("compliance/license-index.json")
@@ -466,15 +802,30 @@ def verify_supply_chain() -> dict[str, int]:
     }
     require(
         required_license_entries.issubset(actual_license_entries),
-        "Apache infrastructure LICENSE/NOTICE entries are absent from the bundle",
+        "locked LICENSE/NOTICE entries are absent from the bundle",
     )
+    for entry in license_index["licenses"]:
+        identity = (entry["component"], entry["sha256"], entry["source"])
+        if identity not in required_license_entries:
+            continue
+        require(
+            file_sha256(entry["bundled_file"]) == entry["sha256"],
+            "bundled locked license material does not match its index",
+        )
+        if identity in apv_license_index_upstreams:
+            require(
+                entry.get("upstream_source") == apv_license_index_upstreams[identity],
+                "APV FFmpeg license index provenance mismatch",
+            )
     unresolved = load_json("compliance/unresolved-license-texts.json")
     require(
         unresolved["commercial_release_status"] == "BLOCKED",
         "missing license texts are not an explicit release blocker",
     )
     results["license_texts"] = len(license_index["licenses"])
-    results["unresolved_license_texts"] = len(unresolved["components_without_installed_license_text"])
+    results["unresolved_license_texts"] = len(
+        unresolved["components_without_installed_license_text"]
+    )
     return results
 
 

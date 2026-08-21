@@ -1,12 +1,14 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-01T05:21:32Z",
+  "generated_at": "2026-08-21T10:31:34Z",
+  "candidate_backend_image_digest": "sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230",
   "commercial_release_status": "BLOCKED",
   "commercial_release_blockers": [
     "target distribution regions are not approved",
     "final H.264, H.265, and AAC codec combinations are not approved",
     "FFmpeg GPL corresponding-source delivery and customer redistribution procedure are not approved",
-    "the candidate backend image digest and runtime FFmpeg build records are locally verified but are not approved for production or customer distribution"
+    "the candidate backend image digest and runtime FFmpeg build records are locally verified but are not approved for production or customer distribution",
+    "the isolated FFmpeg APV runtime is verified only for the internal amd64 SaaS deployment; arm64 and customer redistribution remain unapproved"
   ],
   "components": [
     {
@@ -67,7 +69,7 @@
         "amd64": "sha256:8669bc77e55393c14e0dd257ba9a916007cb6da0e1074c9b5e1d53812024f2af",
         "arm64": "sha256:6ec9c42306df30803c731c9e53300627257fd59d2f5a80b394c14cec5fd6d5ef"
       },
-      "candidate_image_digest": "sha256:4b2f5282ef86c56fe8d192cb54196621003d826c4c8d35acfbbf5cc36d6eb6b3",
+      "candidate_image_digest": "sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230",
       "license": "GPL-2.0-or-later",
       "license_materials": [
         {
@@ -82,7 +84,38 @@
         }
       ],
       "distribution": ["saas", "customer-container"],
-      "notes": "The 2026-08-01 local isolated candidate reports FFmpeg 7.1.5-0+deb13u1, --enable-gpl, no --enable-nonfree, shared libraries, and the built-in GPL version 2 or later notice. Treat this candidate as GPL; production/customer approval and codec patent review remain blocked."
+      "notes": "The 2026-08-21 dual-runtime candidate reports FFmpeg 7.1.5-0+deb13u1, --enable-gpl, no --enable-nonfree, shared libraries, and the built-in GPL version 2 or later notice. Treat this runtime as GPL; production/customer approval and codec patent review remain blocked."
+    },
+    {
+      "name": "ffmpeg-apv",
+      "version": "9.0.1",
+      "type": "source",
+      "source": "https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz",
+      "source_sha256": "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635",
+      "signature_sha256": "b613a00005232a1245ace7080088781ac23a916119d3e5b0d6c042368eee0177",
+      "signing_key_fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+      "binary_artifact_hashes": {
+        "amd64": {
+          "ffmpeg": "sha256:e43a4982f352dadeb922814b46cfd42e954bf86872ddd4909e2a630de218c5c3",
+          "ffprobe": "sha256:07f0b3495714bb2153271a686fe5daa93195baab235fe2dcba92c1f939b45601"
+        }
+      },
+      "candidate_image_digest": "sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230",
+      "license": "LGPL-2.1-or-later",
+      "license_materials": [
+        {
+          "path": "compliance/upstream-license-texts/FFmpeg-APV-LICENSE.md",
+          "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af",
+          "source": "candidate-image:/opt/ffmpeg-apv/share/licenses/FFmpeg-LICENSE.md"
+        },
+        {
+          "path": "compliance/upstream-license-texts/FFmpeg-APV-LGPL-2.1.txt",
+          "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
+          "source": "candidate-image:/opt/ffmpeg-apv/share/licenses/FFmpeg-COPYING.LGPLv2.1"
+        }
+      ],
+      "distribution": ["saas", "customer-container"],
+      "notes": "Official FFmpeg 9.0.1 CPU-only APV decoder runtime physically included in the shared backend candidate image. Network, CUDA, Vulkan, GPL, nonfree, and liboapv are disabled. The customer-container SBOM inventories this runtime, while arm64 and customer redistribution approval remain blocked."
     },
     {
       "name": "prometheus-client",

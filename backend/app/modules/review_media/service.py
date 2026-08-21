@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import stat
 import subprocess
 import threading
@@ -59,6 +60,8 @@ ALLOWED_MIME = {mime for rule in MEDIA_SIGNATURES.values() for mime in rule["mim
 ISO_BMFF_FTYP_MAX_BYTES = 64 * 1024
 MEDIA_PROBE_MAX_OUTPUT_BYTES = 64 * 1024
 MEDIA_PROBE_VERSION = "ffprobe-json-v1"
+DEFAULT_MEDIA_MAX_DIMENSION = 8192
+DEFAULT_MEDIA_MAX_PIXELS = 35_389_440
 MAX_DATABASE_INTEGER = 2_147_483_647
 UPLOAD_INIT_ADVISORY_LOCK_KEY = int.from_bytes(b"FCRUPLD1", "big")
 UPLOAD_PEAK_RESERVATION_MULTIPLIER = 2
@@ -170,7 +173,12 @@ def _reject_nonstandard_json_constant(_: str) -> None:
     raise ValueError("non-standard JSON constant")
 
 
-def parse_media_probe_output(output: bytes) -> MediaProbeResult:
+def parse_media_probe_output(
+    output: bytes,
+    *,
+    max_dimension: int = DEFAULT_MEDIA_MAX_DIMENSION,
+    max_pixels: int = DEFAULT_MEDIA_MAX_PIXELS,
+) -> MediaProbeResult:
     try:
         payload = json.loads(output.decode("utf-8"), parse_constant=_reject_nonstandard_json_constant)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
@@ -195,7 +203,10 @@ def parse_media_probe_output(output: bytes) -> MediaProbeResult:
             continue
         codec_name = candidate.get("codec_name")
         if not isinstance(codec_name, str) or not codec_name or len(codec_name) > 64:
-            codec_name = "unknown"
+            raise _media_probe_rejected()
+        codec_name = codec_name.strip().lower()
+        if not codec_name or codec_name in {"none", "unknown"}:
+            raise _media_probe_rejected()
         channels = candidate.get("channels", 0)
         sample_rate = candidate.get("sample_rate", 0)
         try:
@@ -215,14 +226,28 @@ def parse_media_probe_output(output: bytes) -> MediaProbeResult:
                 normalized_sample_rate if codec_type == "audio" else 0,
             )
         )
+    width = _positive_int(stream.get("width"))
+    height = _positive_int(stream.get("height"))
+    if width > max_dimension or height > max_dimension or width * height > max_pixels:
+        raise _media_probe_rejected()
     return MediaProbeResult(
         duration_ms=_positive_duration_ms(format_data.get("duration"), stream.get("duration")),
-        width=_positive_int(stream.get("width")),
-        height=_positive_int(stream.get("height")),
+        width=width,
+        height=height,
         fps_num=frame_rate.numerator,
         fps_den=frame_rate.denominator,
         av_streams=tuple(av_streams),
     )
+
+
+def _kill_probe_process_group(process: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        try:
+            process.kill()
+        except OSError:
+            pass
 
 
 def _read_probe_stdout(
@@ -237,7 +262,7 @@ def _read_probe_stdout(
             remaining = MEDIA_PROBE_MAX_OUTPUT_BYTES + 1 - len(output)
             if remaining <= 0:
                 output_too_large.set()
-                process.kill()
+                _kill_probe_process_group(process)
                 return
             chunk = stream.read(min(8192, remaining))
             if not chunk:
@@ -245,14 +270,11 @@ def _read_probe_stdout(
             output.extend(chunk)
             if len(output) > MEDIA_PROBE_MAX_OUTPUT_BYTES:
                 output_too_large.set()
-                process.kill()
+                _kill_probe_process_group(process)
                 return
     except (OSError, ValueError):
         output_failed.set()
-        try:
-            process.kill()
-        except OSError:
-            pass
+        _kill_probe_process_group(process)
 
 
 def probe_media(descriptor: int, settings: Settings) -> MediaProbeResult:
@@ -285,7 +307,7 @@ def probe_media(descriptor: int, settings: Settings) -> MediaProbeResult:
         raise _media_probe_unavailable() from None
 
     if process.stdout is None:
-        process.kill()
+        _kill_probe_process_group(process)
         process.wait()
         raise _media_probe_unavailable()
 
@@ -302,7 +324,7 @@ def probe_media(descriptor: int, settings: Settings) -> MediaProbeResult:
     try:
         process.wait(timeout=settings.media_probe_timeout_seconds)
     except subprocess.TimeoutExpired:
-        process.kill()
+        _kill_probe_process_group(process)
         process.wait()
         reader.join(timeout=1)
         process.stdout.close()
@@ -310,6 +332,7 @@ def probe_media(descriptor: int, settings: Settings) -> MediaProbeResult:
 
     reader.join(timeout=1)
     if reader.is_alive():
+        _kill_probe_process_group(process)
         process.stdout.close()
         raise _media_probe_unavailable()
     process.stdout.close()
@@ -317,7 +340,11 @@ def probe_media(descriptor: int, settings: Settings) -> MediaProbeResult:
         raise _media_probe_unavailable()
     if output_too_large.is_set() or process.returncode != 0:
         raise _media_probe_rejected()
-    return parse_media_probe_output(bytes(output))
+    return parse_media_probe_output(
+        bytes(output),
+        max_dimension=settings.media_max_dimension,
+        max_pixels=settings.media_max_pixels,
+    )
 
 
 def _valid_iso_bmff_brand(brand: bytes) -> bool:

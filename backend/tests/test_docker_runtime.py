@@ -88,6 +88,12 @@ def test_compose_secrets_and_capabilities_drop_to_application_user() -> None:
         assert "postgres_app_password" in compose["services"][service_name]["secrets"]
         assert environment["PACKAGE_TTL_SECONDS"] == "${PACKAGE_TTL_SECONDS:-86400}"
     backend_environment = compose["services"]["backend"]["environment"]
+    assert backend_environment["MEDIA_PROBE_COMMAND"] == "/opt/ffmpeg-apv/bin/ffprobe"
+    assert backend_environment["MEDIA_MAX_DIMENSION"] == "${MEDIA_MAX_DIMENSION:-8192}"
+    assert backend_environment["MEDIA_MAX_PIXELS"] == "${MEDIA_MAX_PIXELS:-35389440}"
+    assert compose["services"]["backend"]["cpus"] == 4.0
+    assert compose["services"]["backend"]["mem_limit"] == "4g"
+    assert compose["services"]["backend"]["pids_limit"] == 256
     assert "WRITE_GUARD_SESSION_SECRET" not in backend_environment
     assert backend_environment["WRITE_GUARD_SESSION_SECRET_FILE"] == "/run/secrets/write_guard_session_secret"
     assert backend_environment["WRITE_GUARD_CODE_FILE"] == "/run/secrets/write_guard_code"
@@ -112,6 +118,15 @@ def test_compose_secrets_and_capabilities_drop_to_application_user() -> None:
     worker_environment = compose["services"]["package-worker"]["environment"]
     assert worker_environment["PACKAGE_WORKER_MAX_ATTEMPTS"] == "${PACKAGE_WORKER_MAX_ATTEMPTS:-3}"
     assert worker_environment["PACKAGE_WORKER_RETRY_DELAY_SECONDS"] == "${PACKAGE_WORKER_RETRY_DELAY_SECONDS:-30}"
+    media_worker_environment = compose["services"]["media-worker"]["environment"]
+    assert media_worker_environment["MEDIA_PROBE_COMMAND"] == "/opt/ffmpeg-apv/bin/ffprobe"
+    assert media_worker_environment["MEDIA_MAX_DIMENSION"] == "${MEDIA_MAX_DIMENSION:-8192}"
+    assert media_worker_environment["MEDIA_MAX_PIXELS"] == "${MEDIA_MAX_PIXELS:-35389440}"
+    assert media_worker_environment["MEDIA_TRANSFORM_COMMAND"] == "/usr/bin/ffmpeg"
+    assert media_worker_environment["MEDIA_APV_TRANSFORM_COMMAND"] == "/opt/ffmpeg-apv/bin/ffmpeg"
+    assert compose["services"]["media-worker"]["cpus"] == 8.0
+    assert compose["services"]["media-worker"]["mem_limit"] == "8g"
+    assert compose["services"]["media-worker"]["pids_limit"] == 256
     expected_package_limits = {
         "MAX_PACKAGE_FILES": "${MAX_PACKAGE_FILES:-200}",
         "MAX_PACKAGE_BYTES": "${MAX_PACKAGE_BYTES:-53687091200}",
@@ -347,6 +362,52 @@ def test_nginx_package_integrity_endpoints_have_an_isolated_wait_timeout() -> No
 
     package_directives.remove("proxy_read_timeout 30m;")
     assert package_directives == generic_directives
+
+
+def test_apv_runtime_is_officially_locked_isolated_and_license_audited() -> None:
+    root = Path(__file__).resolve().parents[2]
+    dockerfile = (root / "backend/Dockerfile").read_text(encoding="utf-8")
+
+    assert dockerfile.count(
+        "FROM python:3.13-slim@sha256:"
+        "eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280"
+    ) == 2
+    assert "FFMPEG_APV_VERSION=9.0.1" in dockerfile
+    assert "FFMPEG_APV_SOURCE_SHA256=cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635" in dockerfile
+    assert "FFMPEG_APV_SIGNING_KEY_FINGERPRINT=FCF986EA15E6E293A5644F10B4322F04D67658D8" in dockerfile
+    assert "FFMPEG_APV_LICENSE_SHA256=2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af" in dockerfile
+    assert "FFMPEG_APV_COPYING_SHA256=246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30" in dockerfile
+    assert "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_APV_VERSION}.tar.xz" in dockerfile
+    assert "gpg --batch --verify ffmpeg.tar.xz.asc ffmpeg.tar.xz" in dockerfile
+    assert "--disable-network" in dockerfile
+    assert "--disable-autodetect" in dockerfile
+    assert "--disable-everything" in dockerfile
+    assert "--disable-ffnvcodec" in dockerfile
+    assert "--disable-nvdec" in dockerfile
+    assert "--disable-nvenc" in dockerfile
+    assert "--disable-cuvid" in dockerfile
+    for component in (
+        "--enable-decoder=apv",
+        "--enable-encoder=mjpeg",
+        "--enable-encoder=rawvideo",
+        "--enable-demuxer=mov",
+        "--enable-muxer=mp4",
+        "--enable-muxer=image2",
+        "--enable-muxer=rawvideo",
+        "--enable-protocol=fd",
+        "--enable-protocol=file",
+        "--enable-protocol=pipe",
+        "--enable-filter=select",
+        "--enable-filter=scale",
+        "--enable-filter=format",
+    ):
+        assert component in dockerfile
+    assert "grep -Eq '[[:space:]]apv[[:space:]]'" in dockerfile
+    assert "FFmpeg-LICENSE.md" in dockerfile
+    assert "FFmpeg-COPYING.LGPLv2.1" in dockerfile
+    assert "ffmpeg-apv-buildconf.txt" in dockerfile
+    assert "ffmpeg-apv-source-sha256.txt" in dockerfile
+    assert "ffmpeg-apv-dynamic-libraries.txt" in dockerfile
 
 
 def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:

@@ -194,11 +194,82 @@
         },
         {
           "name": "fcr:candidate-image-digest",
-          "value": "sha256:4b2f5282ef86c56fe8d192cb54196621003d826c4c8d35acfbbf5cc36d6eb6b3"
+          "value": "sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230"
         }
       ],
       "type": "library",
       "version": "7:7.1.5-0+deb13u1"
+    },
+    {
+      "bom-ref": "locked:source:ffmpeg-apv",
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"
+        },
+        {
+          "alg": "SHA-256",
+          "content": "b613a00005232a1245ace7080088781ac23a916119d3e5b0d6c042368eee0177"
+        },
+        {
+          "alg": "SHA-256",
+          "content": "e43a4982f352dadeb922814b46cfd42e954bf86872ddd4909e2a630de218c5c3"
+        },
+        {
+          "alg": "SHA-256",
+          "content": "07f0b3495714bb2153271a686fe5daa93195baab235fe2dcba92c1f939b45601"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "ffmpeg-apv",
+      "properties": [
+        {
+          "name": "fcr:distribution-form",
+          "value": "customer-container"
+        },
+        {
+          "name": "fcr:release-state",
+          "value": "BLOCKED"
+        },
+        {
+          "name": "fcr:source-sha256",
+          "value": "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"
+        },
+        {
+          "name": "fcr:signature-sha256",
+          "value": "b613a00005232a1245ace7080088781ac23a916119d3e5b0d6c042368eee0177"
+        },
+        {
+          "name": "fcr:signing-key-fingerprint",
+          "value": "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+        },
+        {
+          "name": "fcr:binary-artifact-sha256:amd64:ffmpeg",
+          "value": "e43a4982f352dadeb922814b46cfd42e954bf86872ddd4909e2a630de218c5c3"
+        },
+        {
+          "name": "fcr:binary-artifact-sha256:amd64:ffprobe",
+          "value": "07f0b3495714bb2153271a686fe5daa93195baab235fe2dcba92c1f939b45601"
+        },
+        {
+          "name": "fcr:candidate-image-digest",
+          "value": "sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230"
+        }
+      ],
+      "type": "library",
+      "version": "9.0.1"
     },
     {
       "bom-ref": "locked:python:prometheus-client",
@@ -10995,9 +11066,9 @@
         "value": "BLOCKED"
       }
     ],
-    "timestamp": "2026-08-01T11:06:07Z"
+    "timestamp": "2026-08-21T10:33:50Z"
   },
-  "serialNumber": "urn:uuid:3c5a1970-a586-4dbb-87f3-fba231809e62",
+  "serialNumber": "urn:uuid:22c826d7-f972-417a-801d-c2ccb412ef28",
   "specVersion": "1.6",
   "version": 1
 }

@@ -1,6 +1,6 @@
 # Third-party notices
 
-This file records the direct infrastructure additions for the repair-list
+This file records the direct infrastructure additions for the current
 candidate. It is not a commercial-release approval. The exact customer
 distribution bundle must include the generated SBOM, license index, candidate
 image digests, and the runtime build records from `/usr/share/fj-build/`.
@@ -41,17 +41,30 @@ image build pins Debian package `7:7.1.5-0+deb13u1`, rejects
 `--enable-nonfree`, and records `ffmpeg -version`, `ffmpeg -buildconf`,
 `ffprobe -version`, Debian package versions, and dynamic libraries.
 
-The 2026-08-01 local isolated candidate image
-`sha256:4b2f5282ef86c56fe8d192cb54196621003d826c4c8d35acfbbf5cc36d6eb6b3`
-reports `--enable-gpl`, no `--enable-nonfree`, shared libraries, and FFmpeg's
-GPL version 2 or later notice. This candidate and both distribution SBOMs are
-therefore classified as `GPL-2.0-or-later`; they must not be described as an
-LGPL build. The exact candidate image's `/usr/share/common-licenses/GPL-2` and
-`/usr/share/doc/ffmpeg/copyright` are preserved byte-for-byte in the generated
-license index under `locked:deb:ffmpeg`. The customer redistribution procedure
-for providing the corresponding GPL source is not approved. Target-region
-patent review for H.264, H.265, AAC, and any final codec combination is also
-incomplete, so commercial release remains blocked.
+The 2026-08-21 dual-runtime candidate image
+`sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230`
+contains two independently inventoried FFmpeg runtimes. Debian FFmpeg
+`7:7.1.5-0+deb13u1` reports `--enable-gpl`, no `--enable-nonfree`, shared
+libraries, and FFmpeg's GPL version 2 or later notice. Its exact
+`/usr/share/common-licenses/GPL-2` and `/usr/share/doc/ffmpeg/copyright` files
+are preserved byte-for-byte in the generated license index under
+`locked:deb:ffmpeg`.
+
+The isolated `/opt/ffmpeg-apv` runtime is built from the signed official FFmpeg
+9.0.1 source release for CPU-only APV decoding. Its source archive and detached
+signature are SHA-256 locked, the release-key fingerprint is locked, and the
+installed `ffmpeg` and `ffprobe` binaries are hashed for the verified
+architecture. Its build configuration disables network access, CUDA/NVIDIA,
+Vulkan, GPL, nonfree, and `liboapv` capabilities. The upstream FFmpeg license
+summary and LGPL-2.1 text are preserved byte-for-byte in the generated license
+index under `locked:source:ffmpeg-apv`.
+
+Both the SaaS and customer-container SBOMs list both runtimes because the same
+backend image physically contains them. This inventory is not customer
+redistribution approval. The GPL corresponding-source procedure, APV arm64
+verification, customer redistribution, target-region patent review for H.264,
+H.265, AAC, APV, and the final codec combination remain blocked; commercial
+release therefore remains blocked.
 
 ## Generated dependency notices
 

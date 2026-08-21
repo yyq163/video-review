@@ -292,7 +292,7 @@ def _probe_matches_source(probe: MediaProbeResult, claim: MediaDerivativeClaim) 
     )
 
 
-def _thumbnail_video_codec(probe: MediaProbeResult) -> str:
+def _source_video_codec(probe: MediaProbeResult) -> str:
     for stream_type, codec_name, _channels, _sample_rate in probe.av_streams:
         if stream_type == "video":
             return codec_name.lower()
@@ -308,6 +308,12 @@ def _thumbnail_codec_class(codec_name: str) -> str:
     if normalized in CUDA_THUMBNAIL_CODECS or normalized == "prores":
         return normalized
     return "other"
+
+
+def _media_transform_command(settings: Settings, source_video_codec: str | None) -> str:
+    if source_video_codec is not None and source_video_codec.lower() == "apv":
+        return settings.media_apv_transform_command
+    return settings.media_transform_command
 
 
 def _thumbnail_cuda_enabled(
@@ -337,6 +343,7 @@ def _thumbnail_input_options(
     ):
         return []
     return [
+        "-xerror",
         "-hwaccel",
         "cuda",
         "-hwaccel_device",
@@ -363,7 +370,7 @@ def _ffmpeg_command(
         else []
     )
     common = [
-        settings.media_transform_command,
+        _media_transform_command(settings, source_video_codec),
         "-hide_banner",
         "-nostdin",
         "-v",
@@ -432,7 +439,7 @@ def _ffmpeg_signature_command(
     use_hardware_acceleration: bool = True,
 ) -> list[str]:
     return [
-        settings.media_transform_command,
+        _media_transform_command(settings, source_video_codec),
         "-hide_banner",
         "-nostdin",
         "-v",
@@ -1152,10 +1159,7 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
             source_video_codec: str | None = None
             source_video_codec_class: str | None = None
             signature_acceleration: str | None = None
-            should_probe_source = claim.kind == "playback_faststart" or (
-                claim.kind == "thumbnail"
-                and settings.media_thumbnail_hwaccel == "cuda"
-            )
+            should_probe_source = claim.kind in {"playback_faststart", "thumbnail"}
             if should_probe_source:
                 try:
                     source_probe = probe_media(source_handle.fileno(), settings)
@@ -1172,8 +1176,8 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                         retryable=False,
                     )
                 source_av_streams = source_probe.av_streams
+                source_video_codec = _source_video_codec(source_probe)
                 if claim.kind == "thumbnail":
-                    source_video_codec = _thumbnail_video_codec(source_probe)
                     source_video_codec_class = _thumbnail_codec_class(source_video_codec)
             if claim.kind == "thumbnail" and thumbnail_signature is None:
                 thumbnail_signature, signature_acceleration = _capture_thumbnail_signature(
@@ -1230,6 +1234,7 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                             settings,
                             source_handle.fileno(),
                             staging_path,
+                            source_video_codec=source_video_codec,
                         )
                         os.lseek(source_handle.fileno(), 0, os.SEEK_SET)
                         _run_ffmpeg(

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import signal
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.modules.final_cut_review.domain.errors import ReviewError
+from backend.app.modules.review_media import service as media_service
 from backend.app.modules.review_media.service import parse_media_probe_output, validate_media_identity
 
 from .conftest import api_data, api_error, upload_init_request
@@ -139,6 +141,63 @@ def test_probe_result_records_complete_audio_video_stream_inventory() -> None:
         ("video", "h264", 0, 0),
         ("audio", "aac", 2, 48000),
     )
+
+
+@pytest.mark.parametrize(
+    "video_stream",
+    [
+        b'{"codec_type":"video","width":1920,"height":1080,"avg_frame_rate":"25/1"}',
+        b'{"codec_type":"video","codec_name":"unknown","width":1920,"height":1080,"avg_frame_rate":"25/1"}',
+        b'{"codec_type":"video","codec_name":"none","width":1920,"height":1080,"avg_frame_rate":"25/1"}',
+    ],
+)
+def test_probe_result_rejects_unidentified_video_codecs(video_stream: bytes) -> None:
+    with pytest.raises(ReviewError) as exc_info:
+        parse_media_probe_output(
+            b'{"streams":[' + video_stream + b'],"format":{"duration":"10"}}'
+        )
+    assert exc_info.value.code == "FILE_TYPE_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [
+        (8193, 1080),
+        (1080, 8193),
+        (8192, 4321),
+    ],
+)
+def test_probe_result_rejects_excessive_dimensions_or_pixel_count(width: int, height: int) -> None:
+    payload = (
+        '{"streams":[{"codec_type":"video","codec_name":"apv","width":'
+        f"{width},\"height\":{height},\"avg_frame_rate\":\"25/1\"}}],"
+        'format":{"duration":"10"}}'
+    ).encode()
+    with pytest.raises(ReviewError) as exc_info:
+        parse_media_probe_output(payload)
+    assert exc_info.value.code == "FILE_TYPE_NOT_ALLOWED"
+
+
+def test_probe_result_accepts_configured_dimension_and_pixel_boundaries() -> None:
+    result = parse_media_probe_output(
+        b'{"streams":[{"codec_type":"video","codec_name":"apv","width":8192,'
+        b'"height":4320,"avg_frame_rate":"25/1"}],"format":{"duration":"10"}}'
+    )
+    assert (result.width, result.height) == (8192, 4320)
+
+
+def test_probe_termination_targets_the_whole_new_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: list[tuple[int, int]] = []
+
+    class FakeProcess:
+        pid = 4321
+
+        def kill(self) -> None:
+            raise AssertionError("direct-child fallback must not run when killpg succeeds")
+
+    monkeypatch.setattr(media_service.os, "killpg", lambda pid, signum: observed.append((pid, signum)))
+    media_service._kill_probe_process_group(FakeProcess())  # type: ignore[arg-type]
+    assert observed == [(4321, signal.SIGKILL)]
 
 
 def test_unknown_brand_with_no_video_track_remains_fail_closed(

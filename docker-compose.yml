@@ -102,6 +102,9 @@ services:
 
   backend:
     image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    cpus: 4.0
+    mem_limit: 4g
+    pids_limit: 256
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -140,6 +143,9 @@ services:
       UPLOAD_STORAGE_LOW_WATERMARK_BYTES: ${UPLOAD_STORAGE_LOW_WATERMARK_BYTES:-1073741824}
       UPLOAD_FINALIZATION_LEASE_SECONDS: ${UPLOAD_FINALIZATION_LEASE_SECONDS:-7200}
       UPLOAD_RUNTIME_WORKER_COUNT: 1
+      MEDIA_PROBE_COMMAND: /opt/ffmpeg-apv/bin/ffprobe
+      MEDIA_MAX_DIMENSION: ${MEDIA_MAX_DIMENSION:-8192}
+      MEDIA_MAX_PIXELS: ${MEDIA_MAX_PIXELS:-35389440}
       MAX_PACKAGE_FILES: ${MAX_PACKAGE_FILES:-200}
       MAX_PACKAGE_BYTES: ${MAX_PACKAGE_BYTES:-53687091200}
       MAX_PENDING_PACKAGE_BUILDS: ${MAX_PENDING_PACKAGE_BUILDS:-8}
@@ -347,6 +353,9 @@ services:
 
   media-worker:
     image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    cpus: 8.0
+    mem_limit: 8g
+    pids_limit: 256
     restart: unless-stopped
     command:
       - python
@@ -366,9 +375,12 @@ services:
       DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
       STORAGE_ROOT: /data/storage
       PACKAGE_ROOT: /data/packages
-      MEDIA_PROBE_COMMAND: ffprobe
+      MEDIA_PROBE_COMMAND: /opt/ffmpeg-apv/bin/ffprobe
       MEDIA_PROBE_TIMEOUT_SECONDS: ${MEDIA_PROBE_TIMEOUT_SECONDS:-10}
-      MEDIA_TRANSFORM_COMMAND: ffmpeg
+      MEDIA_MAX_DIMENSION: ${MEDIA_MAX_DIMENSION:-8192}
+      MEDIA_MAX_PIXELS: ${MEDIA_MAX_PIXELS:-35389440}
+      MEDIA_TRANSFORM_COMMAND: /usr/bin/ffmpeg
+      MEDIA_APV_TRANSFORM_COMMAND: /opt/ffmpeg-apv/bin/ffmpeg
       MEDIA_TRANSFORM_TIMEOUT_SECONDS: ${MEDIA_TRANSFORM_TIMEOUT_SECONDS:-1800}
       MEDIA_TRANSFORM_OUTPUT_LIMIT_BYTES: ${MEDIA_TRANSFORM_OUTPUT_LIMIT_BYTES:-262144}
       MEDIA_WORKER_MAX_ATTEMPTS: ${MEDIA_WORKER_MAX_ATTEMPTS:-3}

@@ -317,7 +317,57 @@ def test_cuda_thumbnail_decode_is_codec_gated_and_keeps_prores_on_cpu(tmp_path: 
         "-hwaccel_device",
         "2",
     ]
+    assert "-xerror" in h264
+    assert "-xerror" in hevc
     assert "-hwaccel" not in prores
+    assert "-xerror" not in prores
+
+
+def test_apv_uses_the_isolated_native_runtime_without_changing_cuda_codecs(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        media_transform_command="/usr/bin/ffmpeg",
+        media_apv_transform_command="/opt/ffmpeg-apv/bin/ffmpeg",
+        media_thumbnail_hwaccel="cuda",
+    )
+    output = tmp_path / "output"
+
+    apv_thumbnail = _ffmpeg_command(
+        _claim(tmp_path),
+        settings,
+        10,
+        output.with_suffix(".jpg"),
+        source_video_codec="apv",
+    )
+    apv_signature = _ffmpeg_signature_command(
+        settings,
+        11,
+        source_video_codec="apv",
+    )
+    apv_playback = _ffmpeg_command(
+        _claim(tmp_path, "playback_faststart"),
+        settings,
+        12,
+        output.with_suffix(".mp4"),
+        source_video_codec="apv",
+    )
+    h264_thumbnail = _ffmpeg_command(
+        _claim(tmp_path),
+        settings,
+        13,
+        output.with_name("h264.jpg"),
+        source_video_codec="h264",
+    )
+
+    assert apv_thumbnail[0] == "/opt/ffmpeg-apv/bin/ffmpeg"
+    assert apv_signature[0] == "/opt/ffmpeg-apv/bin/ffmpeg"
+    assert apv_playback[0] == "/opt/ffmpeg-apv/bin/ffmpeg"
+    assert "-hwaccel" not in apv_thumbnail
+    assert "-hwaccel" not in apv_signature
+    assert "-xerror" not in apv_thumbnail
+    assert "-xerror" not in apv_signature
+    assert h264_thumbnail[0] == "/usr/bin/ffmpeg"
+    assert h264_thumbnail[h264_thumbnail.index("-hwaccel") + 1] == "cuda"
 
 
 def test_cuda_thumbnail_process_failure_retries_once_on_cpu(
@@ -559,6 +609,18 @@ def test_prepare_and_atomic_publish_preserve_original_and_cleanup_staging(
     monkeypatch.setattr(media_derivatives, "_run_ffmpeg", fake_transform)
     monkeypatch.setattr(media_derivatives, "_run_ffmpeg_capture", fake_signature)
     monkeypatch.setattr(media_derivatives, "_renew_lease", lambda *_args: True)
+    monkeypatch.setattr(
+        media_derivatives,
+        "probe_media",
+        lambda *_args: media_derivatives.MediaProbeResult(
+            duration_ms=claim.duration_ms,
+            width=claim.width,
+            height=claim.height,
+            fps_num=claim.fps_num,
+            fps_den=claim.fps_den,
+            av_streams=(("video", "h264", 0, 0),),
+        ),
+    )
 
     prepared = _prepare_derivative(claim, settings)
     assert source_path.read_bytes() == original
