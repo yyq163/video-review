@@ -42,7 +42,7 @@ image build pins Debian package `7:7.1.5-0+deb13u1`, rejects
 `ffprobe -version`, Debian package versions, and dynamic libraries.
 
 The 2026-08-21 dual-runtime candidate image
-`sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230`
+`sha256:9c760d529f98c09d01c82f501e3b867067848f50dddaf99750df4c31c259cba4`
 contains two independently inventoried FFmpeg runtimes. Debian FFmpeg
 `7:7.1.5-0+deb13u1` reports `--enable-gpl`, no `--enable-nonfree`, shared
 libraries, and FFmpeg's GPL version 2 or later notice. Its exact
@@ -58,6 +58,12 @@ architecture. Its build configuration disables network access, CUDA/NVIDIA,
 Vulkan, GPL, nonfree, and `liboapv` capabilities. The upstream FFmpeg license
 summary and LGPL-2.1 text are preserved byte-for-byte in the generated license
 index under `locked:source:ffmpeg-apv`.
+
+The candidate application account is locked to `app` with numeric identity
+`3001:3003`, matching the production NFS ownership contract. Both SBOMs record
+the UID and GID. Candidate verification resolves `app` through the image's
+passwd/group databases and runs the runtime checks under that exact numeric
+identity; a digest or identity mismatch fails closed.
 
 Both the SaaS and customer-container SBOMs list both runtimes because the same
 backend image physically contains them. This inventory is not customer

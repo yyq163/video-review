@@ -55,6 +55,21 @@ def file_sha256(path: str) -> str:
     return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
 
 
+def candidate_runtime_identity(lock: dict[str, Any]) -> tuple[int, int]:
+    uid = lock.get("candidate_runtime_uid")
+    gid = lock.get("candidate_runtime_gid")
+    require(
+        not isinstance(uid, bool)
+        and isinstance(uid, int)
+        and 0 < uid <= 2_147_483_647
+        and not isinstance(gid, bool)
+        and isinstance(gid, int)
+        and 0 < gid <= 2_147_483_647,
+        "candidate runtime UID/GID is invalid",
+    )
+    return uid, gid
+
+
 def binary_artifact_hashes(
     component: dict[str, Any],
 ) -> dict[tuple[str, str], str]:
@@ -335,6 +350,7 @@ def verify_observability() -> None:
 
 def verify_supply_chain() -> dict[str, int]:
     lock = load_json("compliance/component-lock.json")
+    candidate_uid, candidate_gid = candidate_runtime_identity(lock)
     require(
         lock["commercial_release_status"] == "BLOCKED",
         "commercial release was incorrectly approved",
@@ -623,7 +639,8 @@ def verify_supply_chain() -> dict[str, int]:
         and "locked:source:ffmpeg-apv" in third_party_notices
         and "9.0.1 source release" in third_party_notices
         and "LGPL-2.1" in third_party_notices
-        and "customer-container SBOMs list both runtimes" in third_party_notices,
+        and "customer-container SBOMs list both runtimes" in third_party_notices
+        and f"`{candidate_uid}:{candidate_gid}`" in third_party_notices,
         "third-party notices do not describe the locked dual FFmpeg candidate",
     )
     lock_generated_at = utc_timestamp(lock["generated_at"])
@@ -660,6 +677,12 @@ def verify_supply_chain() -> dict[str, int]:
         require(
             metadata_properties.get("fcr:commercial-release-status") == "BLOCKED",
             f"{name} SBOM commercial release status is not blocked",
+        )
+        require(
+            metadata_properties.get("fcr:candidate-runtime-uid") == str(candidate_uid)
+            and metadata_properties.get("fcr:candidate-runtime-gid")
+            == str(candidate_gid),
+            f"{name} SBOM candidate runtime UID/GID does not match component-lock",
         )
         expected_locked_refs = {
             f"locked:{component['type']}:{component['name']}"

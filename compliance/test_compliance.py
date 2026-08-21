@@ -49,6 +49,9 @@ def candidate_run_fake(
     lock = load_json("compliance/component-lock.json")
     components = {component["name"]: component for component in lock["components"]}
     apv = components["ffmpeg-apv"]
+    candidate_uid = int(lock["candidate_runtime_uid"])
+    candidate_gid = int(lock["candidate_runtime_gid"])
+    runtime_user = f"{candidate_uid}:{candidate_gid}"
     legacy_records = {
         "/usr/share/fj-build/ffmpeg-version.txt": b"ffmpeg version 7.1.2\n",
         "/usr/share/fj-build/ffmpeg-buildconf.txt": b"--enable-gpl\n",
@@ -90,11 +93,31 @@ def candidate_run_fake(
             "{{.Image}}",
         ):
             return str(lock["candidate_backend_image_digest"]).encode() + b"\n"
+        if args == (
+            "docker",
+            "exec",
+            "candidate",
+            "getent",
+            "passwd",
+            "app",
+        ):
+            passwd_uid = candidate_uid + 1 if tamper == "uid" else candidate_uid
+            return f"app:x:{passwd_uid}:{candidate_gid}:app:/app:/usr/sbin/nologin\n".encode()
+        if args == (
+            "docker",
+            "exec",
+            "candidate",
+            "getent",
+            "group",
+            "app",
+        ):
+            group_gid = candidate_gid + 1 if tamper == "gid" else candidate_gid
+            return f"app:x:{group_gid}:\n".encode()
         expected_prefix = (
             "docker",
             "exec",
             "--user",
-            verify_candidate_image.APP_USER,
+            runtime_user,
             "candidate",
         )
         if args[:5] != expected_prefix:
@@ -207,6 +230,8 @@ def test_both_ffmpeg_runtimes_are_fully_bound_in_both_sboms() -> None:
         if component["name"] == "ffmpeg-apv"
     )
     candidate_digest = lock["candidate_backend_image_digest"]
+    assert lock["candidate_runtime_uid"] == 3001
+    assert lock["candidate_runtime_gid"] == 3003
     assert ffmpeg_lock["candidate_image_digest"] == candidate_digest
     assert apv_lock["candidate_image_digest"] == candidate_digest
     assert set(ffmpeg_lock["artifact_hashes"]) == {"amd64", "arm64"}
@@ -280,6 +305,11 @@ def test_both_ffmpeg_runtimes_are_fully_bound_in_both_sboms() -> None:
         assert serial_number not in serial_numbers
         serial_numbers.add(serial_number)
         assert sbom["version"] == 1
+        metadata_properties = {
+            item["name"]: item["value"] for item in sbom["metadata"]["properties"]
+        }
+        assert metadata_properties["fcr:candidate-runtime-uid"] == "3001"
+        assert metadata_properties["fcr:candidate-runtime-gid"] == "3003"
         ffmpeg = next(
             component
             for component in sbom["components"]
@@ -332,6 +362,18 @@ def test_generator_emits_apv_identity_for_both_distributions_and_licenses(
     lock = load_json("compliance/component-lock.json")
     candidate_digest = lock["candidate_backend_image_digest"]
     for distribution in ("saas", "customer-container"):
+        sbom = generate_compliance_artifacts._candidate_sbom(
+            distribution,
+            [],
+            [],
+            generated_at="2026-08-21T00:00:00Z",
+            serial_number=uuid.UUID(int=1),
+        )
+        metadata_properties = {
+            item["name"]: item["value"] for item in sbom["metadata"]["properties"]
+        }
+        assert metadata_properties["fcr:candidate-runtime-uid"] == "3001"
+        assert metadata_properties["fcr:candidate-runtime-gid"] == "3003"
         components = generate_compliance_artifacts._infrastructure_components(
             distribution
         )
@@ -591,6 +633,32 @@ def test_supply_chain_hard_gate_rejects_duplicate_property_names(
         verify_compliance.verify_supply_chain()
 
 
+@pytest.mark.parametrize(
+    "property_name",
+    ["fcr:candidate-runtime-uid", "fcr:candidate-runtime-gid"],
+)
+def test_supply_chain_hard_gate_rejects_wrong_sbom_runtime_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    property_name: str,
+) -> None:
+    original_load_json = verify_compliance.load_json
+
+    def tampered_load_json(path: str) -> object:
+        payload = copy.deepcopy(original_load_json(path))
+        if path == "compliance/sbom/saas.cdx.json":
+            property_item = next(
+                item
+                for item in payload["metadata"]["properties"]
+                if item["name"] == property_name
+            )
+            property_item["value"] = "10001"
+        return payload
+
+    monkeypatch.setattr(verify_compliance, "load_json", tampered_load_json)
+    with pytest.raises(RuntimeError, match="runtime UID/GID does not match"):
+        verify_compliance.verify_supply_chain()
+
+
 def test_supply_chain_hard_gate_rejects_missing_apv_binary_hash_role(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -645,6 +713,7 @@ def test_candidate_verifier_checks_both_runtimes_and_unprivileged_apv(
     result = verify_candidate_image.verify("candidate")
 
     assert result["status"] == "PASS_CANDIDATE_IMAGE"
+    assert result["runtime_identity"] == {"user": "app", "uid": 3001, "gid": 3003}
     assert set(result["runtimes"]) == {"ffmpeg", "ffmpeg-apv"}
     assert result["runtimes"]["ffmpeg-apv"]["binary_sha256"] == {
         "ffmpeg": "e43a4982f352dadeb922814b46cfd42e954bf86872ddd4909e2a630de218c5c3",
@@ -660,8 +729,24 @@ def test_candidate_verifier_checks_both_runtimes_and_unprivileged_apv(
     assert (
         "docker",
         "exec",
+        "candidate",
+        "getent",
+        "passwd",
+        "app",
+    ) in calls
+    assert (
+        "docker",
+        "exec",
+        "candidate",
+        "getent",
+        "group",
+        "app",
+    ) in calls
+    assert (
+        "docker",
+        "exec",
         "--user",
-        verify_candidate_image.APP_USER,
+        "3001:3003",
         "candidate",
         verify_candidate_image.APV_BINARIES["ffmpeg"],
         "-hide_banner",
@@ -672,12 +757,13 @@ def test_candidate_verifier_checks_both_runtimes_and_unprivileged_apv(
             "docker",
             "exec",
             "--user",
-            verify_candidate_image.APP_USER,
+            "3001:3003",
             "candidate",
             "test",
             "-x",
             binary_path,
         ) in calls
+    assert all("10001:10001" not in command for call in calls for command in call)
 
 
 def test_candidate_verifier_rejects_wrong_running_image_digest(
@@ -721,9 +807,11 @@ def test_candidate_verifier_rejects_wrong_running_image_digest(
         ("decoder", "decoder is absent"),
         ("license", "license material mismatch"),
         ("version", "APV ffmpeg version mismatch"),
+        ("uid", "app UID/GID does not match"),
+        ("gid", "app UID/GID does not match"),
     ],
 )
-def test_candidate_verifier_rejects_tampered_apv_evidence(
+def test_candidate_verifier_rejects_tampered_candidate_evidence(
     monkeypatch: pytest.MonkeyPatch,
     tamper: str,
     message: str,

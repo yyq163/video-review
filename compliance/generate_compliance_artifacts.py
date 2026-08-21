@@ -319,6 +319,23 @@ def _sha256_value(value: object) -> str:
     return normalized
 
 
+def _candidate_runtime_identity(lock: dict[str, Any]) -> tuple[int, int]:
+    uid = lock.get("candidate_runtime_uid")
+    gid = lock.get("candidate_runtime_gid")
+    if (
+        isinstance(uid, bool)
+        or not isinstance(uid, int)
+        or uid <= 0
+        or uid > 2_147_483_647
+        or isinstance(gid, bool)
+        or not isinstance(gid, int)
+        or gid <= 0
+        or gid > 2_147_483_647
+    ):
+        raise RuntimeError("invalid candidate runtime UID/GID in component lock")
+    return uid, gid
+
+
 def _candidate_sbom(
     distribution_form: str,
     python_components: list[dict[str, Any]],
@@ -327,6 +344,10 @@ def _candidate_sbom(
     generated_at: str,
     serial_number: uuid.UUID,
 ) -> dict[str, Any]:
+    lock = json.loads(
+        (COMPLIANCE_ROOT / "component-lock.json").read_text(encoding="utf-8")
+    )
+    candidate_uid, candidate_gid = _candidate_runtime_identity(lock)
     components = [
         *_infrastructure_components(distribution_form),
         *python_components,
@@ -348,6 +369,14 @@ def _candidate_sbom(
             "properties": [
                 {"name": "fcr:inventory-kind", "value": "source-candidate"},
                 {"name": "fcr:commercial-release-status", "value": "BLOCKED"},
+                {
+                    "name": "fcr:candidate-runtime-uid",
+                    "value": str(candidate_uid),
+                },
+                {
+                    "name": "fcr:candidate-runtime-gid",
+                    "value": str(candidate_gid),
+                },
             ],
         },
         "components": components,

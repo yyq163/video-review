@@ -229,7 +229,7 @@
         },
         {
           "name": "fcr:candidate-image-digest",
-          "value": "sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230"
+          "value": "sha256:9c760d529f98c09d01c82f501e3b867067848f50dddaf99750df4c31c259cba4"
         }
       ],
       "type": "library",
@@ -300,7 +300,7 @@
         },
         {
           "name": "fcr:candidate-image-digest",
-          "value": "sha256:a15bc6edec3024d182f177558ce916e55b9f42acd46c52abefa2533b1a29f230"
+          "value": "sha256:9c760d529f98c09d01c82f501e3b867067848f50dddaf99750df4c31c259cba4"
         }
       ],
       "type": "library",
@@ -11099,11 +11099,19 @@
       {
         "name": "fcr:commercial-release-status",
         "value": "BLOCKED"
+      },
+      {
+        "name": "fcr:candidate-runtime-uid",
+        "value": "3001"
+      },
+      {
+        "name": "fcr:candidate-runtime-gid",
+        "value": "3003"
       }
     ],
-    "timestamp": "2026-08-21T10:33:50Z"
+    "timestamp": "2026-08-21T11:08:44Z"
   },
-  "serialNumber": "urn:uuid:a1d4b9ea-e019-4915-8a66-ac1d40b5ce73",
+  "serialNumber": "urn:uuid:d6b78527-38af-4a57-8b2a-856b4c6cf231",
   "specVersion": "1.6",
   "version": 1
 }

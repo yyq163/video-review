@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_USER = "10001:10001"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SIGNING_KEY_FINGERPRINT_PATTERN = re.compile(r"^[0-9A-F]{40}$")
 LEGACY_BUILD_RECORDS = {
@@ -98,6 +97,23 @@ def _normalized_sha256(value: object) -> str:
     return normalized
 
 
+def _candidate_runtime_identity(lock: dict[str, Any]) -> tuple[int, int]:
+    uid = lock.get("candidate_runtime_uid")
+    gid = lock.get("candidate_runtime_gid")
+    if (
+        isinstance(uid, bool)
+        or not isinstance(uid, int)
+        or uid <= 0
+        or uid > 2_147_483_647
+        or isinstance(gid, bool)
+        or not isinstance(gid, int)
+        or gid <= 0
+        or gid > 2_147_483_647
+    ):
+        raise RuntimeError("candidate runtime UID/GID is invalid")
+    return uid, gid
+
+
 def _docker_exec(
     container: str,
     *command: str,
@@ -110,14 +126,47 @@ def _docker_exec(
     return _run(*arguments)
 
 
+def _verify_app_identity(container: str, uid: int, gid: int) -> str:
+    passwd_lines = (
+        _docker_exec(container, "getent", "passwd", "app")
+        .decode("utf-8")
+        .strip()
+        .splitlines()
+    )
+    group_lines = (
+        _docker_exec(container, "getent", "group", "app")
+        .decode("utf-8")
+        .strip()
+        .splitlines()
+    )
+    if len(passwd_lines) != 1 or len(group_lines) != 1:
+        raise RuntimeError(
+            "candidate app passwd/group identity is missing or ambiguous"
+        )
+    passwd_fields = passwd_lines[0].split(":")
+    group_fields = group_lines[0].split(":")
+    if (
+        len(passwd_fields) != 7
+        or passwd_fields[0] != "app"
+        or passwd_fields[2] != str(uid)
+        or passwd_fields[3] != str(gid)
+        or len(group_fields) != 4
+        or group_fields[0] != "app"
+        or group_fields[2] != str(gid)
+    ):
+        raise RuntimeError("candidate app UID/GID does not match component-lock.json")
+    return f"{uid}:{gid}"
+
+
 def _read_build_records(
     container: str,
     paths: dict[str, str],
+    runtime_user: str,
 ) -> tuple[dict[str, bytes], dict[str, str]]:
     content_by_name: dict[str, bytes] = {}
     hashes: dict[str, str] = {}
     for name, path in paths.items():
-        content = _docker_exec(container, "cat", path, user=APP_USER)
+        content = _docker_exec(container, "cat", path, user=runtime_user)
         if not content:
             raise RuntimeError(f"candidate build record is empty: {name}")
         content_by_name[name] = content
@@ -128,6 +177,7 @@ def _read_build_records(
 def _verify_license_materials(
     container: str,
     component: dict[str, Any],
+    runtime_user: str,
 ) -> dict[str, str]:
     material_hashes: dict[str, str] = {}
     for material in component.get("license_materials", []):
@@ -139,7 +189,7 @@ def _verify_license_materials(
             container,
             "cat",
             source.removeprefix(prefix),
-            user=APP_USER,
+            user=runtime_user,
         )
         digest = _sha256(container_content)
         expected = _normalized_sha256(material["sha256"])
@@ -155,10 +205,12 @@ def _verify_license_materials(
 def _verify_legacy_ffmpeg(
     container: str,
     component: dict[str, Any],
+    runtime_user: str,
 ) -> dict[str, object]:
     record_content, record_hashes = _read_build_records(
         container,
         LEGACY_BUILD_RECORDS,
+        runtime_user,
     )
     buildconf = record_content["ffmpeg-buildconf.txt"].decode("utf-8")
     packages = record_content["ffmpeg-debian-packages.tsv"].decode("utf-8")
@@ -171,12 +223,12 @@ def _verify_legacy_ffmpeg(
         raise RuntimeError("candidate FFmpeg has an unresolved dynamic library")
     for binary_name in ("ffmpeg", "ffprobe"):
         binary_path = f"/usr/bin/{binary_name}"
-        _docker_exec(container, "test", "-x", binary_path, user=APP_USER)
+        _docker_exec(container, "test", "-x", binary_path, user=runtime_user)
         version_output = _docker_exec(
             container,
             binary_path,
             "-version",
-            user=APP_USER,
+            user=runtime_user,
         ).decode("utf-8")
         if f"{binary_name} version" not in version_output:
             raise RuntimeError(f"candidate {binary_name} version output is invalid")
@@ -186,6 +238,7 @@ def _verify_legacy_ffmpeg(
         "license_material_sha256": _verify_license_materials(
             container,
             component,
+            runtime_user,
         ),
     }
 
@@ -193,10 +246,12 @@ def _verify_legacy_ffmpeg(
 def _verify_apv_ffmpeg(
     container: str,
     component: dict[str, Any],
+    runtime_user: str,
 ) -> dict[str, object]:
     record_content, record_hashes = _read_build_records(
         container,
         APV_BUILD_RECORDS,
+        runtime_user,
     )
     buildconf = record_content["ffmpeg-apv-buildconf.txt"].decode("utf-8")
     if not all(flag in buildconf for flag in APV_REQUIRED_BUILD_FLAGS) or any(
@@ -214,7 +269,9 @@ def _verify_apv_ffmpeg(
         raise RuntimeError("candidate APV FFmpeg dynamic-library record is invalid")
 
     machine = (
-        _docker_exec(container, "uname", "-m", user=APP_USER).decode("ascii").strip()
+        _docker_exec(container, "uname", "-m", user=runtime_user)
+        .decode("ascii")
+        .strip()
     )
     architecture = MACHINE_ARCHITECTURES.get(machine)
     if architecture is None:
@@ -230,12 +287,12 @@ def _verify_apv_ffmpeg(
 
     binary_hashes: dict[str, str] = {}
     for binary_name, binary_path in APV_BINARIES.items():
-        _docker_exec(container, "test", "-x", binary_path, user=APP_USER)
+        _docker_exec(container, "test", "-x", binary_path, user=runtime_user)
         version_output = _docker_exec(
             container,
             binary_path,
             "-version",
-            user=APP_USER,
+            user=runtime_user,
         ).decode("utf-8")
         if f"{binary_name} version {component['version']}" not in version_output:
             raise RuntimeError(f"candidate APV {binary_name} version mismatch")
@@ -244,7 +301,7 @@ def _verify_apv_ffmpeg(
                 container,
                 "sha256sum",
                 binary_path,
-                user=APP_USER,
+                user=runtime_user,
             )
             .decode("ascii")
             .split()
@@ -261,7 +318,7 @@ def _verify_apv_ffmpeg(
         APV_BINARIES["ffmpeg"],
         "-hide_banner",
         "-decoders",
-        user=APP_USER,
+        user=runtime_user,
     ).decode("utf-8")
     if re.search(r"(?m)^\s*V\S*\s+apv\s", decoder_output) is None:
         raise RuntimeError("candidate APV FFmpeg decoder is absent")
@@ -284,6 +341,7 @@ def _verify_apv_ffmpeg(
         "license_material_sha256": _verify_license_materials(
             container,
             component,
+            runtime_user,
         ),
     }
 
@@ -300,6 +358,7 @@ def verify(container: str) -> dict[str, object]:
         raise RuntimeError("candidate component lock contains duplicate names")
     ffmpeg = components["ffmpeg"]
     ffmpeg_apv = components["ffmpeg-apv"]
+    candidate_uid, candidate_gid = _candidate_runtime_identity(lock)
     expected_image_id = str(lock.get("candidate_backend_image_digest", ""))
     if (
         ffmpeg.get("candidate_image_digest") != expected_image_id
@@ -316,14 +375,24 @@ def verify(container: str) -> dict[str, object]:
         raise RuntimeError(
             "running candidate image digest does not match component-lock.json"
         )
+    runtime_user = _verify_app_identity(container, candidate_uid, candidate_gid)
 
     return {
         "status": "PASS_CANDIDATE_IMAGE",
         "container": container,
         "image_digest": image_id,
+        "runtime_identity": {
+            "user": "app",
+            "uid": candidate_uid,
+            "gid": candidate_gid,
+        },
         "runtimes": {
-            "ffmpeg": _verify_legacy_ffmpeg(container, ffmpeg),
-            "ffmpeg-apv": _verify_apv_ffmpeg(container, ffmpeg_apv),
+            "ffmpeg": _verify_legacy_ffmpeg(container, ffmpeg, runtime_user),
+            "ffmpeg-apv": _verify_apv_ffmpeg(
+                container,
+                ffmpeg_apv,
+                runtime_user,
+            ),
         },
     }
 
