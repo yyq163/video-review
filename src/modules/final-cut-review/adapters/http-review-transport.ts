@@ -1,5 +1,6 @@
 import {
   FinalCutReviewHttpError,
+  parseFinalCutReviewResponse,
   type CommandEnvelope,
   type CommandType,
   type ErrorEnvelope,
@@ -405,7 +406,7 @@ export class HttpReviewTransport {
 
   private async fetchEnvelope<T>(path: string, init: RequestInit = {}): Promise<Envelope<T>> {
     const response = await fetch(`${this.baseUrl}${path}`, init);
-    const body = (await response.json()) as Envelope<T> | ErrorEnvelope;
+    const body = await parseFinalCutReviewResponse<T>(response);
     if (!response.ok) {
       const error = (body as ErrorEnvelope).error;
       if (error) {

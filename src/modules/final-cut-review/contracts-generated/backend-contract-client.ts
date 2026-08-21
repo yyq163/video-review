@@ -22,6 +22,20 @@ export class FinalCutReviewHttpError extends Error {
   }
 }
 
+export async function parseFinalCutReviewResponse<T>(
+  response: Response,
+): Promise<Envelope<T> | ErrorEnvelope> {
+  const responseText = await response.text();
+  try {
+    return JSON.parse(responseText) as Envelope<T> | ErrorEnvelope;
+  } catch {
+    if (!response.ok) {
+      throw new Error(`服务暂时不可用（HTTP ${response.status}），请稍后重试。`);
+    }
+    throw new Error("服务响应格式无效，请重试。");
+  }
+}
+
 export async function finalCutReviewRequest<T>(
   baseUrl: string,
   path: string,
@@ -34,7 +48,7 @@ export async function finalCutReviewRequest<T>(
       ...(init.headers ?? {}),
     },
   });
-  const body = (await response.json()) as Envelope<T> | ErrorEnvelope;
+  const body = await parseFinalCutReviewResponse<T>(response);
   if (!response.ok) {
     const error = (body as ErrorEnvelope).error;
     if (error) {

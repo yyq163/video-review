@@ -327,6 +327,26 @@ describe('generated HTTP envelope client', () => {
     }
   });
 
+  it('does not expose an HTML gateway body as an unexpected JSON token error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('<html><h1>504 Gateway Time-out</h1></html>', {
+          status: 504,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      ),
+    );
+
+    try {
+      await finalCutReviewRequest('https://review.example', '/api/v1/final-cut-review/projects');
+      throw new Error('expected request to fail');
+    } catch (error) {
+      expect(error).toMatchObject({ message: '服务暂时不可用（HTTP 504），请稍后重试。' });
+      expect(String(error)).not.toMatch(/Unexpected token|<html>/);
+    }
+  });
+
   it('wires runtime to the generated HTTP adapter when an API base URL is configured', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
