@@ -229,7 +229,7 @@
         },
         {
           "name": "fcr:candidate-image-digest",
-          "value": "sha256:0253eb746fa6ee012e263b02b2f233cfbf3743d1da82d439f020c7a637dc141b"
+          "value": "sha256:290f16a94d21dcf87e666f2584775276ef21a2259d9acb45df6e61871bb9e331"
         }
       ],
       "type": "library",
@@ -300,7 +300,7 @@
         },
         {
           "name": "fcr:candidate-image-digest",
-          "value": "sha256:0253eb746fa6ee012e263b02b2f233cfbf3743d1da82d439f020c7a637dc141b"
+          "value": "sha256:290f16a94d21dcf87e666f2584775276ef21a2259d9acb45df6e61871bb9e331"
         }
       ],
       "type": "library",
@@ -11109,9 +11109,9 @@
         "value": "3003"
       }
     ],
-    "timestamp": "2026-08-21T13:02:58Z"
+    "timestamp": "2026-08-21T13:19:38Z"
   },
-  "serialNumber": "urn:uuid:19d52f3f-0868-490d-b9fe-6c00e1f5217d",
+  "serialNumber": "urn:uuid:a023fb1c-01e3-4f23-83bb-33b9021a71a4",
   "specVersion": "1.6",
   "version": 1
 }

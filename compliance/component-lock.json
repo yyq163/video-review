@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-21T13:02:32Z",
-  "candidate_backend_image_digest": "sha256:0253eb746fa6ee012e263b02b2f233cfbf3743d1da82d439f020c7a637dc141b",
+  "generated_at": "2026-08-21T13:19:09Z",
+  "candidate_backend_image_digest": "sha256:290f16a94d21dcf87e666f2584775276ef21a2259d9acb45df6e61871bb9e331",
   "candidate_runtime_uid": 3001,
   "candidate_runtime_gid": 3003,
   "commercial_release_status": "BLOCKED",
@@ -71,7 +71,7 @@
         "amd64": "sha256:8669bc77e55393c14e0dd257ba9a916007cb6da0e1074c9b5e1d53812024f2af",
         "arm64": "sha256:6ec9c42306df30803c731c9e53300627257fd59d2f5a80b394c14cec5fd6d5ef"
       },
-      "candidate_image_digest": "sha256:0253eb746fa6ee012e263b02b2f233cfbf3743d1da82d439f020c7a637dc141b",
+      "candidate_image_digest": "sha256:290f16a94d21dcf87e666f2584775276ef21a2259d9acb45df6e61871bb9e331",
       "license": "GPL-2.0-or-later",
       "license_materials": [
         {
@@ -102,7 +102,7 @@
           "ffprobe": "sha256:0074d6b2f80804b33b7f1d531a74d25d1741ba77de6d55c4ef7d8735744c86d9"
         }
       },
-      "candidate_image_digest": "sha256:0253eb746fa6ee012e263b02b2f233cfbf3743d1da82d439f020c7a637dc141b",
+      "candidate_image_digest": "sha256:290f16a94d21dcf87e666f2584775276ef21a2259d9acb45df6e61871bb9e331",
       "license": "LGPL-2.1-or-later",
       "license_materials": [
         {

@@ -42,7 +42,7 @@ image build pins Debian package `7:7.1.5-0+deb13u1`, rejects
 `ffprobe -version`, Debian package versions, and dynamic libraries.
 
 The 2026-08-21 dual-runtime candidate image
-`sha256:0253eb746fa6ee012e263b02b2f233cfbf3743d1da82d439f020c7a637dc141b`
+`sha256:290f16a94d21dcf87e666f2584775276ef21a2259d9acb45df6e61871bb9e331`
 contains two independently inventoried FFmpeg runtimes. Debian FFmpeg
 `7:7.1.5-0+deb13u1` reports `--enable-gpl`, no `--enable-nonfree`, shared
 libraries, and FFmpeg's GPL version 2 or later notice. Its exact
