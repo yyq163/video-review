@@ -8,6 +8,7 @@ import os
 import signal
 import stat
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -16,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import BinaryIO, Never
+from typing import IO, BinaryIO, Never
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -56,11 +57,13 @@ SUPPORTED_KINDS = frozenset({"playback_faststart", "thumbnail"})
 MEDIA_WORKER_BATCH_SIZE = 1
 MEDIA_WORKER_MAX_SECONDS = 86_400
 PROCESS_POLL_SECONDS = 1.0
+PIPELINE_POLL_SECONDS = 0.1
 PROCESS_TERMINATE_GRACE_SECONDS = 1.0
 HASH_CHUNK_BYTES = 1024 * 1024
 HASH_LEASE_REFRESH_SECONDS = 30.0
 WORKER_HEARTBEAT_REFRESH_SECONDS = 30.0
 CUDA_THUMBNAIL_CODECS = frozenset({"h264", "hevc"})
+APV_H264_PLAYBACK_VARIANT = "apv-h264-v1"
 
 
 class MediaDerivativeError(RuntimeError):
@@ -148,8 +151,14 @@ def _output_file_id(
     task_id: str,
     kind: str,
     thumbnail_frame_ms: int = THUMBNAIL_FRAME_ZERO_MS,
+    playback_variant: str | None = None,
 ) -> str:
-    variant = "" if kind != "thumbnail" or thumbnail_frame_ms == 0 else f"\0frame-ms={thumbnail_frame_ms}"
+    if kind == "thumbnail" and thumbnail_frame_ms != 0:
+        variant = f"\0frame-ms={thumbnail_frame_ms}"
+    elif kind == "playback_faststart" and playback_variant is not None:
+        variant = f"\0variant={playback_variant}"
+    else:
+        variant = ""
     digest = hashlib.sha256(f"media-derivative-v1\0{task_id}\0{kind}{variant}".encode()).hexdigest()
     return f"media_{digest[:32]}"
 
@@ -303,6 +312,17 @@ def _source_video_codec(probe: MediaProbeResult) -> str:
     )
 
 
+def _apv_h264_expected_streams(
+    source_av_streams: tuple[tuple[str, str, int, int], ...],
+) -> tuple[tuple[str, str, int, int], ...]:
+    audio_streams = tuple(
+        ("audio", "aac", channels, sample_rate)
+        for stream_type, _codec_name, channels, sample_rate in source_av_streams
+        if stream_type == "audio"
+    )
+    return (("video", "h264", 0, 0), *audio_streams)
+
+
 def _thumbnail_codec_class(codec_name: str) -> str:
     normalized = codec_name.lower()
     if normalized in CUDA_THUMBNAIL_CODECS or normalized == "prores":
@@ -431,6 +451,95 @@ def _ffmpeg_command(
     raise MediaDerivativeError("MEDIA_DERIVATIVE_KIND_INVALID", "transform", retryable=False)
 
 
+def _apv_nut_decoder_command(settings: Settings, source_descriptor: int) -> list[str]:
+    return [
+        settings.media_apv_transform_command,
+        "-hide_banner",
+        "-nostdin",
+        "-v",
+        "error",
+        "-filter_threads",
+        "2",
+        "-xerror",
+        "-copyts",
+        "-start_at_zero",
+        "-protocol_whitelist",
+        "fd,file",
+        "-fd",
+        str(source_descriptor),
+        "-threads",
+        "2",
+        "-i",
+        "fd:",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "rawvideo",
+        "-pix_fmt",
+        "yuv420p",
+        "-fps_mode:v",
+        "passthrough",
+        "-c:a",
+        "copy",
+        "-f",
+        "nut",
+        "pipe:1",
+    ]
+
+
+def _apv_h264_encoder_command(settings: Settings, output_path: Path) -> list[str]:
+    return [
+        settings.media_transform_command,
+        "-hide_banner",
+        "-nostdin",
+        "-v",
+        "error",
+        "-filter_threads",
+        "2",
+        "-xerror",
+        "-y",
+        "-i",
+        "pipe:0",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-c:v",
+        "libx264",
+        "-threads:v",
+        "2",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-tag:v",
+        "avc1",
+        "-fps_mode:v",
+        "passthrough",
+        "-c:a",
+        "aac",
+        "-threads:a",
+        "1",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        "-write_tmcd",
+        "0",
+        "-f",
+        "mp4",
+        str(output_path),
+    ]
+
+
 def _ffmpeg_signature_command(
     settings: Settings,
     source_descriptor: int,
@@ -511,6 +620,248 @@ def _read_process_output(
         with state.lock:
             state.failed = True
         _signal_process_group(process, signal.SIGKILL)
+
+
+def _run_apv_playback_pipeline(
+    decoder_command: list[str],
+    encoder_command: list[str],
+    settings: Settings,
+    source_descriptor: int,
+    output_descriptor: int,
+    renew_lease: Callable[[], bool],
+) -> None:
+    processes: list[subprocess.Popen[bytes]] = []
+    process_lock = threading.Lock()
+    state = _ProcessOutputState(limit=settings.media_transform_output_limit_bytes)
+    readers: list[threading.Thread] = []
+    streams: list[IO[bytes]] = []
+    pipeline_group_id: int | None = None
+    group_anchor: subprocess.Popen[bytes] | None = None
+    encoder: subprocess.Popen[bytes] | None = None
+    decoder: subprocess.Popen[bytes] | None = None
+
+    def abort_pipeline(signum: int = signal.SIGKILL) -> None:
+        with process_lock:
+            active = tuple(processes)
+            group_id = pipeline_group_id
+        if group_id is not None:
+            try:
+                os.killpg(group_id, signum)
+                return
+            except (OSError, ProcessLookupError):
+                pass
+        for process in active:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+
+    def read_stderr(stream: IO[bytes]) -> None:
+        try:
+            while True:
+                chunk = stream.read(8192)
+                if not chunk:
+                    return
+                exceeded = False
+                with state.lock:
+                    state.total += len(chunk)
+                    if state.total > state.limit:
+                        state.too_large = True
+                        exceeded = True
+                if exceeded:
+                    abort_pipeline()
+                    return
+        except (OSError, ValueError):
+            with state.lock:
+                state.failed = True
+            abort_pipeline()
+
+    pending_error: BaseException | None = None
+    timed_out = False
+    lease_lost = False
+    file_too_large = False
+    termination_failed = False
+    playback_budget = settings.media_playback_max_bytes
+    try:
+        try:
+            group_anchor = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; os.read(0, 1)",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                close_fds=True,
+                process_group=0,
+            )
+        except OSError:
+            raise MediaDerivativeError(
+                "MEDIA_TRANSFORM_UNAVAILABLE",
+                "transform",
+                retryable=True,
+            ) from None
+        with process_lock:
+            processes.append(group_anchor)
+            pipeline_group_id = group_anchor.pid
+        try:
+            encoder = subprocess.Popen(
+                encoder_command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                shell=False,
+                close_fds=True,
+                process_group=pipeline_group_id,
+            )
+        except OSError:
+            raise MediaDerivativeError(
+                "MEDIA_TRANSFORM_UNAVAILABLE",
+                "transform",
+                retryable=True,
+            ) from None
+        with process_lock:
+            processes.append(encoder)
+        if encoder.stdin is None or encoder.stderr is None:
+            abort_pipeline()
+            raise MediaDerivativeError(
+                "MEDIA_TRANSFORM_UNAVAILABLE",
+                "transform",
+                retryable=True,
+            )
+        try:
+            decoder = subprocess.Popen(
+                decoder_command,
+                stdin=subprocess.DEVNULL,
+                stdout=encoder.stdin,
+                stderr=subprocess.PIPE,
+                shell=False,
+                close_fds=True,
+                pass_fds=(source_descriptor,),
+                process_group=pipeline_group_id,
+            )
+        except OSError:
+            abort_pipeline()
+            raise MediaDerivativeError(
+                "MEDIA_TRANSFORM_UNAVAILABLE",
+                "transform",
+                retryable=True,
+            ) from None
+        with process_lock:
+            processes.append(decoder)
+        encoder.stdin.close()
+        if decoder.stderr is None:
+            abort_pipeline()
+            raise MediaDerivativeError(
+                "MEDIA_TRANSFORM_UNAVAILABLE",
+                "transform",
+                retryable=True,
+            )
+        streams = [encoder.stderr, decoder.stderr]
+        readers = [
+            threading.Thread(
+                target=read_stderr,
+                args=(stream,),
+                daemon=True,
+                name=f"media-apv-pipeline-stderr-{index}",
+            )
+            for index, stream in enumerate(streams)
+        ]
+        for reader in readers:
+            reader.start()
+
+        deadline = time.monotonic() + settings.media_transform_timeout_seconds
+        renew_interval = max(1.0, min(30.0, settings.media_worker_lease_seconds / 3))
+        next_renewal = time.monotonic() + renew_interval
+        while True:
+            now = time.monotonic()
+            decoder_status = decoder.poll()
+            encoder_status = encoder.poll()
+            try:
+                output_size = os.fstat(output_descriptor).st_size
+            except OSError:
+                raise MediaDerivativeError(
+                    "MEDIA_TRANSFORM_OUTPUT_UNAVAILABLE",
+                    "transform",
+                    retryable=True,
+                ) from None
+            if output_size > playback_budget:
+                file_too_large = True
+                abort_pipeline()
+                break
+            if decoder_status is not None and encoder_status is not None:
+                break
+            if decoder_status is not None and decoder_status != 0 and encoder_status is None:
+                abort_pipeline()
+                break
+            if encoder_status is not None and decoder_status is None:
+                abort_pipeline()
+                break
+            with state.lock:
+                output_failed = state.failed or state.too_large
+            if output_failed:
+                abort_pipeline()
+                break
+            if now >= deadline:
+                timed_out = True
+                abort_pipeline(signal.SIGTERM)
+                break
+            if now >= next_renewal:
+                if not renew_lease():
+                    lease_lost = True
+                    abort_pipeline()
+                    break
+                next_renewal = now + renew_interval
+            time.sleep(PIPELINE_POLL_SECONDS)
+    except BaseException as exc:
+        pending_error = exc
+        abort_pipeline()
+    finally:
+        if encoder is not None and encoder.stdin is not None and not encoder.stdin.closed:
+            encoder.stdin.close()
+        if group_anchor is not None and group_anchor.stdin is not None and not group_anchor.stdin.closed:
+            group_anchor.stdin.close()
+        abort_pipeline()
+        for process in tuple(processes):
+            try:
+                process.wait(timeout=PROCESS_TERMINATE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                termination_failed = True
+        for reader in readers:
+            reader.join(timeout=1)
+        for stream in streams:
+            stream.close()
+        for reader in readers:
+            if reader.is_alive():
+                reader.join(timeout=1)
+
+    if pending_error is not None:
+        raise pending_error
+    if lease_lost:
+        raise MediaDerivativeLeaseLost()
+    if termination_failed:
+        raise MediaDerivativeError(
+            "MEDIA_TRANSFORM_TERMINATION_FAILED",
+            "transform",
+            retryable=True,
+        )
+    if timed_out:
+        raise MediaDerivativeError("MEDIA_TRANSFORM_TIMEOUT", "transform", retryable=True)
+    if file_too_large:
+        raise MediaDerivativeError("MEDIA_TRANSFORM_FILE_LIMIT", "transform", retryable=False)
+    if any(reader.is_alive() for reader in readers) or state.failed:
+        raise MediaDerivativeError(
+            "MEDIA_TRANSFORM_OUTPUT_UNAVAILABLE",
+            "transform",
+            retryable=True,
+        )
+    if state.too_large:
+        raise MediaDerivativeError("MEDIA_TRANSFORM_OUTPUT_LIMIT", "transform", retryable=True)
+    if decoder is None or encoder is None or decoder.returncode != 0 or encoder.returncode != 0:
+        raise MediaDerivativeError("MEDIA_TRANSFORM_FAILED", "transform", retryable=True)
 
 
 def _run_ffmpeg_process(
@@ -1011,23 +1362,93 @@ def _validate_derivative(
     claim: MediaDerivativeClaim,
     settings: Settings,
     source_av_streams: tuple[tuple[str, str, int, int], ...],
+    playback_variant: str | None = None,
+    source_video_start_time_ms: int | None = None,
+    source_video_duration_ms: int | None = None,
+    source_video_frame_count: int | None = None,
+    source_audio_timings: tuple[tuple[int | None, int | None], ...] = (),
 ) -> tuple[int, int, int, int, int]:
     if claim.kind == "playback_faststart":
         _assert_faststart(descriptor)
         if not _renew_lease(claim, settings):
             raise MediaDerivativeLeaseLost()
         try:
-            probe = probe_media(descriptor, settings)
+            probe = probe_media(
+                descriptor,
+                settings,
+                (
+                    settings.media_playback_probe_command
+                    if playback_variant == APV_H264_PLAYBACK_VARIANT
+                    else None
+                ),
+            )
         except Exception as exc:
             code = getattr(exc, "code", "MEDIA_DERIVATIVE_PROBE_FAILED")
             raise MediaDerivativeError(str(code), "validate", retryable=True) from None
         if not _probe_matches_source(probe, claim):
             raise MediaDerivativeError("MEDIA_DERIVATIVE_PROBE_MISMATCH", "validate", retryable=False)
-        if (
-            not source_av_streams
-            or sorted(probe.av_streams) != sorted(source_av_streams)
-        ):
+        expected_streams = (
+            _apv_h264_expected_streams(source_av_streams)
+            if playback_variant == APV_H264_PLAYBACK_VARIANT
+            else source_av_streams
+        )
+        if not expected_streams or sorted(probe.av_streams) != sorted(expected_streams):
             raise MediaDerivativeError("MEDIA_DERIVATIVE_STREAM_MISMATCH", "validate", retryable=False)
+        if playback_variant == APV_H264_PLAYBACK_VARIANT:
+            expected_stream_types = tuple(stream[0] for stream in expected_streams)
+            frame_tolerance_ms = max(
+                1,
+                (2_000 * claim.fps_den + claim.fps_num - 1) // claim.fps_num,
+            )
+            output_video_start_time_ms = probe.video_start_time_ms
+            audio_timing_mismatch = len(probe.audio_timings) != len(source_audio_timings)
+            if (
+                not audio_timing_mismatch
+                and output_video_start_time_ms is not None
+                and source_video_start_time_ms is not None
+            ):
+                for source_audio, output_audio in zip(
+                    source_audio_timings,
+                    probe.audio_timings,
+                    strict=True,
+                ):
+                    source_start, source_duration = source_audio
+                    output_start, output_duration = output_audio
+                    if (
+                        source_start is None
+                        or source_duration is None
+                        or output_start is None
+                        or output_duration is None
+                        or abs(
+                            (output_start - output_video_start_time_ms)
+                            - (source_start - source_video_start_time_ms)
+                        )
+                        > frame_tolerance_ms
+                        or abs(output_duration - source_duration) > frame_tolerance_ms
+                    ):
+                        audio_timing_mismatch = True
+                        break
+            else:
+                audio_timing_mismatch = True
+            if (
+                sorted(probe.stream_types) != sorted(expected_stream_types)
+                or probe.video_pixel_format != "yuv420p"
+                or probe.video_codec_tag != "avc1"
+                or probe.video_start_time_ms is None
+                or abs(probe.video_start_time_ms) > frame_tolerance_ms
+                or probe.video_duration_ms is None
+                or source_video_duration_ms is None
+                or abs(probe.video_duration_ms - source_video_duration_ms) > frame_tolerance_ms
+                or probe.video_frame_count is None
+                or source_video_frame_count is None
+                or probe.video_frame_count != source_video_frame_count
+                or audio_timing_mismatch
+            ):
+                raise MediaDerivativeError(
+                    "MEDIA_DERIVATIVE_VIDEO_PROFILE_MISMATCH",
+                    "validate",
+                    retryable=False,
+                )
         return probe.duration_ms, probe.width, probe.height, probe.fps_num, probe.fps_den
     width, height = _jpeg_dimensions(descriptor)
     if width > settings.media_thumbnail_width or height <= 0:
@@ -1066,6 +1487,11 @@ def _prepared_from_descriptor(
     source_av_streams: tuple[tuple[str, str, int, int], ...],
     thumbnail_frame_ms: int,
     thumbnail_signature: str | None,
+    playback_variant: str | None = None,
+    source_video_start_time_ms: int | None = None,
+    source_video_duration_ms: int | None = None,
+    source_video_frame_count: int | None = None,
+    source_audio_timings: tuple[tuple[int | None, int | None], ...] = (),
     source_video_codec_class: str | None = None,
     thumbnail_decode_acceleration: str | None = None,
 ) -> PreparedDerivative:
@@ -1077,6 +1503,11 @@ def _prepared_from_descriptor(
         claim,
         settings,
         source_av_streams,
+        playback_variant,
+        source_video_start_time_ms,
+        source_video_duration_ms,
+        source_video_frame_count,
+        source_audio_timings,
     )
     return PreparedDerivative(
         task_id=claim.task_id,
@@ -1110,6 +1541,11 @@ def _reuse_published_derivative(
     output_path: Path,
     source_av_streams: tuple[tuple[str, str, int, int], ...],
     thumbnail_signature: str | None,
+    playback_variant: str | None,
+    source_video_start_time_ms: int | None,
+    source_video_duration_ms: int | None,
+    source_video_frame_count: int | None,
+    source_audio_timings: tuple[tuple[int | None, int | None], ...],
     source_video_codec_class: str | None,
 ) -> PreparedDerivative | None:
     with pin_regular_file(output_path, settings.storage_root) as pinned:
@@ -1126,6 +1562,11 @@ def _reuse_published_derivative(
                 source_av_streams=source_av_streams,
                 thumbnail_frame_ms=claim.thumbnail_frame_ms,
                 thumbnail_signature=thumbnail_signature,
+                playback_variant=playback_variant,
+                source_video_start_time_ms=source_video_start_time_ms,
+                source_video_duration_ms=source_video_duration_ms,
+                source_video_frame_count=source_video_frame_count,
+                source_audio_timings=source_audio_timings,
                 source_video_codec_class=source_video_codec_class,
                 thumbnail_decode_acceleration=(
                     "existing" if claim.kind == "thumbnail" else None
@@ -1135,12 +1576,6 @@ def _reuse_published_derivative(
 
 def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> PreparedDerivative:
     file_root = ensure_private_directory(settings.storage_root, "files")
-    output_file_id = _output_file_id(
-        claim.task_id,
-        claim.kind,
-        claim.thumbnail_frame_ms,
-    )
-    output_path = contained_path(Path("files") / output_file_id, settings.storage_root)
     source_path = _canonical_source_path(claim, settings)
     with pin_regular_file(source_path, settings.storage_root) as source:
         if source is None or not source.exists or source.size != claim.source_size:
@@ -1158,6 +1593,11 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
             thumbnail_signature = claim.thumbnail_signature
             source_video_codec: str | None = None
             source_video_codec_class: str | None = None
+            playback_variant: str | None = None
+            source_video_start_time_ms: int | None = None
+            source_video_duration_ms: int | None = None
+            source_video_frame_count: int | None = None
+            source_audio_timings: tuple[tuple[int | None, int | None], ...] = ()
             signature_acceleration: str | None = None
             should_probe_source = claim.kind in {"playback_faststart", "thumbnail"}
             if should_probe_source:
@@ -1176,9 +1616,29 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                         retryable=False,
                     )
                 source_av_streams = source_probe.av_streams
+                source_video_start_time_ms = source_probe.video_start_time_ms
+                source_video_duration_ms = source_probe.video_duration_ms
+                source_video_frame_count = source_probe.video_frame_count
+                source_audio_timings = source_probe.audio_timings
                 source_video_codec = _source_video_codec(source_probe)
                 if claim.kind == "thumbnail":
                     source_video_codec_class = _thumbnail_codec_class(source_video_codec)
+                elif claim.kind == "playback_faststart" and source_video_codec == "apv":
+                    if (
+                        source_video_start_time_ms is None
+                        or source_video_duration_ms is None
+                        or source_video_frame_count is None
+                        or any(
+                            start_time_ms is None or duration_ms is None
+                            for start_time_ms, duration_ms in source_audio_timings
+                        )
+                    ):
+                        raise MediaDerivativeError(
+                            "MEDIA_DERIVATIVE_SOURCE_METADATA_MISMATCH",
+                            "source",
+                            retryable=False,
+                        )
+                    playback_variant = APV_H264_PLAYBACK_VARIANT
             if claim.kind == "thumbnail" and thumbnail_signature is None:
                 thumbnail_signature, signature_acceleration = _capture_thumbnail_signature(
                     settings,
@@ -1186,6 +1646,13 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                     source_video_codec,
                     lambda: _renew_lease(claim, settings),
                 )
+            output_file_id = _output_file_id(
+                claim.task_id,
+                claim.kind,
+                claim.thumbnail_frame_ms,
+                playback_variant,
+            )
+            output_path = contained_path(Path("files") / output_file_id, settings.storage_root)
             existing = _reuse_published_derivative(
                 claim,
                 settings,
@@ -1193,6 +1660,11 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                 output_path,
                 source_av_streams,
                 thumbnail_signature,
+                playback_variant,
+                source_video_start_time_ms,
+                source_video_duration_ms,
+                source_video_frame_count,
+                source_audio_timings,
                 source_video_codec_class,
             )
             if existing is not None:
@@ -1229,21 +1701,34 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                             force_cpu=signature_acceleration == "cpu_fallback",
                         )
                     else:
-                        command = _ffmpeg_command(
-                            claim,
-                            settings,
-                            source_handle.fileno(),
-                            staging_path,
-                            source_video_codec=source_video_codec,
-                        )
                         os.lseek(source_handle.fileno(), 0, os.SEEK_SET)
-                        _run_ffmpeg(
-                            command,
-                            settings,
-                            source_handle.fileno(),
-                            output_descriptor,
-                            lambda: _renew_lease(claim, settings),
-                        )
+                        os.ftruncate(output_descriptor, 0)
+                        if playback_variant == APV_H264_PLAYBACK_VARIANT:
+                            _run_apv_playback_pipeline(
+                                _apv_nut_decoder_command(
+                                    settings,
+                                    source_handle.fileno(),
+                                ),
+                                _apv_h264_encoder_command(settings, staging_path),
+                                settings,
+                                source_handle.fileno(),
+                                output_descriptor,
+                                lambda: _renew_lease(claim, settings),
+                            )
+                        else:
+                            _run_ffmpeg(
+                                _ffmpeg_command(
+                                    claim,
+                                    settings,
+                                    source_handle.fileno(),
+                                    staging_path,
+                                    source_video_codec=source_video_codec,
+                                ),
+                                settings,
+                                source_handle.fileno(),
+                                output_descriptor,
+                                lambda: _renew_lease(claim, settings),
+                            )
                     named_metadata = os.stat(
                         staging_name,
                         dir_fd=root_fd,
@@ -1271,6 +1756,11 @@ def _prepare_derivative(claim: MediaDerivativeClaim, settings: Settings) -> Prep
                         source_av_streams=source_av_streams,
                         thumbnail_frame_ms=claim.thumbnail_frame_ms,
                         thumbnail_signature=thumbnail_signature,
+                        playback_variant=playback_variant,
+                        source_video_start_time_ms=source_video_start_time_ms,
+                        source_video_duration_ms=source_video_duration_ms,
+                        source_video_frame_count=source_video_frame_count,
+                        source_audio_timings=source_audio_timings,
                         source_video_codec_class=source_video_codec_class,
                         thumbnail_decode_acceleration=thumbnail_decode_acceleration,
                     )

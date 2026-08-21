@@ -124,6 +124,8 @@ def test_compose_secrets_and_capabilities_drop_to_application_user() -> None:
     assert media_worker_environment["MEDIA_MAX_PIXELS"] == "${MEDIA_MAX_PIXELS:-35389440}"
     assert media_worker_environment["MEDIA_TRANSFORM_COMMAND"] == "/usr/bin/ffmpeg"
     assert media_worker_environment["MEDIA_APV_TRANSFORM_COMMAND"] == "/opt/ffmpeg-apv/bin/ffmpeg"
+    assert media_worker_environment["MEDIA_PLAYBACK_PROBE_COMMAND"] == "/usr/bin/ffprobe"
+    assert media_worker_environment["MEDIA_PLAYBACK_MAX_BYTES"] == "${MEDIA_PLAYBACK_MAX_BYTES:-5368709120}"
     assert compose["services"]["media-worker"]["cpus"] == 8.0
     assert compose["services"]["media-worker"]["mem_limit"] == "8g"
     assert compose["services"]["media-worker"]["pids_limit"] == 256
@@ -392,6 +394,7 @@ def test_apv_runtime_is_officially_locked_isolated_and_license_audited() -> None
         "--enable-encoder=rawvideo",
         "--enable-demuxer=mov",
         "--enable-muxer=mp4",
+        "--enable-muxer=nut",
         "--enable-muxer=image2",
         "--enable-muxer=rawvideo",
         "--enable-protocol=fd",

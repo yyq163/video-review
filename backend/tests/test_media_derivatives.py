@@ -17,10 +17,13 @@ from sqlalchemy.orm import Session
 
 from backend.app import media_derivatives
 from backend.app.media_derivatives import (
+    APV_H264_PLAYBACK_VARIANT,
     MediaDerivativeClaim,
     MediaDerivativeLeaseLost,
     _atomic_worker_state,
     _assert_faststart,
+    _apv_h264_encoder_command,
+    _apv_nut_decoder_command,
     _claim_task,
     _ffmpeg_command,
     _ffmpeg_signature_command,
@@ -29,6 +32,7 @@ from backend.app.media_derivatives import (
     _prepare_derivative,
     _publish_file,
     _run_ffmpeg,
+    _run_apv_playback_pipeline,
     _thumbnail_dhash,
     run_media_worker_loop,
 )
@@ -344,13 +348,8 @@ def test_apv_uses_the_isolated_native_runtime_without_changing_cuda_codecs(tmp_p
         11,
         source_video_codec="apv",
     )
-    apv_playback = _ffmpeg_command(
-        _claim(tmp_path, "playback_faststart"),
-        settings,
-        12,
-        output.with_suffix(".mp4"),
-        source_video_codec="apv",
-    )
+    apv_decoder = _apv_nut_decoder_command(settings, 12)
+    apv_encoder = _apv_h264_encoder_command(settings, output.with_suffix(".mp4"))
     h264_thumbnail = _ffmpeg_command(
         _claim(tmp_path),
         settings,
@@ -361,13 +360,33 @@ def test_apv_uses_the_isolated_native_runtime_without_changing_cuda_codecs(tmp_p
 
     assert apv_thumbnail[0] == "/opt/ffmpeg-apv/bin/ffmpeg"
     assert apv_signature[0] == "/opt/ffmpeg-apv/bin/ffmpeg"
-    assert apv_playback[0] == "/opt/ffmpeg-apv/bin/ffmpeg"
+    assert apv_decoder[0] == "/opt/ffmpeg-apv/bin/ffmpeg"
+    assert apv_decoder[-3:] == ["-f", "nut", "pipe:1"]
+    assert "-fps_mode:v" in apv_decoder
+    assert apv_decoder[apv_decoder.index("-filter_threads") + 1] == "2"
+    assert apv_decoder[apv_decoder.index("-threads") + 1] == "2"
+    assert apv_encoder[0] == "/usr/bin/ffmpeg"
+    assert apv_encoder[apv_encoder.index("-c:v") + 1] == "libx264"
+    assert apv_encoder[apv_encoder.index("-threads:v") + 1] == "2"
+    assert apv_encoder[apv_encoder.index("-c:a") + 1] == "aac"
+    assert apv_encoder[apv_encoder.index("-threads:a") + 1] == "1"
+    assert apv_encoder[apv_encoder.index("-filter_threads") + 1] == "2"
+    assert apv_encoder[apv_encoder.index("-tag:v") + 1] == "avc1"
+    assert apv_encoder[apv_encoder.index("-pix_fmt") + 1] == "yuv420p"
+    assert apv_encoder[apv_encoder.index("-map_metadata") + 1] == "-1"
+    assert apv_encoder[apv_encoder.index("-map_chapters") + 1] == "-1"
+    assert apv_encoder[apv_encoder.index("-write_tmcd") + 1] == "0"
     assert "-hwaccel" not in apv_thumbnail
     assert "-hwaccel" not in apv_signature
     assert "-xerror" not in apv_thumbnail
     assert "-xerror" not in apv_signature
     assert h264_thumbnail[0] == "/usr/bin/ffmpeg"
     assert h264_thumbnail[h264_thumbnail.index("-hwaccel") + 1] == "cuda"
+    assert _output_file_id("task", "playback_faststart") != _output_file_id(
+        "task",
+        "playback_faststart",
+        playback_variant=APV_H264_PLAYBACK_VARIANT,
+    )
 
 
 def test_cuda_thumbnail_process_failure_retries_once_on_cpu(
@@ -543,6 +562,290 @@ def test_transform_enforces_combined_output_limit_and_wall_clock_timeout(
         assert media_derivatives.time.monotonic() - started < 3
 
 
+def test_apv_pipeline_streams_with_backpressure_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "proxy.mp4"
+    source.write_bytes(b"immutable-source")
+    output.write_bytes(b"")
+    decoder = [
+        sys.executable,
+        "-c",
+        "import os\nchunk=b'x'*65536\nfor _ in range(32): os.write(1,chunk)",
+    ]
+    encoder = [
+        sys.executable,
+        "-c",
+        (
+            "import sys,time\n"
+            f"out=open({str(output)!r},'wb')\n"
+            "while True:\n"
+            " chunk=sys.stdin.buffer.read(32768)\n"
+            " if not chunk: break\n"
+            " out.write(chunk); out.flush(); time.sleep(0.0005)\n"
+            "out.close()"
+        ),
+    ]
+    settings = _settings(
+        tmp_path,
+        media_transform_output_limit_bytes=4096,
+        media_transform_timeout_seconds=5,
+    )
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        _run_apv_playback_pipeline(
+            decoder,
+            encoder,
+            settings,
+            source_handle.fileno(),
+            output_handle.fileno(),
+            lambda: True,
+        )
+    assert output.stat().st_size == 2 * 1024 * 1024
+    assert source.read_bytes() == b"immutable-source"
+
+    output.write_bytes(b"")
+    failing_decoder = [sys.executable, "-c", "raise SystemExit(7)"]
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_FAILED"):
+            _run_apv_playback_pipeline(
+                failing_decoder,
+                encoder,
+                settings,
+                source_handle.fileno(),
+                output_handle.fileno(),
+                lambda: True,
+            )
+
+    output.write_bytes(b"")
+    flood = [
+        sys.executable,
+        "-c",
+        "import sys,time;sys.stderr.write('z'*3000);sys.stderr.flush();time.sleep(2)",
+    ]
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_OUTPUT_LIMIT"):
+            _run_apv_playback_pipeline(
+                flood,
+                flood,
+                settings,
+                source_handle.fileno(),
+                output_handle.fileno(),
+                lambda: True,
+            )
+
+    output.write_bytes(b"")
+    timeout_settings = _settings(
+        tmp_path,
+        media_transform_output_limit_bytes=4096,
+        media_transform_timeout_seconds=0.05,
+    )
+    sleeper = [sys.executable, "-c", "import time;time.sleep(5)"]
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_TIMEOUT"):
+            _run_apv_playback_pipeline(
+                sleeper,
+                sleeper,
+                timeout_settings,
+                source_handle.fileno(),
+                output_handle.fileno(),
+                lambda: True,
+            )
+
+
+def test_apv_pipeline_timeout_kills_descendants_that_ignore_sigterm(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "proxy.mp4"
+    descendant_pid_path = tmp_path / "descendant.pid"
+    source.write_bytes(b"immutable-source")
+    output.write_bytes(b"")
+    descendant = (
+        "import os,signal,time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"open({str(descendant_pid_path)!r},'w').write(str(os.getpid()))\n"
+        "time.sleep(30)"
+    )
+    decoder = [
+        sys.executable,
+        "-c",
+        (
+            "import subprocess,sys,time\n"
+            f"subprocess.Popen([sys.executable,'-c',{descendant!r}])\n"
+            "time.sleep(30)"
+        ),
+    ]
+    encoder = [sys.executable, "-c", "import time;time.sleep(30)"]
+    settings = _settings(tmp_path, media_transform_timeout_seconds=0.5)
+
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_TIMEOUT"):
+            _run_apv_playback_pipeline(
+                decoder,
+                encoder,
+                settings,
+                source_handle.fileno(),
+                output_handle.fileno(),
+                lambda: True,
+            )
+
+    assert descendant_pid_path.exists()
+    descendant_pid = int(descendant_pid_path.read_text())
+    deadline = media_derivatives.time.monotonic() + 2
+    while media_derivatives.time.monotonic() < deadline:
+        try:
+            os.kill(descendant_pid, 0)
+        except ProcessLookupError:
+            break
+        media_derivatives.time.sleep(0.02)
+    else:
+        os.kill(descendant_pid, media_derivatives.signal.SIGKILL)
+        raise AssertionError("pipeline timeout left a descendant process alive")
+
+
+def test_apv_pipeline_spawn_failures_kill_and_reap_started_process(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "proxy.mp4"
+    source.write_bytes(b"source")
+    output.write_bytes(b"")
+    settings = _settings(tmp_path)
+
+    class StartedProcess:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.stdin = io.BytesIO()
+            self.stderr = io.BytesIO()
+            self.returncode: int | None = None
+            self.killed = False
+            self.waited = False
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            self.waited = True
+            if self.returncode is None:
+                self.returncode = -9
+            return self.returncode
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+    def make_spawner(
+        failing_spawn: int,
+        created: list[StartedProcess],
+    ) -> Any:
+        spawn_count = 0
+
+        def fail_selected_spawn(*_args: Any, **_kwargs: Any) -> StartedProcess:
+            nonlocal spawn_count
+            spawn_count += 1
+            if spawn_count == failing_spawn:
+                raise OSError("missing pipeline process")
+            process = StartedProcess(999_990 + spawn_count)
+            created.append(process)
+            return process
+
+        return fail_selected_spawn
+
+    for failing_spawn in (1, 2, 3):
+        created: list[StartedProcess] = []
+        monkeypatch.setattr(
+            media_derivatives.subprocess,
+            "Popen",
+            make_spawner(failing_spawn, created),
+        )
+        with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+            with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_UNAVAILABLE"):
+                _run_apv_playback_pipeline(
+                    ["decoder"],
+                    ["encoder"],
+                    settings,
+                    source_handle.fileno(),
+                    output_handle.fileno(),
+                    lambda: True,
+                )
+        assert all(process.killed for process in created)
+        assert all(process.waited for process in created)
+
+
+def test_apv_pipeline_encoder_early_exit_fails_closed(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "proxy.mp4"
+    source.write_bytes(b"source")
+    output.write_bytes(b"")
+    decoder = [
+        sys.executable,
+        "-c",
+        "import os\nchunk=b'x'*65536\nwhile True: os.write(1,chunk)",
+    ]
+    encoder = [sys.executable, "-c", "raise SystemExit(0)"]
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_FAILED"):
+            _run_apv_playback_pipeline(
+                decoder,
+                encoder,
+                _settings(tmp_path, media_transform_timeout_seconds=5),
+                source_handle.fileno(),
+                output_handle.fileno(),
+                lambda: True,
+            )
+
+
+def test_apv_pipeline_enforces_file_budget_and_lease(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "proxy.mp4"
+    source.write_bytes(b"source")
+    output.write_bytes(b"")
+    decoder = [
+        sys.executable,
+        "-c",
+        "import os\nchunk=b'x'*65536\nfor _ in range(64): os.write(1,chunk)",
+    ]
+    encoder = [
+        sys.executable,
+        "-c",
+        f"import sys\nout=open({str(output)!r},'wb')\nout.write(sys.stdin.buffer.read());out.close()",
+    ]
+    settings = _settings(tmp_path, media_transform_timeout_seconds=5)
+    settings.media_playback_max_bytes = 64 * 1024
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_FILE_LIMIT"):
+            _run_apv_playback_pipeline(
+                decoder,
+                encoder,
+                settings,
+                source_handle.fileno(),
+                output_handle.fileno(),
+                lambda: True,
+            )
+
+    output.write_bytes(b"")
+    settings.media_playback_max_bytes = 64 * 1024 * 1024
+    settings.media_worker_lease_seconds = 3
+    sleeper = [sys.executable, "-c", "import time;time.sleep(5)"]
+    with source.open("rb") as source_handle, output.open("r+b") as output_handle:
+        with pytest.raises(MediaDerivativeLeaseLost):
+            _run_apv_playback_pipeline(
+                sleeper,
+                sleeper,
+                settings,
+                source_handle.fileno(),
+                output_handle.fileno(),
+                lambda: False,
+            )
+
+
 def test_faststart_and_jpeg_validators_check_real_container_order_and_dimensions(
     tmp_path: Path,
 ) -> None:
@@ -565,6 +868,203 @@ def test_faststart_and_jpeg_validators_check_real_container_order_and_dimensions
             assert exc.code == "MEDIA_FASTSTART_INVALID"
         else:
             raise AssertionError("late moov must be rejected")
+
+
+def test_apv_h264_validation_requires_browser_profile_and_complete_video(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    output = tmp_path / "proxy.mp4"
+    output.write_bytes(_box(b"ftyp", b"isom0000") + _box(b"moov") + _box(b"mdat", b"frames"))
+    source_streams = (
+        ("video", "apv", 0, 0),
+        ("audio", "pcm_s16le", 2, 48_000),
+    )
+
+    def probe(frame_count: int = 250) -> media_derivatives.MediaProbeResult:
+        return media_derivatives.MediaProbeResult(
+            duration_ms=10_000,
+            width=1920,
+            height=1080,
+            fps_num=25,
+            fps_den=1,
+            av_streams=(
+                ("video", "h264", 0, 0),
+                ("audio", "aac", 2, 48_000),
+            ),
+            stream_types=("video", "audio"),
+            audio_timings=((0, 10_000),),
+            video_pixel_format="yuv420p",
+            video_codec_tag="avc1",
+            video_start_time_ms=0,
+            video_duration_ms=10_000,
+            video_frame_count=frame_count,
+        )
+
+    probe_commands: list[str | None] = []
+
+    def output_probe(*args: Any) -> media_derivatives.MediaProbeResult:
+        probe_commands.append(args[2] if len(args) > 2 else None)
+        return probe()
+
+    monkeypatch.setattr(media_derivatives, "_renew_lease", lambda *_args: True)
+    monkeypatch.setattr(media_derivatives, "probe_media", output_probe)
+    with output.open("rb") as handle:
+        assert media_derivatives._validate_derivative(
+            handle.fileno(),
+            _claim(tmp_path, "playback_faststart"),
+            _settings(tmp_path),
+            source_streams,
+            APV_H264_PLAYBACK_VARIANT,
+            0,
+            10_000,
+            250,
+            ((0, 10_000),),
+        ) == (10_000, 1920, 1080, 25, 1)
+    assert probe_commands == ["/usr/bin/ffprobe"]
+
+    invalid_probes = (
+        replace(probe(), video_frame_count=249),
+        replace(probe(), video_pixel_format="yuv422p"),
+        replace(probe(), video_codec_tag="h264"),
+        replace(probe(), video_start_time_ms=81),
+        replace(probe(), video_duration_ms=9_900),
+        replace(probe(), audio_timings=((200, 10_000),)),
+        replace(probe(), audio_timings=((0, 9_800),)),
+        replace(probe(), stream_types=("video", "audio", "data")),
+    )
+    for invalid_probe in invalid_probes:
+        monkeypatch.setattr(
+            media_derivatives,
+            "probe_media",
+            lambda *_args, current=invalid_probe: current,
+        )
+        with output.open("rb") as handle, pytest.raises(
+            media_derivatives.MediaDerivativeError,
+            match="MEDIA_DERIVATIVE_VIDEO_PROFILE_MISMATCH",
+        ):
+            media_derivatives._validate_derivative(
+                handle.fileno(),
+                _claim(tmp_path, "playback_faststart"),
+                _settings(tmp_path),
+                source_streams,
+                APV_H264_PLAYBACK_VARIANT,
+                0,
+                10_000,
+                250,
+                ((0, 10_000),),
+            )
+
+
+def test_apv_pipeline_failure_cleans_staging_and_preserves_source(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    settings = _settings(tmp_path)
+    files = settings.storage_root / "files"
+    files.mkdir(parents=True, mode=0o700)
+    claim = _claim(tmp_path, "playback_faststart")
+    source = b"immutable-original-media"
+    source_path = files / claim.source_file_id
+    source_path.write_bytes(source)
+    source_probe = media_derivatives.MediaProbeResult(
+        duration_ms=claim.duration_ms,
+        width=claim.width,
+        height=claim.height,
+        fps_num=claim.fps_num,
+        fps_den=claim.fps_den,
+        av_streams=(
+            ("video", "apv", 0, 0),
+            ("audio", "aac", 2, 48_000),
+        ),
+        stream_types=("video", "audio"),
+        audio_timings=((0, claim.duration_ms),),
+        video_start_time_ms=0,
+        video_duration_ms=claim.duration_ms,
+        video_frame_count=250,
+    )
+    monkeypatch.setattr(media_derivatives, "_renew_lease", lambda *_args: True)
+    monkeypatch.setattr(media_derivatives, "probe_media", lambda *_args: source_probe)
+
+    def fail_pipeline(*_args: Any) -> None:
+        raise media_derivatives.MediaDerivativeError(
+            "MEDIA_TRANSFORM_TIMEOUT",
+            "transform",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(media_derivatives, "_run_apv_playback_pipeline", fail_pipeline)
+    with pytest.raises(media_derivatives.MediaDerivativeError, match="MEDIA_TRANSFORM_TIMEOUT"):
+        _prepare_derivative(claim, settings)
+
+    output_file_id = _output_file_id(
+        claim.task_id,
+        claim.kind,
+        playback_variant=APV_H264_PLAYBACK_VARIANT,
+    )
+    assert not (files / output_file_id).exists()
+    assert not (files / f".{output_file_id}.staging.mp4.tmp").exists()
+    assert source_path.read_bytes() == source
+
+
+def test_non_apv_playback_keeps_legacy_transform_and_file_identity(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    settings = _settings(tmp_path)
+    files = settings.storage_root / "files"
+    files.mkdir(parents=True, mode=0o700)
+    claim = _claim(tmp_path, "playback_faststart")
+    source = b"immutable-original-media"
+    source_path = files / claim.source_file_id
+    source_path.write_bytes(source)
+    streams = (
+        ("video", "h264", 0, 0),
+        ("audio", "aac", 2, 48_000),
+    )
+    probe = media_derivatives.MediaProbeResult(
+        duration_ms=claim.duration_ms,
+        width=claim.width,
+        height=claim.height,
+        fps_num=claim.fps_num,
+        fps_den=claim.fps_den,
+        av_streams=streams,
+        stream_types=("video", "audio"),
+    )
+    probe_commands: list[str | None] = []
+
+    def fake_probe(*args: Any) -> media_derivatives.MediaProbeResult:
+        probe_commands.append(args[2] if len(args) > 2 else None)
+        return probe
+
+    legacy_commands: list[list[str]] = []
+
+    def fake_legacy_transform(
+        command: list[str],
+        _settings_value: Settings,
+        _source_descriptor: int,
+        output_descriptor: int,
+        _renew_lease: Any,
+    ) -> None:
+        legacy_commands.append(command)
+        output = _box(b"ftyp", b"isom0000") + _box(b"moov") + _box(b"mdat", b"frames")
+        os.ftruncate(output_descriptor, 0)
+        os.pwrite(output_descriptor, output, 0)
+
+    monkeypatch.setattr(media_derivatives, "_renew_lease", lambda *_args: True)
+    monkeypatch.setattr(media_derivatives, "probe_media", fake_probe)
+    monkeypatch.setattr(media_derivatives, "_run_ffmpeg", fake_legacy_transform)
+    monkeypatch.setattr(
+        media_derivatives,
+        "_run_apv_playback_pipeline",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("APV pipeline must not run")),
+    )
+
+    prepared = _prepare_derivative(claim, settings)
+    assert prepared.output_file_id == _output_file_id(claim.task_id, claim.kind)
+    assert legacy_commands and legacy_commands[0][0] == settings.media_transform_command
+    assert probe_commands == [None, None]
+    assert source_path.read_bytes() == source
 
 
 def test_prepare_and_atomic_publish_preserve_original_and_cleanup_staging(

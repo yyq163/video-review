@@ -160,6 +160,18 @@ def candidate_run_fake(
             if tamper == "decoder":
                 return b" V....D h264 H.264\n"
             return b" V....D apv Apple Projected Media\n"
+        if command == (
+            verify_candidate_image.APV_BINARIES["ffmpeg"],
+            "-hide_banner",
+            "-muxers",
+        ):
+            if tamper == "muxer":
+                return b" E mp4 MP4\n"
+            return b" E nut NUT\n"
+        if command == ("/usr/bin/ffmpeg", "-hide_banner", "-encoders"):
+            if tamper == "legacy_encoder":
+                return b" V..... h264 H.264\n"
+            return b" V....D libx264 H.264\n"
         if len(command) == 2 and command[1] == "-version":
             binary_name = Path(command[0]).name
             if command[0].startswith("/opt/ffmpeg-apv/"):
@@ -716,8 +728,8 @@ def test_candidate_verifier_checks_both_runtimes_and_unprivileged_apv(
     assert result["runtime_identity"] == {"user": "app", "uid": 3001, "gid": 3003}
     assert set(result["runtimes"]) == {"ffmpeg", "ffmpeg-apv"}
     assert result["runtimes"]["ffmpeg-apv"]["binary_sha256"] == {
-        "ffmpeg": "e43a4982f352dadeb922814b46cfd42e954bf86872ddd4909e2a630de218c5c3",
-        "ffprobe": "07f0b3495714bb2153271a686fe5daa93195baab235fe2dcba92c1f939b45601",
+        "ffmpeg": "84b6093400a55beded3ccbf3668ea85172421889c00c22008bdf95c7092b5955",
+        "ffprobe": "0074d6b2f80804b33b7f1d531a74d25d1741ba77de6d55c4ef7d8735744c86d9",
     }
     assert (
         "docker",
@@ -725,6 +737,26 @@ def test_candidate_verifier_checks_both_runtimes_and_unprivileged_apv(
         "candidate",
         "--format",
         "{{.Image}}",
+    ) in calls
+    assert (
+        "docker",
+        "exec",
+        "--user",
+        "3001:3003",
+        "candidate",
+        verify_candidate_image.APV_BINARIES["ffmpeg"],
+        "-hide_banner",
+        "-muxers",
+    ) in calls
+    assert (
+        "docker",
+        "exec",
+        "--user",
+        "3001:3003",
+        "candidate",
+        "/usr/bin/ffmpeg",
+        "-hide_banner",
+        "-encoders",
     ) in calls
     assert (
         "docker",
@@ -805,6 +837,8 @@ def test_candidate_verifier_rejects_wrong_running_image_digest(
         ("source", "source hash record mismatch"),
         ("ldd", "dynamic-library record is invalid"),
         ("decoder", "decoder is absent"),
+        ("muxer", "NUT muxer is absent"),
+        ("legacy_encoder", "libx264 encoder is absent"),
         ("license", "license material mismatch"),
         ("version", "APV ffmpeg version mismatch"),
         ("uid", "app UID/GID does not match"),

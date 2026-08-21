@@ -75,6 +75,13 @@ class MediaProbeResult:
     fps_num: int
     fps_den: int
     av_streams: tuple[tuple[str, str, int, int], ...] = ()
+    stream_types: tuple[str, ...] = ()
+    audio_timings: tuple[tuple[int | None, int | None], ...] = ()
+    video_pixel_format: str | None = None
+    video_codec_tag: str | None = None
+    video_start_time_ms: int | None = None
+    video_duration_ms: int | None = None
+    video_frame_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +163,44 @@ def _positive_duration_ms(*values: object) -> int:
     raise _media_probe_rejected()
 
 
+def _optional_milliseconds(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        seconds = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not seconds.is_finite():
+        return None
+    milliseconds = int((seconds * 1000).to_integral_value(rounding=ROUND_HALF_UP))
+    if -MAX_DATABASE_INTEGER <= milliseconds <= MAX_DATABASE_INTEGER:
+        return milliseconds
+    return None
+
+
+def _optional_positive_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, str)):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    if 0 < normalized <= MAX_DATABASE_INTEGER:
+        return normalized
+    return None
+
+
+def _optional_probe_label(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if not normalized or len(normalized) > 64 or normalized in {"none", "unknown"}:
+        return None
+    return normalized
+
+
 def _positive_frame_rate(*values: object) -> Fraction:
     for value in values:
         if value is None or isinstance(value, bool):
@@ -197,8 +242,11 @@ def parse_media_probe_output(
     stream = video_streams[0]
     frame_rate = _positive_frame_rate(stream.get("avg_frame_rate"), stream.get("r_frame_rate"))
     av_streams: list[tuple[str, str, int, int]] = []
+    stream_types: list[str] = []
+    audio_timings: list[tuple[int | None, int | None]] = []
     for candidate in streams:
         codec_type = candidate.get("codec_type")
+        stream_types.append(codec_type.strip().lower() if isinstance(codec_type, str) else "")
         if codec_type not in {"video", "audio"}:
             continue
         codec_name = candidate.get("codec_name")
@@ -226,6 +274,13 @@ def parse_media_probe_output(
                 normalized_sample_rate if codec_type == "audio" else 0,
             )
         )
+        if codec_type == "audio":
+            audio_timings.append(
+                (
+                    _optional_milliseconds(candidate.get("start_time")),
+                    _optional_milliseconds(candidate.get("duration")),
+                )
+            )
     width = _positive_int(stream.get("width"))
     height = _positive_int(stream.get("height"))
     if width > max_dimension or height > max_dimension or width * height > max_pixels:
@@ -237,6 +292,13 @@ def parse_media_probe_output(
         fps_num=frame_rate.numerator,
         fps_den=frame_rate.denominator,
         av_streams=tuple(av_streams),
+        stream_types=tuple(stream_types),
+        audio_timings=tuple(audio_timings),
+        video_pixel_format=_optional_probe_label(stream.get("pix_fmt")),
+        video_codec_tag=_optional_probe_label(stream.get("codec_tag_string")),
+        video_start_time_ms=_optional_milliseconds(stream.get("start_time")),
+        video_duration_ms=_optional_milliseconds(stream.get("duration")),
+        video_frame_count=_optional_positive_int(stream.get("nb_frames")),
     )
 
 
@@ -277,17 +339,21 @@ def _read_probe_stdout(
         _kill_probe_process_group(process)
 
 
-def probe_media(descriptor: int, settings: Settings) -> MediaProbeResult:
+def probe_media(
+    descriptor: int,
+    settings: Settings,
+    probe_command: str | None = None,
+) -> MediaProbeResult:
     probe_path = f"/dev/fd/{descriptor}"
     command = [
-        settings.media_probe_command,
+        probe_command or settings.media_probe_command,
         "-hide_banner",
         "-v",
         "error",
         "-protocol_whitelist",
         "file",
         "-show_entries",
-        "format=duration:stream=codec_type,codec_name,width,height,duration,avg_frame_rate,r_frame_rate,channels,sample_rate",
+        "format=duration:stream=codec_type,codec_name,codec_tag_string,pix_fmt,width,height,duration,start_time,nb_frames,avg_frame_rate,r_frame_rate,channels,sample_rate",
         "-of",
         "json",
         probe_path,

@@ -133,14 +133,24 @@ def test_probe_result_without_exactly_one_video_stream_is_rejected() -> None:
 def test_probe_result_records_complete_audio_video_stream_inventory() -> None:
     result = parse_media_probe_output(
         b'{"streams":['
-        b'{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"25/1"},'
-        b'{"codec_type":"audio","codec_name":"aac","channels":2,"sample_rate":"48000"}'
+        b'{"codec_type":"video","codec_name":"h264","codec_tag_string":"avc1","pix_fmt":"yuv420p",'
+        b'"width":1920,"height":1080,"duration":"10","start_time":"0","nb_frames":"250",'
+        b'"avg_frame_rate":"25/1"},'
+        b'{"codec_type":"audio","codec_name":"aac","channels":2,"sample_rate":"48000",'
+        b'"start_time":"0.040","duration":"9.960"}'
         b'],"format":{"duration":"10"}}'
     )
     assert result.av_streams == (
         ("video", "h264", 0, 0),
         ("audio", "aac", 2, 48000),
     )
+    assert result.stream_types == ("video", "audio")
+    assert result.audio_timings == ((40, 9960),)
+    assert result.video_codec_tag == "avc1"
+    assert result.video_pixel_format == "yuv420p"
+    assert result.video_start_time_ms == 0
+    assert result.video_duration_ms == 10_000
+    assert result.video_frame_count == 250
 
 
 @pytest.mark.parametrize(

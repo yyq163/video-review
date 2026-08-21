@@ -51,6 +51,7 @@ APV_REQUIRED_BUILD_FLAGS = frozenset(
         "--enable-encoder=rawvideo",
         "--enable-demuxer=mov",
         "--enable-muxer=mp4",
+        "--enable-muxer=nut",
         "--enable-muxer=image2",
         "--enable-muxer=rawvideo",
         "--enable-protocol=fd",
@@ -72,6 +73,7 @@ APV_FORBIDDEN_BUILD_FLAGS = frozenset(
         "--enable-nvdec",
         "--enable-nvenc",
         "--enable-vulkan",
+        "--enable-decoder=h264",
     }
 )
 MACHINE_ARCHITECTURES = {"x86_64": "amd64", "aarch64": "arm64"}
@@ -232,6 +234,15 @@ def _verify_legacy_ffmpeg(
         ).decode("utf-8")
         if f"{binary_name} version" not in version_output:
             raise RuntimeError(f"candidate {binary_name} version output is invalid")
+    encoder_output = _docker_exec(
+        container,
+        "/usr/bin/ffmpeg",
+        "-hide_banner",
+        "-encoders",
+        user=runtime_user,
+    ).decode("utf-8")
+    if re.search(r"(?m)^\s*V\S*\s+libx264\s", encoder_output) is None:
+        raise RuntimeError("candidate Debian FFmpeg libx264 encoder is absent")
     return {
         "version": component["version"],
         "build_record_sha256": record_hashes,
@@ -322,6 +333,15 @@ def _verify_apv_ffmpeg(
     ).decode("utf-8")
     if re.search(r"(?m)^\s*V\S*\s+apv\s", decoder_output) is None:
         raise RuntimeError("candidate APV FFmpeg decoder is absent")
+    muxer_output = _docker_exec(
+        container,
+        APV_BINARIES["ffmpeg"],
+        "-hide_banner",
+        "-muxers",
+        user=runtime_user,
+    ).decode("utf-8")
+    if re.search(r"(?m)^\s*E\S*\s+nut\s", muxer_output) is None:
+        raise RuntimeError("candidate APV FFmpeg NUT muxer is absent")
     if (
         SIGNING_KEY_FINGERPRINT_PATTERN.fullmatch(
             str(component.get("signing_key_fingerprint", ""))

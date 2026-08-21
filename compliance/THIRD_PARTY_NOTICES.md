@@ -42,7 +42,7 @@ image build pins Debian package `7:7.1.5-0+deb13u1`, rejects
 `ffprobe -version`, Debian package versions, and dynamic libraries.
 
 The 2026-08-21 dual-runtime candidate image
-`sha256:9c760d529f98c09d01c82f501e3b867067848f50dddaf99750df4c31c259cba4`
+`sha256:0253eb746fa6ee012e263b02b2f233cfbf3743d1da82d439f020c7a637dc141b`
 contains two independently inventoried FFmpeg runtimes. Debian FFmpeg
 `7:7.1.5-0+deb13u1` reports `--enable-gpl`, no `--enable-nonfree`, shared
 libraries, and FFmpeg's GPL version 2 or later notice. Its exact
@@ -51,11 +51,11 @@ are preserved byte-for-byte in the generated license index under
 `locked:deb:ffmpeg`.
 
 The isolated `/opt/ffmpeg-apv` runtime is built from the signed official FFmpeg
-9.0.1 source release for CPU-only APV decoding. Its source archive and detached
+9.0.1 source release for CPU-only APV decoding and NUT muxing. Its source archive and detached
 signature are SHA-256 locked, the release-key fingerprint is locked, and the
 installed `ffmpeg` and `ffprobe` binaries are hashed for the verified
 architecture. Its build configuration disables network access, CUDA/NVIDIA,
-Vulkan, GPL, nonfree, and `liboapv` capabilities. The upstream FFmpeg license
+Vulkan, GPL, nonfree, `liboapv`, and H.264 decoding capabilities. The upstream FFmpeg license
 summary and LGPL-2.1 text are preserved byte-for-byte in the generated license
 index under `locked:source:ffmpeg-apv`.
 

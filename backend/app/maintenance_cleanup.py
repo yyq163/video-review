@@ -59,14 +59,40 @@ DIRECTORY_SCAN_BATCH_SIZE = 100
 PACKAGE_CLEANUP_BATCH_SIZE = 100
 PACKAGE_CLEANUP_RETRY_SECONDS = 300
 MAX_UPLOAD_PARTS_PER_SESSION = 256
+APV_H264_PLAYBACK_VARIANT = "apv-h264-v1"
 
 _directory_scan_lock = threading.Lock()
 _directory_scan_states: dict[tuple[str, str], tuple[tuple[int, int], Iterator[os.DirEntry[str]]]] = {}
 
 
-def _derivative_output_file_id(task_id: str, kind: str) -> str:
-    digest = hashlib.sha256(f"media-derivative-v1\0{task_id}\0{kind}".encode()).hexdigest()
+def _derivative_output_file_id(
+    task_id: str,
+    kind: str,
+    playback_variant: str | None = None,
+) -> str:
+    variant = (
+        f"\0variant={playback_variant}"
+        if kind == "playback_faststart" and playback_variant is not None
+        else ""
+    )
+    digest = hashlib.sha256(
+        f"media-derivative-v1\0{task_id}\0{kind}{variant}".encode()
+    ).hexdigest()
     return f"media_{digest[:32]}"
+
+
+def _active_derivative_output_file_ids(task_id: str, kind: str) -> tuple[str, ...]:
+    legacy = _derivative_output_file_id(task_id, kind)
+    if kind != "playback_faststart":
+        return (legacy,)
+    return (
+        legacy,
+        _derivative_output_file_id(
+            task_id,
+            kind,
+            APV_H264_PLAYBACK_VARIANT,
+        ),
+    )
 
 
 def _open_directory_scan(directory_fd: int) -> Iterator[os.DirEntry[str]]:
@@ -438,12 +464,16 @@ def _cleanup_orphan_managed_files(
             active_derivative_ids: set[str] = set()
             if kind == "file" and any(DERIVATIVE_FILE_ID_RE.fullmatch(entry.name) for entry in entries):
                 active_derivative_ids = {
-                    _derivative_output_file_id(task.id, task.kind)
+                    output_file_id
                     for task in session.scalars(
                         select(MediaDerivativeTaskModel)
                         .where(MediaDerivativeTaskModel.status.in_(("queued", "running")))
                         .order_by(MediaDerivativeTaskModel.id)
                         .with_for_update()
+                    )
+                    for output_file_id in _active_derivative_output_file_ids(
+                        task.id,
+                        task.kind,
                     )
                 }
             for entry in entries:

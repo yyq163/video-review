@@ -493,9 +493,12 @@ def verify_supply_chain() -> dict[str, int]:
                 "--disable-nvdec",
                 "--disable-nvenc",
                 "--disable-vulkan",
+                "--enable-decoder=apv",
+                "--enable-muxer=nut",
             )
         )
-        and "--enable-liboapv" not in dockerfile,
+        and "--enable-liboapv" not in dockerfile
+        and "--enable-decoder=h264" not in dockerfile,
         "the isolated APV FFmpeg runtime is not capability bounded",
     )
     for record in (

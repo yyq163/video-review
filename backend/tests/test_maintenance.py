@@ -1096,15 +1096,28 @@ def test_orphan_media_derivative_is_eventually_removed(tmp_path: Path) -> None:
     assert not target.exists()
 
 
+@pytest.mark.parametrize(
+    ("kind", "playback_variant"),
+    [
+        ("thumbnail", None),
+        ("playback_faststart", "apv-h264-v1"),
+    ],
+)
 def test_orphan_media_derivative_cleanup_locks_and_preserves_active_task(
     tmp_path: Path,
+    kind: str,
+    playback_variant: str | None,
 ) -> None:
     import backend.app.maintenance_cleanup as maintenance
 
     root = tmp_path / "files"
     root.mkdir()
     task_id = f"mdt_{uuid.uuid4().hex}"
-    media_id = maintenance._derivative_output_file_id(task_id, "thumbnail")
+    media_id = maintenance._derivative_output_file_id(
+        task_id,
+        kind,
+        playback_variant,
+    )
     target = root / media_id
     target.write_bytes(b"recoverable-active-derivative")
     stale = datetime.now(timezone.utc) - timedelta(days=2)
@@ -1116,7 +1129,7 @@ def test_orphan_media_derivative_cleanup_locks_and_preserves_active_task(
         def scalars(self, statement: object) -> list[object]:
             nonlocal lock_checked
             lock_checked = getattr(statement, "_for_update_arg", None) is not None
-            return [SimpleNamespace(id=task_id, kind="thumbnail")]
+            return [SimpleNamespace(id=task_id, kind=kind)]
 
         def get(self, _model: object, _record_id: str) -> None:
             raise AssertionError("an active derivative must be protected before reference lookup")

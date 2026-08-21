@@ -189,6 +189,7 @@ class Settings(BaseSettings):
     upload_runtime_worker_count: int = Field(default=1, ge=1, le=1)
     upload_session_ttl_seconds: int = Field(default=15 * 60, ge=300, le=7 * 24 * 60 * 60)
     media_probe_command: str = Field(default="/opt/ffmpeg-apv/bin/ffprobe", min_length=1, max_length=4096)
+    media_playback_probe_command: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=4096)
     media_probe_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     media_max_dimension: int = Field(default=8192, ge=3840, le=16384)
     media_max_pixels: int = Field(default=35_389_440, ge=8_294_400, le=134_217_728)
@@ -196,6 +197,11 @@ class Settings(BaseSettings):
     media_apv_transform_command: str = Field(default="/opt/ffmpeg-apv/bin/ffmpeg", min_length=1, max_length=4096)
     media_transform_timeout_seconds: float = Field(default=1800.0, gt=0, le=7200)
     media_transform_output_limit_bytes: int = Field(default=256 * 1024, ge=4096, le=4 * 1024 * 1024)
+    media_playback_max_bytes: int = Field(
+        default=5 * GIBIBYTE,
+        ge=64 * 1024 * 1024,
+        le=5 * GIBIBYTE,
+    )
     media_worker_max_attempts: int = Field(default=3, ge=1, le=10)
     media_worker_retry_delay_seconds: int = Field(default=30, ge=1, le=3600)
     media_worker_lease_seconds: int = Field(default=3600, ge=60, le=7200)

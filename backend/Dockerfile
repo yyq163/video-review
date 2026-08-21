@@ -74,6 +74,7 @@ RUN ./configure \
         --enable-encoder=rawvideo \
         --enable-demuxer=mov \
         --enable-muxer=mp4 \
+        --enable-muxer=nut \
         --enable-muxer=image2 \
         --enable-muxer=rawvideo \
         --enable-parser=apv \
