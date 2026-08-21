@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -294,6 +295,56 @@ def test_nginx_protected_media_preserves_only_backend_vetted_cors_headers() -> N
     assert "add_header Vary $upstream_http_vary always;" in protected_location
     assert "$http_origin" not in protected_location
     assert "Access-Control-Allow-Origin *" not in protected_location
+
+
+def test_nginx_package_download_get_has_an_isolated_integrity_wait_timeout() -> None:
+    root = Path(__file__).resolve().parents[2]
+    template = (root / "ops/nginx/nginx.conf.template").read_text(encoding="utf-8")
+    package_download_pattern = (
+        r"^/api/v1/final-cut-review/review/projects/prj_[0-9a-f]{32}/"
+        r"finalized-originals/packages/pkg_[0-9a-f]{32}/download$"
+    )
+    package_location_start = template.index(
+        f'location ~ "{package_download_pattern}"'
+    )
+    generic_location_start = template.index("location / {", package_location_start)
+    package_location = template[package_location_start:generic_location_start]
+    generic_location = template[generic_location_start:]
+
+    def active_directives(block: str) -> list[str]:
+        return [
+            stripped
+            for line in block.splitlines()
+            if (stripped := line.strip())
+            and not stripped.startswith("#")
+            and not stripped.startswith("location ")
+            and stripped != "}"
+        ]
+
+    package_directives = active_directives(package_location)
+    generic_directives = active_directives(generic_location)
+    assert package_directives.count("proxy_read_timeout 30m;") == 1
+    assert not any(directive.startswith("proxy_read_timeout") for directive in generic_directives)
+
+    project_id = "prj_" + "a" * 32
+    package_id = "pkg_" + "b" * 32
+    package_path = (
+        f"/api/v1/final-cut-review/review/projects/{project_id}/"
+        f"finalized-originals/packages/{package_id}"
+    )
+    assert re.fullmatch(package_download_pattern, f"{package_path}/download")
+    for other_path in (
+        package_path,
+        f"{package_path}/download-session",
+        f"{package_path}/download/extra",
+        f"/api/v1/final-cut-review/projects/{project_id}/items/item_{'c' * 32}/finalized-original/download",
+        package_path.replace(project_id, "project-user-controlled") + "/download",
+        package_path.replace(package_id, "package-user-controlled") + "/download",
+    ):
+        assert re.fullmatch(package_download_pattern, other_path) is None
+
+    package_directives.remove("proxy_read_timeout 30m;")
+    assert package_directives == generic_directives
 
 
 def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:
