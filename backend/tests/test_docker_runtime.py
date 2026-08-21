@@ -297,15 +297,15 @@ def test_nginx_protected_media_preserves_only_backend_vetted_cors_headers() -> N
     assert "Access-Control-Allow-Origin *" not in protected_location
 
 
-def test_nginx_package_download_get_has_an_isolated_integrity_wait_timeout() -> None:
+def test_nginx_package_integrity_endpoints_have_an_isolated_wait_timeout() -> None:
     root = Path(__file__).resolve().parents[2]
     template = (root / "ops/nginx/nginx.conf.template").read_text(encoding="utf-8")
-    package_download_pattern = (
+    package_integrity_wait_pattern = (
         r"^/api/v1/final-cut-review/review/projects/prj_[0-9a-f]{32}/"
-        r"finalized-originals/packages/pkg_[0-9a-f]{32}/download$"
+        r"finalized-originals/packages(?:/pkg_[0-9a-f]{32}/download)?$"
     )
     package_location_start = template.index(
-        f'location ~ "{package_download_pattern}"'
+        f'location ~ "{package_integrity_wait_pattern}"'
     )
     generic_location_start = template.index("location / {", package_location_start)
     package_location = template[package_location_start:generic_location_start]
@@ -328,20 +328,22 @@ def test_nginx_package_download_get_has_an_isolated_integrity_wait_timeout() -> 
 
     project_id = "prj_" + "a" * 32
     package_id = "pkg_" + "b" * 32
-    package_path = (
-        f"/api/v1/final-cut-review/review/projects/{project_id}/"
-        f"finalized-originals/packages/{package_id}"
+    package_collection_path = (
+        f"/api/v1/final-cut-review/review/projects/{project_id}/finalized-originals/packages"
     )
-    assert re.fullmatch(package_download_pattern, f"{package_path}/download")
+    package_path = f"{package_collection_path}/{package_id}"
+    assert re.fullmatch(package_integrity_wait_pattern, package_collection_path)
+    assert re.fullmatch(package_integrity_wait_pattern, f"{package_path}/download")
     for other_path in (
         package_path,
         f"{package_path}/download-session",
         f"{package_path}/download/extra",
+        f"{package_collection_path}/",
         f"/api/v1/final-cut-review/projects/{project_id}/items/item_{'c' * 32}/finalized-original/download",
-        package_path.replace(project_id, "project-user-controlled") + "/download",
+        package_collection_path.replace(project_id, "project-user-controlled"),
         package_path.replace(package_id, "package-user-controlled") + "/download",
     ):
-        assert re.fullmatch(package_download_pattern, other_path) is None
+        assert re.fullmatch(package_integrity_wait_pattern, other_path) is None
 
     package_directives.remove("proxy_read_timeout 30m;")
     assert package_directives == generic_directives

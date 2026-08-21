@@ -98,7 +98,7 @@ http {
             return 404;
         }
 
-        location ~ "^/api/v1/final-cut-review/review/projects/prj_[0-9a-f]{32}/finalized-originals/packages/pkg_[0-9a-f]{32}/download$" {
+        location ~ "^/api/v1/final-cut-review/review/projects/prj_[0-9a-f]{32}/finalized-originals/packages(?:/pkg_[0-9a-f]{32}/download)?$" {
             if ($edge_handoff_valid = 0) {
                 return 403;
             }
@@ -114,10 +114,11 @@ http {
             proxy_request_buffering off;
             proxy_buffering off;
             proxy_max_temp_file_size 0;
-            # A fresh package session verifies the complete ZIP before FastAPI
-            # can send response headers.  The 30 minute bound gives the 50 GiB
-            # package limit nearly four times the observed production NFS hash
-            # duration while keeping every other API on Nginx's default timeout.
+            # Package reuse and a fresh download session both verify the
+            # complete ZIP before FastAPI can send response headers.  The 30
+            # minute bound gives the 50 GiB package limit nearly four times the
+            # observed production NFS hash duration while keeping package
+            # detail/session and every other API on Nginx's default timeout.
             proxy_read_timeout 30m;
             proxy_pass http://fcr_backend;
         }
