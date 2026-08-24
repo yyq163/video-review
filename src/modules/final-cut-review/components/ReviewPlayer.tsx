@@ -25,6 +25,7 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const playerCardRef = useRef<HTMLElement | null>(null);
+  const fullscreenControlsRef = useRef<HTMLDivElement | null>(null);
   const fullscreenControlsHoverRef = useRef(false);
   const fullscreenControlsTimerRef = useRef<number | null>(null);
   const resetDraftRef = useRef<(() => void) | null>(null);
@@ -88,7 +89,9 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(document.fullscreenElement === playerCardRef.current);
+      const nextFullscreen = document.fullscreenElement === playerCardRef.current;
+      if (!nextFullscreen) fullscreenControlsHoverRef.current = false;
+      setIsFullscreen(nextFullscreen);
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -96,10 +99,14 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
 
   useEffect(() => {
     if (!isFullscreen) {
+      fullscreenControlsHoverRef.current = false;
       clearFullscreenControlsTimer();
       setFullscreenControlsVisible(true);
       return;
     }
+    fullscreenControlsHoverRef.current = Boolean(
+      fullscreenControlsRef.current?.matches(':hover'),
+    );
     setFullscreenControlsVisible(true);
     scheduleFullscreenControlsHide();
     const handleFullscreenKey = () => revealFullscreenControls();
@@ -332,12 +339,18 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
             className="fj-review-fullscreen-controls"
             data-testid="fullscreen-controls"
             data-visible={!isFullscreen || fullscreenControlsVisible ? 'true' : 'false'}
+            ref={fullscreenControlsRef}
             onMouseEnter={() => {
+              if (!isFullscreen) return;
               fullscreenControlsHoverRef.current = true;
               clearFullscreenControlsTimer();
               setFullscreenControlsVisible(true);
             }}
             onMouseLeave={() => {
+              if (!isFullscreen) {
+                fullscreenControlsHoverRef.current = false;
+                return;
+              }
               fullscreenControlsHoverRef.current = false;
               revealFullscreenControls();
             }}

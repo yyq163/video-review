@@ -211,6 +211,7 @@ export function ReviewPlayerStage({
               data-testid="text-annotation-editor"
               style={{ ...textEditorStyle, pointerEvents: 'auto', position: 'absolute' }}
               onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
               onSubmit={(event) => {
                 event.preventDefault();
                 if (textCompositionRef.current) return;

@@ -9,7 +9,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ReviewRuntimeProvider, createReviewRuntime, type ReviewRuntime } from '../entry/runtime';
 import { FinalCutReviewClient } from '../contracts-generated/backend-contract';
 import type { ResponsibleEditor, ReviewIssue, ReviewVersion, UploadProgress } from '../contracts/types';
-import type { MediaMetadataPort } from '../ports';
+import type { MediaMetadata, MediaMetadataPort } from '../ports';
 import { createSeedData } from '../core/seed';
 import { playbackTargetFromIssue } from '../core/playback';
 import { IssuePanel } from './IssuePanel';
@@ -81,7 +81,10 @@ async function openV1UploadModal() {
   return screen.findByRole('dialog', { name: '创建成片并上传 V1' });
 }
 
-async function renderProjectList(setup?: (runtime: ReviewRuntime) => Promise<void>) {
+async function renderProjectList(
+  setup?: (runtime: ReviewRuntime) => Promise<void>,
+  entryMode: 'edit' | 'review' = 'edit',
+) {
   const runtime = createReviewRuntime();
   if (setup) await setup(runtime);
   const queryClient = new QueryClient({
@@ -93,10 +96,10 @@ async function renderProjectList(setup?: (runtime: ReviewRuntime) => Promise<voi
   const result = render(
     <QueryClientProvider client={queryClient}>
       <ReviewRuntimeProvider runtime={runtime}>
-        <MemoryRouter initialEntries={['/edit/projects']}>
+        <MemoryRouter initialEntries={[`/${entryMode}/projects`]}>
           <Routes>
-            <Route path="/edit/projects" element={<ProjectListPage entryMode="edit" />} />
-            <Route path="/edit/projects/:projectRefId" element={<div>项目详情</div>} />
+            <Route path={`/${entryMode}/projects`} element={<ProjectListPage entryMode={entryMode} />} />
+            <Route path={`/${entryMode}/projects/:projectRefId`} element={<div>项目详情</div>} />
           </Routes>
         </MemoryRouter>
       </ReviewRuntimeProvider>
@@ -1349,6 +1352,20 @@ describe('ProjectListPage filtering and paging', () => {
     vi.useRealTimers();
   });
 
+  it('warns that list deletion is permanent and sends nothing when confirmation is cancelled', async () => {
+    const runtimeResult = await renderProjectList(undefined, 'review');
+    const deleteProject = vi.spyOn(runtimeResult.runtime.getApi('review'), 'deleteProject');
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    await userEvent.click(await screen.findByRole('button', { name: '删除项目' }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      '确认永久删除项目「真千金是男的」及其分集、版本、意见和可安全释放的媒体文件？该操作无法撤销；已定稿项目必须先撤销全部定稿。',
+    );
+    expect(deleteProject).not.toHaveBeenCalled();
+    cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
+  });
+
   it('filters projects by search text, lifecycle, and derived completion state', async () => {
     let getProjectSummary: ReturnType<typeof vi.spyOn> | undefined;
     const runtimeResult = await renderProjectList(async (runtime) => {
@@ -1379,7 +1396,14 @@ describe('ProjectListPage filtering and paging', () => {
     await userEvent.click(screen.getByRole('button', { name: '新建项目' }));
     const createDialog = screen.getByRole('dialog', { name: '新建项目' });
     expect(createDialog).toBeInTheDocument();
-    expect(within(createDialog).getByLabelText('项目帧率')).toHaveValue('25/1');
+    const projectName = within(createDialog).getByLabelText('项目名称');
+    const projectCode = within(createDialog).getByLabelText('项目编号');
+    const projectFrameRate = within(createDialog).getByLabelText('项目帧率');
+    const projectDescription = within(createDialog).getByLabelText('项目说明');
+    expect(projectFrameRate).toHaveValue('25/1');
+    expectBefore(projectName, projectCode);
+    expectBefore(projectCode, projectFrameRate);
+    expectBefore(projectFrameRate, projectDescription);
     expect(screen.getByRole('heading', { name: '项目列表' })).toBeInTheDocument();
     await userEvent.click(within(createDialog).getByRole('button', { name: '取消' }));
     expect(getProjectSummary).not.toHaveBeenCalled();
@@ -1489,6 +1513,27 @@ describe('ProjectDetailPage archive workflow', () => {
     expect(screen.queryByRole('button', { name: '归档项目' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '删除项目' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('project-finalization-command')).not.toBeInTheDocument();
+
+    cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
+  });
+
+  it('aborts an active V1 media probe when the centered upload modal closes', async () => {
+    const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
+    let probeSignal: AbortSignal | undefined;
+    vi.spyOn(runtimeResult.runtime.mediaMetadata, 'probe').mockImplementation((_blob, options) => {
+      probeSignal = options?.signal;
+      return new Promise<MediaMetadata>(() => undefined);
+    });
+
+    await screen.findByRole('heading', { name: /真千金是男的/ });
+    const dialog = await openV1UploadModal();
+    await userEvent.upload(
+      within(dialog).getByTestId('create-item-file'),
+      new File(['v1'], '第99集.mp4', { type: 'video/mp4' }),
+    );
+    expect(probeSignal?.aborted).toBe(false);
+    await userEvent.click(within(dialog).getByRole('button', { name: '关闭创建成片并上传 V1' }));
+    expect(probeSignal?.aborted).toBe(true);
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
@@ -1843,6 +1888,8 @@ describe('ProjectDetailPage archive workflow', () => {
 
   it('exposes project delete only through review controls', async () => {
     const runtimeResult = renderProjectDetail('/review/projects/prj_seed_final_cut');
+    const deleteProject = vi.spyOn(runtimeResult.runtime.getApi('review'), 'deleteProject');
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
     expect(screen.queryByTestId('create-item-upload')).not.toBeInTheDocument();
@@ -1850,6 +1897,11 @@ describe('ProjectDetailPage archive workflow', () => {
     expect(screen.getAllByTestId('package-project')).toHaveLength(1);
     expect(screen.getByTestId('package-project')).toBeEnabled();
     expect(screen.queryByText('进入')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '删除项目' }));
+    expect(confirm).toHaveBeenCalledWith(
+      '确认永久删除项目「真千金是男的」及其分集、版本、意见和可安全释放的媒体文件？该操作无法撤销；已定稿项目必须先撤销全部定稿。',
+    );
+    expect(deleteProject).not.toHaveBeenCalled();
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
@@ -2140,6 +2192,44 @@ describe('AppendVersionPanel component', () => {
     expect(onSubmit.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ file: expect.objectContaining({ name: '狼王01.mp4' }) }));
   });
 
+  it('aborts each V1 media probe when its row is removed, the batch is replaced, or the panel unmounts', async () => {
+    const signals: AbortSignal[] = [];
+    const mediaMetadata: MediaMetadataPort = {
+      probe: vi.fn((_blob, options) => {
+        if (!options?.signal) throw new Error('missing V1 probe signal');
+        signals.push(options.signal);
+        return new Promise<MediaMetadata>(() => undefined);
+      }),
+    };
+    const result = render(
+      <CreateItemUploadPanel
+        mediaMetadata={mediaMetadata}
+        onSubmit={vi.fn()}
+        projectFrameRate={{ fpsNum: 25, fpsDen: 1 }}
+        responsibleEditors={[
+          { responsibleEditorId: 'editor-a', displayName: '剪辑师甲', lockVersion: 1, createdAt: '', updatedAt: '' },
+        ]}
+      />,
+    );
+    const fileInput = screen.getByTestId('create-item-file');
+    await userEvent.upload(fileInput, [
+      new File(['one'], '第1集.mp4', { type: 'video/mp4' }),
+      new File(['two'], '第2集.mp4', { type: 'video/mp4' }),
+    ]);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).not.toBe(signals[1]);
+
+    await userEvent.click(within(screen.getByTestId('upload-row-0')).getByRole('button', { name: /移除待上传条目/ }));
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+
+    await userEvent.upload(fileInput, new File(['three'], '第3集.mp4', { type: 'video/mp4' }));
+    expect(signals[1].aborted).toBe(true);
+    expect(signals[2].aborted).toBe(false);
+    result.unmount();
+    expect(signals[2].aborted).toBe(true);
+  });
+
   it('continues after failed and uncertain rows, reports recovery, and retries only the chosen row', async () => {
     const attempts = new Map<string, number>();
     const onSubmit = vi.fn(async (input: { file: File }) => {
@@ -2264,6 +2354,76 @@ describe('AppendVersionPanel component', () => {
         localProbe: metadata,
       }),
     );
+  });
+
+  it('keeps append note and change summary optional while requiring the editor binding', async () => {
+    const onSubmit = vi.fn();
+    const metadata = {
+      durationMs: 61_000,
+      width: 1920,
+      height: 1080,
+      bitrateBps: 8_000_000,
+      fpsNum: 25,
+      fpsDen: 1,
+      isVariableFrameRate: false as const,
+      probeVersion: 'mediainfo.js-0.3.7' as const,
+    };
+    render(
+      <AppendVersionPanel
+        mediaMetadata={{ probe: vi.fn().mockResolvedValue(metadata) }}
+        nextLabel="V2"
+        onSubmit={onSubmit}
+        projectFrameRate={{ fpsNum: 25, fpsDen: 1 }}
+        responsibleEditors={[
+          { responsibleEditorId: 'editor-a', displayName: '剪辑师甲', lockVersion: 1, createdAt: '', updatedAt: '' },
+        ]}
+      />,
+    );
+    await userEvent.upload(
+      screen.getByTestId('append-version-file'),
+      new File(['v2'], 'optional-metadata.mp4', { type: 'video/mp4' }),
+    );
+    await userEvent.clear(screen.getByTestId('append-version-note'));
+    await userEvent.clear(screen.getByTestId('append-version-change-summary'));
+    await userEvent.click(screen.getByRole('button', { name: '确认追加 V2' }));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      versionNote: '',
+      changeSummary: '',
+      responsibleEditorId: 'editor-a',
+      responsibleEditorNameSnapshot: '剪辑师甲',
+      localProbe: metadata,
+    }));
+  });
+
+  it('aborts an Append probe on replacement and unmount while stale completion stays ignored', async () => {
+    const signals: AbortSignal[] = [];
+    const mediaMetadata: MediaMetadataPort = {
+      probe: vi.fn((_blob, options) => {
+        if (!options?.signal) return Promise.reject(new Error('missing Append probe signal'));
+        signals.push(options.signal);
+        return new Promise<MediaMetadata>(() => undefined);
+      }),
+    };
+    const result = render(
+      <AppendVersionPanel
+        mediaMetadata={mediaMetadata}
+        nextLabel="V2"
+        onSubmit={vi.fn()}
+        projectFrameRate={{ fpsNum: 25, fpsDen: 1 }}
+        responsibleEditors={[
+          { responsibleEditorId: 'editor-a', displayName: '剪辑师甲', lockVersion: 1, createdAt: '', updatedAt: '' },
+        ]}
+      />,
+    );
+    const fileInput = screen.getByTestId('append-version-file');
+    await userEvent.upload(fileInput, new File(['one'], 'one.mp4', { type: 'video/mp4' }));
+    expect(signals[0].aborted).toBe(false);
+    await userEvent.upload(fileInput, new File(['two'], 'two.mp4', { type: 'video/mp4' }));
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    result.unmount();
+    expect(signals[1].aborted).toBe(true);
   });
 
   it('keeps the same appended file and metadata available for a same-page retry', async () => {

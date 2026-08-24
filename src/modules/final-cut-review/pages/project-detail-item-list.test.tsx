@@ -5,7 +5,6 @@ import { MemoryRouter } from 'react-router-dom';
 import type {
   FinalizationCleanupRetry,
   FinalizationRevocation,
-  ReviewItem,
 } from '../contracts/types';
 import { createSeedData } from '../core/seed';
 import {
@@ -71,7 +70,7 @@ function renderList(input: {
   isArchived?: boolean;
   itemActionPending?: boolean;
   onBulkDeleteReviewItems?: (
-    items: ReviewItem[],
+    items: ReviewProjectSummaryItem[],
   ) => Promise<{
     succeededIds: string[];
     failures: Record<string, string>;

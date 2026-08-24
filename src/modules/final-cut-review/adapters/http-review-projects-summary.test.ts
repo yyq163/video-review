@@ -209,6 +209,8 @@ describe('HTTP project summary adapter', () => {
       { signal: undefined },
     );
     expect(summary.project.completionStatus).toBe('in_progress');
+    expect(summary.items[0]).not.toHaveProperty('createdAt');
+    expect(summary.items[0]).not.toHaveProperty('updatedAt');
     expect(summary.items[0]).toMatchObject({
       currentVersionId: 'version-ready',
       status: 'changes_requested',

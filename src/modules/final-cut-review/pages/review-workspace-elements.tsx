@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { EntryMode, FinalizationRevocation, ReviewItem } from '../contracts/types';
+import type { EntryMode, FinalizationRevocation } from '../contracts/types';
+import type { EpisodeReviewItem } from '../core/episode-dedupe';
 import { reviewStatusLabel, StatusBadge } from '../components/shared';
 import { FinalizedRevokeControl, type FinalizedRevokeUiState } from '../components/FinalizedRevokeControl';
 
@@ -13,7 +14,7 @@ function scrollEpisodeIntoView(node: HTMLButtonElement | undefined) {
 }
 
 export function EpisodeStrip(props: {
-  items: ReviewItem[];
+  items: EpisodeReviewItem[];
   currentItemId: string;
   unresolvedCounts: Record<string, number>;
   currentVersionLabels: Record<string, string>;
@@ -23,8 +24,8 @@ export function EpisodeStrip(props: {
   isArchived: boolean;
   itemActionPending: boolean;
   revocationUncertainIds: ReadonlySet<string>;
-  onRevokeFinalization?(item: ReviewItem): Promise<FinalizationRevocation>;
-  onSelect(item: ReviewItem): void;
+  onRevokeFinalization?(item: EpisodeReviewItem): Promise<FinalizationRevocation>;
+  onSelect(item: EpisodeReviewItem): void;
 }) {
   const itemNodesRef = useRef(new Map<string, HTMLButtonElement>());
   const authorityAcknowledgedUncertainIdsRef = useRef(new Set<string>());

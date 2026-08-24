@@ -9,6 +9,7 @@ import {
 } from '../contracts-generated/backend-contract';
 import type { ReviewApiPort, ReviewProjectSummary, ReviewProjectSummaryItem } from '../ports';
 import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
+import { ReviewDomainError } from '../core/errors';
 import {
   itemFromDto,
   projectFromDto,
@@ -191,8 +192,6 @@ function summaryItemFromDto(
         ? finalization.id
         : null,
     status: dto.workflow_state,
-    createdAt: project.createdAt,
-    updatedAt: project.updatedAt,
     lockVersion: dto.lock_version,
     currentVersion: {
       id: dto.current_version.id,
@@ -589,14 +588,27 @@ export class HttpReviewProjects implements ProjectApi {
         operation.lockVersion,
         { idempotent: true, commandId: operation.commandId },
       );
-      if (result.project_ref_id !== input.projectRefId || result.outcome !== 'deleted') {
+      if (result.project_ref_id !== input.projectRefId) {
         throw new DeleteProjectResultUncertainError(
           new Error('项目删除命令返回了无法核对的对象结果'),
+        );
+      }
+      if (result.outcome === 'failed') {
+        clearProjectDeleteOperation(input.projectRefId);
+        throw new ReviewDomainError(
+          '项目删除未执行，请根据当前项目状态修正后重试。',
+          result.error_code ?? 'RESOURCE_STATE_CONFLICT',
+        );
+      }
+      if (result.outcome === 'outcome_unknown') {
+        throw new DeleteProjectResultUncertainError(
+          new Error(result.error_code ?? 'COMMIT_OUTCOME_UNKNOWN'),
         );
       }
       clearProjectDeleteOperation(input.projectRefId);
       return projectFromDto(current);
     } catch (error) {
+      if (error instanceof ReviewDomainError) throw error;
       if (
         error instanceof FinalCutReviewHttpError
         && error.httpStatus < 500

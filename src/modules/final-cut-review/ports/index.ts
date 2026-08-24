@@ -50,7 +50,7 @@ export interface ReviewItemWithMetadata extends ReviewItem {
   readonly itemCode: string;
 }
 
-export interface ReviewProjectSummaryItem extends ReviewItemWithMetadata {
+export interface ReviewProjectSummaryItem extends Omit<ReviewItemWithMetadata, 'createdAt' | 'updatedAt'> {
   readonly lockVersion: number;
   readonly currentVersion: {
     id: VersionId;

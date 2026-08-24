@@ -81,3 +81,27 @@
 - `UNVERIFIED_CODE_REVIEW`：Task 5 尚待独立 reviewer。
 - `BUILD_DEFAULT = BLOCKED_CONFIG`；`BUILD_WITH_EXPLICIT_LOCAL_ORIGIN = PASS`。
 - `FOLLOW_UP = none`；没有把 active 冻结需求延期或写入根账本。
+
+## Fix round 1/5 — independent review repairs
+
+- `BASE = a6946061e24ab9238e85518b074d4f02d7b4318c`
+- `REVIEW_SOURCE = .superpowers/sdd/task_plan/task-5-review.md`
+- 处置：review 的删除 copy、outcome identity、probe lifecycle、表单顺序、summary 时间、text chrome、fullscreen hover 共 8 项均 `FIX_NOW`；“version_note/change_summary 端到端必填”按用户裁决为 `INVALID_UNSOURCED_EXPANSION`，已回撤为旧可选合同，仅 editor/media binding 必填。
+
+### RED / GREEN
+
+- P1 RED：project/item 明确 `failed` 均被包装为 unknown；batch 混合 `deleted + outcome_unknown` 在新 adapter 生成新 command ID；ProjectList 永久删除仍承诺历史/媒体保留。
+- P1 GREEN：project/item `failed` 清旧 identity、保留安全 error code 并允许新 command；unknown 保留并复用旧 identity；batch 仅在全部 `deleted/failed` 时清 identity，unknown 跨 reload 复用且不同 signature fail closed；list/detail copy 一致。
+- P2 RED：V1 多行共享同一 AbortSignal，remove/replace/unmount 不完整；Append 无 signal；fps DOM 顺序错误；summary mapper 伪造 item 时间；text form chrome click 触发 play；fullscreen 普通模式 hover 污染 latch；blank note/summary 被 UI 阻断。
+- P2 GREEN：V1 每行 controller，remove/replace/modal close/unmount 均真实 `signal.aborted`；Append 独立 controller + sequence；名称→编号→fps→说明；summary domain 不再声明未知时间；text input/form chrome 隔离；fullscreen transition 按真实 `:hover` 重算且 entry/exit/re-entry 非 hover 3 秒隐藏；blank note/summary 可提交，绕 UI 缺 editor 在副作用前拒绝。
+
+### Node 24.19.0 verification
+
+- P1 focused：2 files / 6 tests passed。
+- P2 + rollback focused：4 files / 9 tests passed。
+- Full Vitest：29 passed / 1 skipped files；374 passed / 1 skipped tests。
+- `npm run typecheck`：PASS。
+- `npm run lint`：PASS。
+- `npm run contracts:generate`、`npm run contracts:check`、Python generator `--check`：PASS。
+- 显式本地 origin build：PASS；`frontend security headers: PASS`；保留既有 MediaInfo WASM runtime URL warning。
+- Browser：`UNVERIFIED_BROWSER`，由主控 Computer Use 裁决。

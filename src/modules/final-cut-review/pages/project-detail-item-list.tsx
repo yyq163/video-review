@@ -9,17 +9,13 @@ import type {
   EntryMode,
   FinalizationCleanupRetry,
   FinalizationRevocation,
-  ReviewItem,
   ReviewFrameRate,
 } from '../contracts/types';
 import { formatEpisodeDisplayValue, type ReviewEpisodeGroup } from '../core/episode-dedupe';
 import type { ReviewProjectSummaryItem } from '../ports';
 import { formatTimestampTimecode } from '../core/timecode';
 
-export type ProjectDetailMetadataEpisodeGroup = Omit<ReviewEpisodeGroup, 'items' | 'representative'> & {
-  items: ReviewProjectSummaryItem[];
-  representative: ReviewProjectSummaryItem;
-};
+export type ProjectDetailMetadataEpisodeGroup = ReviewEpisodeGroup<ReviewProjectSummaryItem>;
 
 const LONG_PRESS_SELECTION_MS = 500;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
@@ -45,13 +41,13 @@ interface ProjectDetailItemListProps {
   itemActionPending: boolean;
   bulkActionHost?: HTMLElement | null;
   onBulkDeleteReviewItems?: (
-    items: ReviewItem[],
+    items: ReviewProjectSummaryItem[],
   ) => Promise<{
     succeededIds: string[];
     failures: Record<string, string>;
     uncertainIds: string[];
   }>;
-  onDeleteReviewItem: (item: ReviewItem) => void;
+  onDeleteReviewItem: (item: ReviewProjectSummaryItem) => void;
   onThumbnailLoadError: (item: ReviewProjectSummaryItem) => Promise<unknown>;
   onRevokeFinalization?: (item: ReviewProjectSummaryItem) => Promise<FinalizationRevocation>;
   onRetryFinalizationCleanup?: (

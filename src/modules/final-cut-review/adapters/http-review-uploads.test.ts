@@ -43,6 +43,31 @@ afterEach(() => {
 });
 
 describe('HTTP review upload idempotency', () => {
+  it('rejects an Append binding without a responsible editor before any project or upload side effect', async () => {
+    const projectForWrite = vi.fn();
+    const command = vi.fn();
+    const upload = vi.fn();
+    const transport = {
+      assertWriteContext: vi.fn(),
+      projectForWrite,
+      command,
+      baseUrl: BASE_URL,
+    } as unknown as HttpReviewTransport;
+    const uploads = new HttpReviewUploads(transport, upload);
+
+    await expect(uploads.appendVersion({
+      projectRefId: 'prj_missing_editor',
+      reviewItemId: 'item_missing_editor',
+      file: new File(['v2'], 'missing-editor.mp4', { type: 'video/mp4' }),
+      localProbe: uploadBinding.localProbe,
+      responsibleEditorNameSnapshot: '不得替代 editor id',
+    }, context('missing-editor'))).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    expect(projectForWrite).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+  });
+
   it('forwards the explicit delete confirmation in the command payload', async () => {
     const item = reviewItem(1);
     const command = vi.fn().mockResolvedValue({

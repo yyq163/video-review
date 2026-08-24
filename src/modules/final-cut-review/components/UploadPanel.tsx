@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { UploadCloud, X } from 'lucide-react';
 import type { ResponsibleEditor, ReviewFrameRate, UploadProgress } from '../contracts/types';
 import type { MediaMetadata, MediaMetadataPort } from '../ports';
@@ -105,7 +105,7 @@ export function CreateItemUploadPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const removedRowIdsRef = useRef(new Set<string>());
   const activeBatchEpisodeKeysRef = useRef(new Set<string>());
-  const mediaProbeAbortRef = useRef<AbortController | null>(null);
+  const mediaProbeAbortRef = useRef(new Map<string, AbortController>());
   const [bulkEditorId, setBulkEditorId] = useState(responsibleEditors?.[0]?.responsibleEditorId ?? '');
   const [rows, setRows] = useState<CreateItemUploadRow[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -167,8 +167,14 @@ export function CreateItemUploadPanel({
     setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
     setBatchError(null);
   };
+  useEffect(() => () => {
+    for (const controller of mediaProbeAbortRef.current.values()) controller.abort();
+    mediaProbeAbortRef.current.clear();
+  }, []);
   const removeRow = (row: CreateItemUploadRow) => {
     if (row.status === 'uploading') return;
+    mediaProbeAbortRef.current.get(row.id)?.abort();
+    mediaProbeAbortRef.current.delete(row.id);
     removedRowIdsRef.current.add(row.id);
     setRows((current) => current.filter((candidate) => candidate.id !== row.id));
     setBatchError(null);
@@ -356,9 +362,8 @@ export function CreateItemUploadPanel({
           disabled={disabled}
           onChange={(event) => {
             const selected = Array.from(event.currentTarget.files ?? []);
-            mediaProbeAbortRef.current?.abort();
-            const abortController = new AbortController();
-            mediaProbeAbortRef.current = abortController;
+            for (const controller of mediaProbeAbortRef.current.values()) controller.abort();
+            mediaProbeAbortRef.current.clear();
             const nextRows: CreateItemUploadRow[] = selected.map((file) => ({
               id: `upload-row-${nextRowId.current++}`,
               file,
@@ -374,17 +379,20 @@ export function CreateItemUploadPanel({
             setBatchError(null);
             if (mediaMetadata) {
               for (const row of nextRows) {
+                const abortController = new AbortController();
+                mediaProbeAbortRef.current.set(row.id, abortController);
                 void mediaMetadata.probe(row.file, {
                   signal: abortController.signal,
                   expectedFrameRate: projectFrameRate ?? undefined,
                 }).then((localProbe) => {
+                  if (abortController.signal.aborted) return;
                   setRows((current) => current.map((candidate) =>
                     candidate.id === row.id
                       ? { ...candidate, localProbe, mediaState: 'ready', mediaError: undefined }
                       : candidate,
                   ));
                 }).catch((error: unknown) => {
-                  if (error instanceof DOMException && error.name === 'AbortError') return;
+                  if (abortController.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
                   setRows((current) => current.map((candidate) =>
                     candidate.id === row.id
                       ? {
@@ -394,6 +402,10 @@ export function CreateItemUploadPanel({
                         }
                       : candidate,
                   ));
+                }).finally(() => {
+                  if (mediaProbeAbortRef.current.get(row.id) === abortController) {
+                    mediaProbeAbortRef.current.delete(row.id);
+                  }
                 });
               }
             }
@@ -572,6 +584,7 @@ export function AppendVersionPanel(props: {
   }): void | Promise<void>;
 }) {
   const mediaProbeSequenceRef = useRef(0);
+  const mediaProbeAbortRef = useRef<AbortController | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [responsibleEditorId, setResponsibleEditorId] = useState(
     props.responsibleEditors?.[0]?.responsibleEditorId ?? '',
@@ -592,6 +605,7 @@ export function AppendVersionPanel(props: {
   )
     ? responsibleEditorId
     : props.responsibleEditors?.[0]?.responsibleEditorId ?? '';
+  useEffect(() => () => mediaProbeAbortRef.current?.abort(), []);
 
   return (
     <form
@@ -611,10 +625,6 @@ export function AppendVersionPanel(props: {
           setSubmissionError(mediaProbeError ?? '媒体预检尚未完成。');
           return;
         }
-        if (!versionNote.trim() || !changeSummary.trim()) {
-          setSubmissionError('版本说明和本次修改说明必填。');
-          return;
-        }
         setFileError(null);
         setSubmissionError(null);
         const editor = props.responsibleEditors?.find(
@@ -622,8 +632,8 @@ export function AppendVersionPanel(props: {
         );
         void Promise.resolve(props.onSubmit({
           file,
-          versionNote: versionNote.trim(),
-          changeSummary: changeSummary.trim(),
+          versionNote,
+          changeSummary,
           ...(editor && localProbe
             ? {
                 responsibleEditorId: editor.responsibleEditorId,
@@ -668,24 +678,33 @@ export function AppendVersionPanel(props: {
           onChange={(event) => {
             const nextFile = event.currentTarget.files?.[0] ?? null;
             const probeSequence = ++mediaProbeSequenceRef.current;
+            mediaProbeAbortRef.current?.abort();
+            mediaProbeAbortRef.current = null;
             setFile(nextFile);
             setLocalProbe(null);
             setMediaProbeError(null);
+            setMediaProbePending(false);
             setFileError(null);
             setSubmissionError(null);
             if (nextFile && props.mediaMetadata) {
+              const abortController = new AbortController();
+              mediaProbeAbortRef.current = abortController;
               setMediaProbePending(true);
               void props.mediaMetadata.probe(nextFile, {
+                signal: abortController.signal,
                 expectedFrameRate: props.projectFrameRate ?? undefined,
               }).then((metadata) => {
-                if (mediaProbeSequenceRef.current !== probeSequence) return;
+                if (abortController.signal.aborted || mediaProbeSequenceRef.current !== probeSequence) return;
                 setLocalProbe(metadata);
                 setMediaProbeError(null);
               }).catch((error: unknown) => {
-                if (mediaProbeSequenceRef.current !== probeSequence) return;
+                if (abortController.signal.aborted || mediaProbeSequenceRef.current !== probeSequence) return;
                 setMediaProbeError(error instanceof Error ? error.message : '媒体预检失败');
               }).finally(() => {
-                if (mediaProbeSequenceRef.current === probeSequence) setMediaProbePending(false);
+                if (mediaProbeAbortRef.current === abortController) mediaProbeAbortRef.current = null;
+                if (!abortController.signal.aborted && mediaProbeSequenceRef.current === probeSequence) {
+                  setMediaProbePending(false);
+                }
               });
             }
           }}

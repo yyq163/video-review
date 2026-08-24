@@ -21,6 +21,17 @@ const reviewItemMetadataSchema = z.object({
 });
 
 export type ReviewItemMetadataValues = z.infer<typeof reviewItemMetadataSchema>;
+export type ReviewItemMetadataTarget = Pick<
+  ReviewItemWithMetadata,
+  | 'reviewItemId'
+  | 'projectRefId'
+  | 'itemCode'
+  | 'title'
+  | 'episode'
+  | 'status'
+  | 'currentVersionId'
+  | 'activeFinalizationId'
+> & Partial<Pick<ReviewItemWithMetadata, 'createdAt' | 'updatedAt'>>;
 
 function MetadataDialog(props: {
   children: ReactNode;
@@ -140,9 +151,9 @@ export function ProjectMetadataEditor(props: {
 }
 
 export function ReviewItemMetadataEditor(props: {
-  item: ReviewItemWithMetadata;
+  item: ReviewItemMetadataTarget;
   pending: boolean;
-  onSubmit(item: ReviewItemWithMetadata, values: ReviewItemMetadataValues): Promise<void>;
+  onSubmit(item: ReviewItemMetadataTarget, values: ReviewItemMetadataValues): Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);

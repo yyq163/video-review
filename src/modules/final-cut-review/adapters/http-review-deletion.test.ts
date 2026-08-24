@@ -5,9 +5,14 @@ import {
   type ReviewItemDTO,
 } from '../contracts-generated/backend-contract';
 import type { ExecutionContext } from '../contracts/types';
-import { HttpReviewProjects } from './http-review-projects';
+import { ReviewDomainError } from '../core/errors';
+import { DeleteProjectResultUncertainError, HttpReviewProjects } from './http-review-projects';
 import { HttpReviewTransport } from './http-review-transport';
-import { HttpReviewUploads } from './http-review-uploads';
+import {
+  DeleteReviewItemProtectionUnavailableError,
+  DeleteReviewItemResultUncertainError,
+  HttpReviewUploads,
+} from './http-review-uploads';
 
 afterEach(() => {
   window.sessionStorage.clear();
@@ -71,6 +76,131 @@ describe('durable HTTP deletion contracts', () => {
       context('delete-project-lost'),
     )).resolves.toMatchObject({ projectRefId: project.project_ref_id });
     expect(getProject).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears a determinate project failure and permits a corrected operation with a new command id', async () => {
+    const project = projectDto('prj_delete_failed');
+    const command = vi.fn()
+      .mockResolvedValueOnce({
+        project_ref_id: project.project_ref_id,
+        outcome: 'failed',
+        error_code: 'RESOURCE_STATE_CONFLICT',
+      })
+      .mockResolvedValueOnce({
+        project_ref_id: project.project_ref_id,
+        outcome: 'deleted',
+        error_code: null,
+      });
+    const transport = {
+      assertWriteContext: vi.fn(),
+      client: { getProject: vi.fn().mockResolvedValue(project) },
+      queryInit: vi.fn(),
+      command,
+    } as unknown as HttpReviewTransport;
+    const input = { projectRefId: project.project_ref_id, confirmed: true as const };
+
+    await expect(new HttpReviewProjects(transport, {} as never).deleteProject(
+      input,
+      context('project-failed'),
+    )).rejects.toEqual(expect.objectContaining<Partial<ReviewDomainError>>({
+      code: 'RESOURCE_STATE_CONFLICT',
+    }));
+    await expect(new HttpReviewProjects(transport, {} as never).deleteProject(
+      input,
+      context('project-corrected'),
+    )).resolves.toMatchObject({ projectRefId: project.project_ref_id });
+
+    expect(command.mock.calls[1]?.[5]?.commandId).not.toBe(command.mock.calls[0]?.[5]?.commandId);
+  });
+
+  it('retains a project unknown identity across adapter reloads', async () => {
+    const project = projectDto('prj_delete_unknown');
+    const command = vi.fn().mockResolvedValue({
+      project_ref_id: project.project_ref_id,
+      outcome: 'outcome_unknown',
+      error_code: 'COMMIT_OUTCOME_UNKNOWN',
+    });
+    const transport = {
+      assertWriteContext: vi.fn(),
+      client: { getProject: vi.fn().mockResolvedValue(project) },
+      queryInit: vi.fn(),
+      command,
+    } as unknown as HttpReviewTransport;
+    const input = { projectRefId: project.project_ref_id, confirmed: true as const };
+
+    await expect(new HttpReviewProjects(transport, {} as never).deleteProject(
+      input,
+      context('project-unknown'),
+    )).rejects.toBeInstanceOf(DeleteProjectResultUncertainError);
+    await expect(new HttpReviewProjects(transport, {} as never).deleteProject(
+      input,
+      context('project-unknown-reload'),
+    )).rejects.toBeInstanceOf(DeleteProjectResultUncertainError);
+
+    expect(command.mock.calls[1]?.[5]?.commandId).toBe(command.mock.calls[0]?.[5]?.commandId);
+  });
+
+  it('clears a determinate item failure and keeps an item unknown identity across reloads', async () => {
+    const item = reviewItemDto('item_outcome_split');
+    const input = {
+      projectRefId: item.project_ref_id,
+      reviewItemId: item.id,
+      confirmed: true as const,
+    };
+    const failedThenDeleted = vi.fn()
+      .mockResolvedValueOnce({
+        project_ref_id: item.project_ref_id,
+        review_item_id: item.id,
+        outcome: 'failed',
+        error_code: 'REVIEW_ITEM_DELETE_LOCKED',
+      })
+      .mockResolvedValueOnce({
+        project_ref_id: item.project_ref_id,
+        review_item_id: item.id,
+        outcome: 'deleted',
+        error_code: null,
+      });
+    const failedTransport = {
+      assertWriteContext: vi.fn(),
+      projectForWrite: vi.fn().mockResolvedValue(projectDto(item.project_ref_id)),
+      itemForLock: vi.fn().mockResolvedValue(item),
+      command: failedThenDeleted,
+      baseUrl: 'https://review.example',
+    } as unknown as HttpReviewTransport;
+
+    await expect(new HttpReviewUploads(failedTransport).deleteReviewItem(
+      input,
+      context('item-failed', 'edit'),
+    )).rejects.toEqual(expect.objectContaining<Partial<ReviewDomainError>>({
+      code: 'REVIEW_ITEM_DELETE_LOCKED',
+    }));
+    await expect(new HttpReviewUploads(failedTransport).deleteReviewItem(
+      input,
+      context('item-corrected', 'edit'),
+    )).resolves.toMatchObject({ reviewItemId: item.id });
+    expect(failedThenDeleted.mock.calls[1]?.[5]?.commandId).not.toBe(
+      failedThenDeleted.mock.calls[0]?.[5]?.commandId,
+    );
+
+    const unknownCommand = vi.fn().mockResolvedValue({
+      project_ref_id: item.project_ref_id,
+      review_item_id: item.id,
+      outcome: 'outcome_unknown',
+      error_code: 'COMMIT_OUTCOME_UNKNOWN',
+    });
+    const unknownTransport = {
+      ...failedTransport,
+      command: unknownCommand,
+    } as unknown as HttpReviewTransport;
+    await expect(new HttpReviewUploads(unknownTransport).deleteReviewItem(
+      input,
+      context('item-unknown', 'edit'),
+    )).rejects.toBeInstanceOf(DeleteReviewItemResultUncertainError);
+    await expect(new HttpReviewUploads(unknownTransport).deleteReviewItem(
+      input,
+      context('item-unknown-reload', 'edit'),
+    )).rejects.toBeInstanceOf(DeleteReviewItemResultUncertainError);
+    expect(unknownCommand.mock.calls[1]?.[5]?.commandId).toBe(unknownCommand.mock.calls[0]?.[5]?.commandId);
   });
 
   it('uses one backend batch command and preserves per-object outcomes', async () => {
@@ -157,6 +287,48 @@ describe('durable HTTP deletion contracts', () => {
     expect(initial.results.map((entry) => entry.outcome)).toEqual(['deleted', 'outcome_unknown']);
     expect(replay.results.map((entry) => entry.outcome)).toEqual(['deleted', 'outcome_unknown']);
     expect(command.mock.calls[1]?.[5]?.commandId).toBe(command.mock.calls[0]?.[5]?.commandId);
+  });
+
+  it('retains an explicit batch unknown identity across reload and blocks a different signature', async () => {
+    const first = reviewItemDto('item_batch_explicit_deleted');
+    const second = reviewItemDto('item_batch_explicit_unknown');
+    const command = vi.fn().mockResolvedValue({
+      project_ref_id: first.project_ref_id,
+      results: [
+        {
+          project_ref_id: first.project_ref_id,
+          review_item_id: first.id,
+          outcome: 'deleted',
+          error_code: null,
+        },
+        {
+          project_ref_id: first.project_ref_id,
+          review_item_id: second.id,
+          outcome: 'outcome_unknown',
+          error_code: 'COMMIT_OUTCOME_UNKNOWN',
+        },
+      ],
+    });
+    const transport = {
+      assertWriteContext: vi.fn(),
+      projectForWrite: vi.fn().mockResolvedValue(projectDto(first.project_ref_id)),
+      command,
+      requestList: vi.fn(),
+    } as unknown as HttpReviewTransport;
+    const input = {
+      projectRefId: first.project_ref_id,
+      reviewItemIds: [first.id, second.id],
+      confirmed: true as const,
+    };
+
+    await new HttpReviewUploads(transport).deleteReviewItemsBatch(input, context('explicit-unknown', 'edit'));
+    await new HttpReviewUploads(transport).deleteReviewItemsBatch(input, context('explicit-unknown-reload', 'edit'));
+    expect(command.mock.calls[1]?.[5]?.commandId).toBe(command.mock.calls[0]?.[5]?.commandId);
+
+    await expect(new HttpReviewUploads(transport).deleteReviewItemsBatch(
+      { ...input, reviewItemIds: [second.id] },
+      context('explicit-unknown-different', 'edit'),
+    )).rejects.toBeInstanceOf(DeleteReviewItemProtectionUnavailableError);
   });
 });
 

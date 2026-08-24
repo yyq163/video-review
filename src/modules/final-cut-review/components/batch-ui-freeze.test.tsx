@@ -344,6 +344,48 @@ describe('frozen player controls and focus boundaries', () => {
     expect(pause).toHaveBeenCalledTimes(pauseCallsAfterAnnotation + 1);
   });
 
+  it('does not toggle playback when pointer and click target the text editor input or form chrome', async () => {
+    const seed = createSeedData();
+    const { container } = render(
+      <ReviewPlayer
+        version={seed.versions[1]}
+        issues={[]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+    const stage = container.querySelector('.fj-review-video-frame') as HTMLDivElement;
+    const video = container.querySelector('video') as HTMLVideoElement;
+    const play = vi.fn().mockResolvedValue(undefined);
+    const pause = vi.fn();
+    Object.defineProperty(video, 'play', { configurable: true, value: play });
+    Object.defineProperty(video, 'pause', { configurable: true, value: pause });
+    vi.spyOn(stage, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, right: 160, bottom: 90, width: 160, height: 90, toJSON: () => ({}),
+    } as DOMRect);
+
+    await userEvent.click(screen.getByRole('button', { name: '文字' }));
+    fireEvent.pointerDown(stage, { clientX: 40, clientY: 20, pointerId: 11, pointerType: 'mouse', button: 0 });
+    fireEvent.pointerUp(stage, { clientX: 40, clientY: 20, pointerId: 11, pointerType: 'mouse', button: 0 });
+    fireEvent.click(stage);
+    const form = await screen.findByTestId('text-annotation-editor');
+    const input = within(form).getByLabelText('文字批注内容');
+    const callsBeforeEditorClicks = { play: play.mock.calls.length, pause: pause.mock.calls.length };
+
+    fireEvent.pointerDown(input, { pointerId: 12, pointerType: 'mouse', button: 0 });
+    fireEvent.pointerUp(input, { pointerId: 12, pointerType: 'mouse', button: 0 });
+    fireEvent.click(input);
+    fireEvent.pointerDown(form, { pointerId: 13, pointerType: 'mouse', button: 0 });
+    fireEvent.pointerUp(form, { pointerId: 13, pointerType: 'mouse', button: 0 });
+    fireEvent.click(form);
+
+    expect(play).toHaveBeenCalledTimes(callsBeforeEditorClicks.play);
+    expect(pause).toHaveBeenCalledTimes(callsBeforeEditorClicks.pause);
+  });
+
   it('overlays fullscreen controls and applies the exact three-second inactivity lifecycle', () => {
     vi.useFakeTimers();
     const seed = createSeedData();
@@ -379,8 +421,9 @@ describe('frozen player controls and focus boundaries', () => {
       }),
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '全屏' }));
     const controls = screen.getByTestId('fullscreen-controls');
+    vi.spyOn(controls, 'matches').mockImplementation((selector) => selector === ':hover' ? false : false);
+    fireEvent.click(screen.getByRole('button', { name: '全屏' }));
     expect(card).toContainElement(controls);
     expect(controls).toHaveAttribute('data-visible', 'true');
 
@@ -405,6 +448,70 @@ describe('frozen player controls and focus boundaries', () => {
     expect(controls).toHaveAttribute('data-visible', 'true');
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(document.exitFullscreen).toHaveBeenCalledOnce();
+  });
+
+  it('resets fullscreen hover identity across real hover entry, exit, and re-entry', async () => {
+    const user = userEvent.setup();
+    const seed = createSeedData();
+    const { container } = render(
+      <ReviewPlayer
+        version={{ ...seed.versions[1], durationMs: 2000 }}
+        issues={[]}
+        selectedAnnotationSet={null}
+        onTimeChange={vi.fn()}
+        onDraftChange={vi.fn()}
+        onSelectIssue={vi.fn()}
+        onPlaybackError={vi.fn()}
+      />,
+    );
+    const card = container.querySelector('.fj-review-player-card') as HTMLElement;
+    const controls = screen.getByTestId('fullscreen-controls');
+    const fullscreenButton = screen.getByRole('button', { name: '全屏' });
+    const stableRect = {
+      x: 0, y: 0, left: 0, top: 0, right: 1920, bottom: 1080, width: 1920, height: 1080, toJSON: () => ({}),
+    } as DOMRect;
+    vi.spyOn(card, 'getBoundingClientRect').mockReturnValue(stableRect);
+    vi.spyOn(controls, 'matches').mockImplementation((selector) => selector === ':hover' ? false : false);
+    let fullscreenElement: Element | null = null;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => fullscreenElement,
+    });
+    Object.defineProperty(card, 'requestFullscreen', {
+      configurable: true,
+      value: vi.fn(async () => {
+        fullscreenElement = card;
+        fireEvent(document, new Event('fullscreenchange'));
+      }),
+    });
+    Object.defineProperty(document, 'exitFullscreen', {
+      configurable: true,
+      value: vi.fn(async () => {
+        fullscreenElement = null;
+        fireEvent(document, new Event('fullscreenchange'));
+      }),
+    });
+
+    await user.hover(fullscreenButton);
+    vi.useFakeTimers();
+    fireEvent.click(fullscreenButton);
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(controls).toHaveAttribute('data-visible', 'false');
+    expect(card.getBoundingClientRect()).toEqual(stableRect);
+
+    fullscreenButton.blur();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.exitFullscreen).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+    await user.unhover(fullscreenButton);
+    await user.hover(fullscreenButton);
+    vi.useFakeTimers();
+    fireEvent.click(fullscreenButton);
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(controls).toHaveAttribute('data-visible', 'false');
+    expect(card.getBoundingClientRect()).toEqual(stableRect);
   });
 
   it('keeps Space and arrows native when focus is on non-timeline controls and opinion avatars', async () => {

@@ -37,6 +37,11 @@ export function ProjectForm(props: {
         {form.formState.errors.name && <em>{form.formState.errors.name.message}</em>}
       </label>
       <label>
+        <span>项目编号</span>
+        <input {...form.register('code')} placeholder="FJ-EP28" readOnly={props.codeReadOnly} />
+        {form.formState.errors.code && <em>{form.formState.errors.code.message}</em>}
+      </label>
+      <label>
         <span>项目帧率</span>
         <select aria-label="项目帧率" {...form.register('frameRate')} disabled={props.codeReadOnly}>
           {!form.getValues('frameRate') ? <option value="">未锁定</option> : null}
@@ -49,11 +54,6 @@ export function ProjectForm(props: {
           <option value="60000/1001">59.94 fps（60000/1001）</option>
           <option value="60/1">60 fps</option>
         </select>
-      </label>
-      <label>
-        <span>{props.codeReadOnly ? '项目编号' : '项目编码'}</span>
-        <input {...form.register('code')} placeholder="FJ-EP28" readOnly={props.codeReadOnly} />
-        {form.formState.errors.code && <em>{form.formState.errors.code.message}</em>}
       </label>
       <label>
         <span>项目说明</span>

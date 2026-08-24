@@ -7,11 +7,10 @@ import { useMediaMetadata } from '../entry/runtime';
 import { AppShell, CapabilityGate, ErrorView, LoadingBlock, StatusBadge, actionError } from '../components/shared';
 import { CreateItemUploadPanel } from '../components/UploadPanel';
 import { CenteredModal } from '../components/CenteredModal';
-import { ProjectMetadataEditor, type ReviewItemMetadataValues } from '../components/MetadataEditors';
+import { ProjectMetadataEditor, type ReviewItemMetadataTarget, type ReviewItemMetadataValues } from '../components/MetadataEditors';
 import { ProjectPackageControl } from '../components/ProjectPackageControl';
 import { uploadSchema, type ProjectFormValues } from '../components/ProjectForms';
-import type { ReviewItemWithMetadata } from '../ports';
-import type { ReviewProjectSummaryItem } from '../ports';
+import type { ReviewItemWithMetadata, ReviewProjectSummaryItem } from '../ports';
 import { groupReviewItemsByEpisode } from '../core/episode-dedupe';
 import {
   DeleteReviewItemResultUncertainError,
@@ -386,7 +385,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   }
 
   const { project, items } = detail.data;
-  const episodeGroups = groupReviewItemsByEpisode(items) as ProjectDetailMetadataEpisodeGroup[];
+  const episodeGroups: ProjectDetailMetadataEpisodeGroup[] = groupReviewItemsByEpisode(items);
   const isArchived = project.status === 'archived';
   const projectActionPending =
     mutations.updateProject.isPending ||
@@ -423,7 +422,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     setProjectActionMessage('项目资料已更新。');
   };
 
-  const updateReviewItemMetadata = async (item: ReviewItemWithMetadata, values: ReviewItemMetadataValues) => {
+  const updateReviewItemMetadata = async (item: ReviewItemMetadataTarget, values: ReviewItemMetadataValues) => {
     setProjectActionError(null);
     setProjectActionMessage(null);
     await mutations.updateReviewItem.mutateAsync({ projectRefId, reviewItemId: item.reviewItemId, ...values });
@@ -501,7 +500,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     }
   };
 
-  const deleteReviewItem = async (item: ReviewItem) => {
+  const deleteReviewItem = async (item: ReviewProjectSummaryItem) => {
     setProjectActionError(null);
     setProjectActionMessage(null);
     const confirmed = window.confirm(
@@ -517,7 +516,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     }
   };
 
-  const bulkDeleteReviewItems = async (selectedItems: ReviewItem[]) => {
+  const bulkDeleteReviewItems = async (selectedItems: ReviewProjectSummaryItem[]) => {
     setProjectActionError(null);
     setProjectActionMessage(null);
     const succeededIds: string[] = [];

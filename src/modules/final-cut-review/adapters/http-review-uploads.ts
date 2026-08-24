@@ -459,15 +459,27 @@ export class HttpReviewUploads implements UploadApi {
       if (
         deleted.project_ref_id !== input.projectRefId
         || deleted.review_item_id !== input.reviewItemId
-        || deleted.outcome !== 'deleted'
       ) {
         throw new DeleteReviewItemResultUncertainError(
           new Error('删除命令返回了无法核对的对象结果'),
         );
       }
+      if (deleted.outcome === 'failed') {
+        clearOperation();
+        throw new ReviewDomainError(
+          '分集删除未执行，请根据当前分集状态修正后重试。',
+          deleted.error_code ?? 'RESOURCE_STATE_CONFLICT',
+        );
+      }
+      if (deleted.outcome === 'outcome_unknown') {
+        throw new DeleteReviewItemResultUncertainError(
+          new Error(deleted.error_code ?? 'COMMIT_OUTCOME_UNKNOWN'),
+        );
+      }
       clearOperation();
       return itemFromDto(item);
     } catch (error) {
+      if (error instanceof ReviewDomainError) throw error;
       if (
         error instanceof FinalCutReviewHttpError &&
         error.httpStatus < 500 &&
@@ -548,8 +560,7 @@ export class HttpReviewUploads implements UploadApi {
           new Error('批量删除命令返回了无法核对的对象结果'),
         );
       }
-      clearOperation();
-      return {
+      const mapped = {
         projectRefId: result.project_ref_id,
         results: result.results.map((entry) => ({
           projectRefId: entry.project_ref_id,
@@ -558,6 +569,10 @@ export class HttpReviewUploads implements UploadApi {
           errorCode: entry.error_code ?? null,
         })),
       };
+      if (mapped.results.every((entry) => entry.outcome !== 'outcome_unknown')) {
+        clearOperation();
+      }
+      return mapped;
     } catch (error) {
       if (
         error instanceof FinalCutReviewHttpError

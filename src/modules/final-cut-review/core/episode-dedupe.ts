@@ -1,5 +1,8 @@
 import type { ReviewItem, ReviewVersion } from '../contracts/types';
 
+export type EpisodeReviewItem = Omit<ReviewItem, 'createdAt' | 'updatedAt'> &
+  Partial<Pick<ReviewItem, 'createdAt' | 'updatedAt'>>;
+
 export function normalizeEpisodeValue(episode: string): string {
   const unwrapped = episode
     .trim()
@@ -17,22 +20,22 @@ export function formatEpisodeDisplayValue(episode: string): string {
   return /^\d+$/.test(normalized) ? normalized.padStart(2, '0') : normalized;
 }
 
-function episodeKey(item: ReviewItem): string {
+function episodeKey(item: EpisodeReviewItem): string {
   return normalizeEpisodeValue(item.episode);
 }
 
-function versionCount(item: ReviewItem, versionsByItem?: Record<string, ReviewVersion[]>): number {
+function versionCount(item: EpisodeReviewItem, versionsByItem?: Record<string, ReviewVersion[]>): number {
   return versionsByItem?.[item.reviewItemId]?.length ?? 0;
 }
 
-function updatedAtMs(item: ReviewItem): number {
-  const parsed = Date.parse(item.updatedAt);
+function updatedAtMs(item: EpisodeReviewItem): number {
+  const parsed = Date.parse(item.updatedAt ?? '');
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function shouldReplaceEpisodeItem(
-  current: ReviewItem,
-  candidate: ReviewItem,
+function shouldReplaceEpisodeItem<TItem extends EpisodeReviewItem>(
+  current: TItem,
+  candidate: TItem,
   options: {
     currentItemId?: string;
     versionsByItem?: Record<string, ReviewVersion[]>;
@@ -52,20 +55,20 @@ function shouldReplaceEpisodeItem(
   return candidate.reviewItemId.localeCompare(current.reviewItemId) < 0;
 }
 
-export interface ReviewEpisodeGroup {
+export interface ReviewEpisodeGroup<TItem extends EpisodeReviewItem = ReviewItem> {
   episodeKey: string;
-  representative: ReviewItem;
-  items: ReviewItem[];
+  representative: TItem;
+  items: TItem[];
 }
 
-export function groupReviewItemsByEpisode(
-  items: ReviewItem[],
+export function groupReviewItemsByEpisode<TItem extends EpisodeReviewItem>(
+  items: TItem[],
   options: {
     currentItemId?: string;
     versionsByItem?: Record<string, ReviewVersion[]>;
   } = {},
-): ReviewEpisodeGroup[] {
-  const byEpisode = new Map<string, ReviewItem[]>();
+): ReviewEpisodeGroup<TItem>[] {
+  const byEpisode = new Map<string, TItem[]>();
   for (const item of items) {
     const key = episodeKey(item);
     byEpisode.set(key, [...(byEpisode.get(key) ?? []), item]);
@@ -85,12 +88,12 @@ export function groupReviewItemsByEpisode(
     .sort((left, right) => left.representative.episode.localeCompare(right.representative.episode, 'zh-CN', { numeric: true }));
 }
 
-export function dedupeReviewItemsByEpisode(
-  items: ReviewItem[],
+export function dedupeReviewItemsByEpisode<TItem extends EpisodeReviewItem>(
+  items: TItem[],
   options: {
     currentItemId?: string;
     versionsByItem?: Record<string, ReviewVersion[]>;
   } = {},
-): ReviewItem[] {
+): TItem[] {
   return groupReviewItemsByEpisode(items, options).map((group) => group.representative);
 }

@@ -62,7 +62,7 @@ export function ProjectListPage(props: { entryMode: EntryMode }) {
 
   const deleteProject = async (projectRefId: string, projectName: string) => {
     setProjectActionError(null);
-    const confirmed = window.confirm(`确认删除项目「${projectName}」？删除后项目会从审阅列表移除，历史记录和媒体文件仍保留。`);
+    const confirmed = window.confirm(`确认永久删除项目「${projectName}」及其分集、版本、意见和可安全释放的媒体文件？该操作无法撤销；已定稿项目必须先撤销全部定稿。`);
     if (!confirmed) return;
     try {
       await mutations.deleteProject.mutateAsync({ projectRefId, confirmed: true });
