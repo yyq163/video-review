@@ -149,3 +149,43 @@
 - `npm run lint`：PASS。
 - `VITE_FINAL_CUT_REVIEW_API_BASE_URL=http://127.0.0.1:8000 npm run build`：PASS；`frontend security headers: PASS`；仅保留既有 MediaInfo WASM runtime URL warning。
 - `UNVERIFIED_BROWSER`：当前真实环境保持运行，由主控在提交后使用 Computer Use 复验。
+
+## Fix round 4/5 — restore finalization revoke governance
+
+- `BASE = 59f4a74707f9ba4db9c646ec60f585d5096498e7`
+- `TASK_LEVEL = L2`；`SCOPE_COMPLETENESS = FULL_ACTIVE_SCOPE`；`CHANGE_SURFACE = MINIMIZED_WITHOUT_SCOPE_REDUCTION`。
+- 来源：主控真实 Computer Use + PostgreSQL 证据中 `FinalizeProject` 成功，`RevokeProjectFinalization` 在 `review_items` update 处以 `finalized review item is frozen` 失败。本轮不授予 `PASS_BROWSER`。
+
+### Root cause / 变更文件
+
+- 根因：0020 的 SQLite trigger / PostgreSQL function 只放行 `finalized → in_review` + `active_finalization_id → NULL` + 其他字段不变 + `lock_version + 1` 的 exact transition；repository `_revoke_locked_finalization()` 也明确先 flush 这个 item transition，再 revoke finalization/package。0024 `_restore_governance_triggers()` 误调 0004 strict helper，PostgreSQL 会直接覆盖 exact function；SQLite 在已部署 trigger 缺失形态下也会恢复成 strict trigger。
+- `backend/alembic/versions/20260825_0025_restore_finalization_revoke_governance.py`：新增 forward-only 0025；upgrade 调用 immutable 0020 helper，同时重建 SQLite 与 PostgreSQL exact revoke governance；downgrade 窄恢复 0024 strict review-item freeze，不修改历史 0024，不拓宽其他 trigger 豁免。
+- `backend/tests/test_task5_finalization_revoke_governance_migration.py`：新增 SQLite clean/strict/roundtrip 与随机 PostgreSQL database gated 测试；直接跑 Alembic revision 和真实 repository commands，不使用无 trigger 的 `Base.metadata.create_all()` 代替迁移。
+- repository 不改：既有 item-first 顺序和注释在 0025 exact trigger 下成立。未实现 Task 6/QC；其迁移号顺延为 0026。
+
+### TDD RED / GREEN
+
+- RED：`backend/.venv/bin/pytest -q backend/tests/test_task5_finalization_revoke_governance_migration.py::test_0025_restores_0020_exact_sqlite_revoke_transition_after_0024_strict_restore` → `1 failed in 0.61s`。失败前已真实证明：0020 runtime trigger 含 exact clauses；0023 缺 trigger 形态升级 0024 后 runtime trigger 为 strict；精确失败点为 `Can't locate revision identified by '20260825_0025'`。
+- 最小 GREEN：新增 0025 后同一测试 `1 passed in 0.52s`，0025 runtime inventory 与 0020 当前定义归一化后完全相等。
+- SQLite 完整 GREEN：`backend/.venv/bin/pytest -q backend/tests/test_task5_finalization_revoke_governance_migration.py -k sqlite` → `3 passed in 1.43s`。覆盖 strict 0024 下 project/single revoke 均失败并回滚；0025 后均成功；item `in_review`/pointer null/lock+1，finalization `revoked` + `revoked_at`，project lock/events/idempotent replay/package invalidation 精确；夹带 title 改动的非精确 transition 与 finalized child mutation 继续 fail closed；clean `0024→0025` 与 `0025→0024→0025` 均收敛。
+- PostgreSQL gate：新增 sentinel-bound 随机数据库测试，会真实跑 `0020→0024→0025→0024→0025`、inventory、project/single revoke、side effects、idempotency 与 fail-closed guards，最后验证随机库身份再删除。实现者进程中 `RUN_POSTGRES_CONSTRAINT_TESTS` 与三个 PostgreSQL URL 均未注入；`pytest -q -rs ... -k postgresql` → `1 skipped`，原因为 `BLOCKED_TEST_ENV: RUN_POSTGRES_CONSTRAINT_TESTS=1 is required`；未伪造 PG PASS，由主控在其真实 PG 环境执行。
+
+### Local verification
+
+- Task5 migration module：`3 passed / 1 PostgreSQL gated skipped`。
+- Task3 project revoke focused：`6 passed / 30 deselected`。
+- Task3 single revoke focused：`2 passed / 195 deselected`。
+- Task4 durable-deletion migration/regression 整文件：`32 passed in 22.42s`。
+- Task1 contract/migration 整文件：`16 passed in 1.77s`。
+- database-governance 相关 migration focused：`2 passed / 37 deselected`。
+- `backend/.venv/bin/python backend/scripts/generate_contracts.py --check` → `contract generation check ok`。
+- `backend/.venv/bin/alembic -c backend/alembic.ini heads` → `20260825_0025 (head)`。
+- 新增两文件 `ruff check` → PASS；`ruff format --check` → PASS；`py_compile` → PASS；`git diff --check` → PASS。
+- CodeGraph preflight：271 files / 5,792 nodes / 16,005 edges，up to date。最后代码修改后 sync 已索引新增 2 files / 42 nodes；pre-commit 统计为 273 files / 5,834 nodes / 16,204 edges，提交后再做最终 `sync → status`。
+
+### Hard status
+
+- `LOCAL_TASK_STATUS = PASS_TESTED`。
+- `POSTGRESQL_STATUS = BLOCKED_TEST_ENV`（测试已 gated 且可由主控直接运行）。
+- `BROWSER_STATUS = UNVERIFIED_BROWSER`；实现者未执行或授予 `PASS_BROWSER`。
+- `FOLLOW_UP = none`；未触碰用户拥有的未跟踪根文件 `task_plan.md` / `findings.md` / `progress.md`。
