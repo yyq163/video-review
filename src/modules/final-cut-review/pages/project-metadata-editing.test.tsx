@@ -66,6 +66,43 @@ describe('project and review item metadata editing', () => {
     dispose();
   });
 
+  it('shows a safe responsible-editor directory error inside the V1 modal without leaking raw details', async () => {
+    let runtime: ReturnType<typeof createReviewRuntime> | undefined;
+    let listResponsibleEditors: ReturnType<typeof vi.spyOn> | undefined;
+    const dispose = renderDetail('edit', (createdRuntime) => {
+      runtime = createdRuntime;
+      listResponsibleEditors = vi.spyOn(createdRuntime.getApi('edit'), 'listResponsibleEditors').mockRejectedValue(
+        new Error('postgresql://internal-editor-catalog-secret'),
+      );
+    });
+
+    await screen.findByRole('heading', { name: /真千金是男的/ });
+    await waitFor(() => expect(listResponsibleEditors).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole('button', { name: '创建并上传 V1' }));
+    const dialog = await screen.findByRole('dialog', { name: '创建成片并上传 V1' });
+
+    expect(await within(dialog).findByRole('alert', {}, { timeout: 5_000 })).toHaveTextContent(
+      '责任剪辑师目录加载失败，请稍后重试。',
+    );
+    expect(screen.queryByText(/postgresql:\/\/internal-editor-catalog-secret/)).not.toBeInTheDocument();
+    expect(runtime).toBeDefined();
+    dispose();
+  });
+
+  it('keeps a successful empty responsible-editor directory as the normal editable empty state', async () => {
+    const dispose = renderDetail('edit', (createdRuntime) => {
+      vi.spyOn(createdRuntime.getApi('edit'), 'listResponsibleEditors').mockResolvedValue([]);
+    });
+
+    await screen.findByRole('heading', { name: /真千金是男的/ });
+    await userEvent.click(screen.getByRole('button', { name: '创建并上传 V1' }));
+    const dialog = await screen.findByRole('dialog', { name: '创建成片并上传 V1' });
+
+    expect(within(dialog).getByRole('option', { name: '请先编辑责任剪辑师' })).toBeInTheDocument();
+    expect(within(dialog).queryByText('责任剪辑师目录加载失败，请稍后重试。')).not.toBeInTheDocument();
+    dispose();
+  });
+
   afterEach(() => {
     cleanup();
     window.localStorage.clear();

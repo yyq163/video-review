@@ -10,6 +10,7 @@ const APPEND_VERSION_SUBMISSION_ERROR_ID = 'append-version-upload-error';
 const ACCEPTED_VIDEO_TYPES = '.mp4,.m4v,.mov,.qt,video/mp4,video/quicktime';
 const MAX_CONCURRENT_V1_UPLOADS = 5;
 const MAX_CONCURRENT_V1_MEDIA_PROBES = 2;
+const RESPONSIBLE_EDITOR_CATALOG_ERROR = '责任剪辑师目录加载失败，请稍后重试。';
 const UPLOAD_STAGE_LABELS: Record<UploadProgress['stage'], string> = {
   validating: '校验文件',
   initiated: '创建上传会话',
@@ -88,6 +89,7 @@ export function CreateItemUploadPanel({
   onEditResponsibleEditor,
   projectFrameRate,
   responsibleEditors,
+  responsibleEditorsError,
 }: {
   pending?: boolean;
   blockedForListConfirmation?: boolean;
@@ -97,6 +99,7 @@ export function CreateItemUploadPanel({
   onEditResponsibleEditor?(): void;
   projectFrameRate?: ReviewFrameRate | null;
   responsibleEditors?: ResponsibleEditor[];
+  responsibleEditorsError?: boolean;
   onSubmit(
     input: CreateItemUploadInput,
     onProgress?: (progress: UploadProgress) => void,
@@ -347,6 +350,11 @@ export function CreateItemUploadPanel({
             </button>
           ) : null}
         </div>
+      ) : null}
+      {responsibleEditorsError ? (
+        <span className="fj-review-form-error" data-testid="responsible-editor-catalog-error" role="alert">
+          {RESPONSIBLE_EDITOR_CATALOG_ERROR}
+        </span>
       ) : null}
       <div className="fj-review-upload-actions">
         <span

@@ -810,6 +810,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
                 mediaMetadata={mediaMetadata}
                 projectFrameRate={project.frameRate}
                 responsibleEditors={responsibleEditors.data ?? []}
+                responsibleEditorsError={responsibleEditors.isError}
                 onEditResponsibleEditor={() => {
                   const first = responsibleEditors.data?.[0] ?? null;
                   setEditingEditorId(first?.responsibleEditorId ?? null);

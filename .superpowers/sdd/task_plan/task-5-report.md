@@ -127,3 +127,25 @@
 - `npm run lint`：PASS。
 - `VITE_FINAL_CUT_REVIEW_API_BASE_URL=http://127.0.0.1:8000 npm run build`：PASS；`frontend security headers: PASS`；仅保留既有 MediaInfo WASM runtime URL warning。
 - Browser：`UNVERIFIED_BROWSER`；实现者未执行或授予 Computer Use Browser PASS。
+
+## Fix round 3/5 — authoritative editor-list envelope
+
+- `BASE = dd78d18be6dc9daba278ba5c781180040c4b9f50`
+- 来源：主控真实 Computer Use + PostgreSQL + backend GET 证据证明 editor 已写入且后端返回非分页数组 envelope，但 V1 modal 关闭重开与整页刷新仍显示空目录。本轮未运行 Browser，不授予 `PASS_BROWSER`。
+
+### Root cause and TDD
+
+- 根因：`HttpReviewProjects.listResponsibleEditors` 误用仅适用分页资源的 `requestList`，对 editor 端点自行加入 `?page=1&page_size=200`，并强制要求 `total_count/page/page_size`；权威 editor 合同仅是 `data: ResponsibleEditorDTO[]` 且 meta 只含 `request_id/contract_version`。
+- Transport RED（Node 24.19.0）：真实 `HttpReviewTransport + FinalCutReviewClient + HttpReviewProjects` 对非分页 envelope 的 focused test 收到 `.../responsible-editors?page=1&page_size=200`，而期望精确无 query URL。
+- Modal RED：editor query 抛出含敏感内部 URL 的原始错误后，V1 modal 无 `role=alert`，只退化成“请先编辑责任剪辑师”空态。
+- GREEN：editor list 改用 `requestJson<ResponsibleEditorDTO[]>`，仅透传 AbortSignal，不启动分页快照、不伪造 pagination meta；V1 modal 在 query 最终失败后以既有 `fj-review-form-error` 显示固定安全文案，不渲染 raw error。成功空数组仍保留原“请先编辑责任剪辑师”可编辑空态。
+- Focused GREEN：`2 files / 4 tests passed`；受影响整文件：`2 files / 13 tests passed`。
+
+### Node 24.19.0 final verification
+
+- Fresh full Vitest：`29 passed / 1 skipped` files；`381 passed / 1 skipped` tests。既有 jsdom `HTMLMediaElement.load()` 提示不是失败。
+- `npm run contracts:generate`、`npm run contracts:check`、Python generator `--check`：PASS。
+- `npm run typecheck`：PASS。
+- `npm run lint`：PASS。
+- `VITE_FINAL_CUT_REVIEW_API_BASE_URL=http://127.0.0.1:8000 npm run build`：PASS；`frontend security headers: PASS`；仅保留既有 MediaInfo WASM runtime URL warning。
+- `UNVERIFIED_BROWSER`：当前真实环境保持运行，由主控在提交后使用 Computer Use 复验。

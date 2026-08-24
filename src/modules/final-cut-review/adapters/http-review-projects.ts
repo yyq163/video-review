@@ -246,9 +246,9 @@ export class HttpReviewProjects implements ProjectApi {
   };
 
   readonly listResponsibleEditors: ReviewApiPort['listResponsibleEditors'] = async (options) =>
-    (await this.transport.requestList<ResponsibleEditorDTO[]>(
+    (await this.transport.requestJson<ResponsibleEditorDTO[]>(
       '/api/v1/final-cut-review/responsible-editors',
-      options,
+      { signal: options?.signal },
     )).map(responsibleEditorFromDto);
 
   readonly getProjectSummary: ReviewApiPort['getProjectSummary'] = async (projectRefId, options) => {
