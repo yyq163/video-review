@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -64,6 +65,13 @@ MEDIA_PROBE_MIN_PACKET_EVIDENCE = 3
 MEDIA_PROBE_TIMESTAMP_TOLERANCE = Fraction(2, 1_000_000)
 MEDIA_PROBE_MAX_TIMING_LINE_BYTES = 128
 MEDIA_PROBE_MAX_FRAME_COUNT_TOLERANCE = 2
+MEDIA_PROBE_MAX_REORDER_DEPTH = 16
+MEDIA_PROBE_MAX_TIME_DECIMAL_PLACES = 6
+MEDIA_PROBE_MAX_TIME_WHOLE_DIGITS = 12
+MEDIA_PROBE_TIME_RE = re.compile(
+    rf"^-?(?P<whole>0|[1-9][0-9]{{0,{MEDIA_PROBE_MAX_TIME_WHOLE_DIGITS - 1}}})"
+    rf"(?:\.(?P<fraction>[0-9]{{1,{MEDIA_PROBE_MAX_TIME_DECIMAL_PLACES}}}))?$"
+)
 DEFAULT_MEDIA_MAX_DIMENSION = 8192
 DEFAULT_MEDIA_MAX_PIXELS = 35_389_440
 MAX_DATABASE_INTEGER = 2_147_483_647
@@ -89,6 +97,7 @@ class MediaProbeResult:
     video_packet_count: int | None = None
     video_start_time_seconds: Fraction | None = None
     video_duration_seconds: Fraction | None = None
+    video_reorder_depth: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,16 +206,25 @@ def _optional_milliseconds(value: object) -> int | None:
     return None
 
 
-def _optional_seconds_fraction(value: object) -> Fraction | None:
+def _timing_fraction(value: object, *, allow_negative: bool = False) -> Fraction:
     if value is None or isinstance(value, bool):
-        return None
+        raise _frame_rate_unknown()
+    normalized = str(value).strip()
+    if not MEDIA_PROBE_TIME_RE.fullmatch(normalized):
+        raise _frame_rate_unknown()
+    if normalized.startswith("-") and not allow_negative:
+        raise _frame_rate_unknown()
     try:
-        seconds = Fraction(str(value))
+        return Fraction(normalized)
     except (ValueError, ZeroDivisionError):
+        raise _frame_rate_unknown() from None
+
+
+def _optional_seconds_fraction(value: object) -> Fraction | None:
+    try:
+        return _timing_fraction(value)
+    except ReviewError:
         return None
-    if seconds.denominator > MAX_DATABASE_INTEGER or abs(seconds.numerator) > MAX_DATABASE_INTEGER:
-        return None
-    return seconds
 
 
 def _optional_positive_int(value: object) -> int | None:
@@ -219,6 +237,18 @@ def _optional_positive_int(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     if 0 < normalized <= MAX_DATABASE_INTEGER:
+        return normalized
+    return None
+
+
+def _optional_bounded_nonnegative_int(value: object, maximum: int) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    if 0 <= normalized <= maximum:
         return normalized
     return None
 
@@ -246,15 +276,7 @@ def _positive_frame_rate(*values: object) -> Fraction:
 
 
 def _evidence_fraction(value: object, *, allow_negative: bool = False) -> Fraction:
-    if value is None or isinstance(value, bool):
-        raise _frame_rate_unknown()
-    try:
-        result = Fraction(str(value))
-    except (ValueError, ZeroDivisionError):
-        raise _frame_rate_unknown() from None
-    if (result < 0 and not allow_negative) or abs(result.numerator) > MAX_DATABASE_INTEGER or result.denominator > MAX_DATABASE_INTEGER:
-        raise _frame_rate_unknown()
-    return result
+    return _timing_fraction(value, allow_negative=allow_negative)
 
 
 def _reject_nonstandard_json_constant(_: str) -> None:
@@ -345,6 +367,7 @@ def parse_media_probe_output(
         video_packet_count=_optional_positive_int(stream.get("nb_read_packets")),
         video_start_time_seconds=_optional_seconds_fraction(stream.get("start_time")),
         video_duration_seconds=_optional_seconds_fraction(stream.get("duration")),
+        video_reorder_depth=_optional_bounded_nonnegative_int(stream.get("has_b_frames"), MEDIA_PROBE_MAX_REORDER_DEPTH),
     )
 
 
@@ -354,19 +377,7 @@ def _ceil_fraction(value: Fraction) -> int:
 
 def _nearest_fraction_integer(value: Fraction) -> int:
     lower = value.numerator // value.denominator
-    remainder = value - lower
-    return lower + (1 if remainder >= Fraction(1, 2) else 0)
-
-
-def _xor_zero_through(value: int) -> int:
-    remainder = value % 4
-    if remainder == 0:
-        return value
-    if remainder == 1:
-        return 1
-    if remainder == 2:
-        return value + 1
-    return 0
+    return lower + (1 if value - lower >= Fraction(1, 2) else 0)
 
 
 def validate_streamed_frame_timing(stream: BinaryIO, metadata: MediaProbeResult) -> int:
@@ -375,8 +386,10 @@ def validate_streamed_frame_timing(stream: BinaryIO, metadata: MediaProbeResult)
         raise _frame_rate_not_allowed()
     if metadata.video_start_time_seconds is None or metadata.video_duration_seconds is None:
         raise _frame_rate_unknown()
-    if metadata.video_duration_seconds <= 0 or metadata.video_packet_count is None:
+    if metadata.video_duration_seconds <= 0 or metadata.video_packet_count is None or metadata.video_reorder_depth is None:
         raise _frame_rate_unknown()
+    start_time = metadata.video_start_time_seconds
+    end_time = start_time + metadata.video_duration_seconds
     maximum_frame_count = (
         _ceil_fraction(metadata.video_duration_seconds * max(Fraction(num, den) for num, den in ALLOWED_FRAME_RATE_PAIRS))
         + MEDIA_PROBE_MAX_FRAME_COUNT_TOLERANCE
@@ -385,13 +398,32 @@ def validate_streamed_frame_timing(stream: BinaryIO, metadata: MediaProbeResult)
         raise _frame_rate_unknown()
 
     expected_interval = Fraction(frame_rate.denominator, frame_rate.numerator)
+    reorder_buffer_capacity = metadata.video_reorder_depth + 1
+    maximum_presentation_lookahead = metadata.video_reorder_depth * 2
+    earliest_dts = start_time - maximum_presentation_lookahead * expected_interval - MEDIA_PROBE_TIMESTAMP_TOLERANCE
+    latest_timing = end_time + MEDIA_PROBE_TIMESTAMP_TOLERANCE
     count = 0
     previous_dts: Fraction | None = None
-    minimum_index: int | None = None
-    maximum_index: int | None = None
-    index_sum = 0
-    index_square_sum = 0
-    index_xor = 0
+    expected_presentation_index = 0
+    presentation_heap: list[Fraction] = []
+
+    def accept_next_presentation_timestamp() -> None:
+        nonlocal expected_presentation_index
+        if not presentation_heap:
+            raise _frame_rate_unknown()
+        actual_pts = heapq.heappop(presentation_heap)
+        expected_pts = start_time + expected_presentation_index * expected_interval
+        if actual_pts > expected_pts + MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+            grid_position = (actual_pts - start_time) / expected_interval
+            nearest_grid_index = _nearest_fraction_integer(grid_position)
+            nearest_grid_pts = start_time + nearest_grid_index * expected_interval
+            if abs(actual_pts - nearest_grid_pts) > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+                raise _variable_frame_rate()
+            raise _frame_rate_unknown()
+        if actual_pts < expected_pts - MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+            raise _variable_frame_rate()
+        expected_presentation_index += 1
+
     while True:
         raw_line = stream.readline(MEDIA_PROBE_MAX_TIMING_LINE_BYTES + 1)
         if not raw_line:
@@ -407,24 +439,35 @@ def validate_streamed_frame_timing(stream: BinaryIO, metadata: MediaProbeResult)
         pts = _evidence_fraction(fields[0])
         dts = _evidence_fraction(fields[1], allow_negative=True)
         duration = _evidence_fraction(fields[2])
+        if pts < start_time or pts > latest_timing or dts < earliest_dts or dts > latest_timing or duration <= 0:
+            raise _frame_rate_unknown()
         if previous_dts is not None and abs((dts - previous_dts) - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
             raise _variable_frame_rate()
         if abs(duration - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
             raise _variable_frame_rate()
         previous_dts = dts
 
-        grid_position = (pts - metadata.video_start_time_seconds) / expected_interval
-        frame_index = _nearest_fraction_integer(grid_position)
-        if frame_index < 0 or abs(grid_position - frame_index) * expected_interval > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
-            raise _variable_frame_rate()
         count += 1
         if count > maximum_frame_count:
             raise _frame_rate_unknown()
-        minimum_index = frame_index if minimum_index is None else min(minimum_index, frame_index)
-        maximum_index = frame_index if maximum_index is None else max(maximum_index, frame_index)
-        index_sum += frame_index
-        index_square_sum += frame_index * frame_index
-        index_xor ^= frame_index
+        heapq.heappush(presentation_heap, pts)
+        while presentation_heap:
+            expected_pts = start_time + expected_presentation_index * expected_interval
+            if abs(presentation_heap[0] - expected_pts) > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+                break
+            accept_next_presentation_timestamp()
+        if len(presentation_heap) > reorder_buffer_capacity:
+            raise _frame_rate_unknown()
+        if presentation_heap:
+            earliest_buffered = presentation_heap[0]
+            expected_pts = start_time + expected_presentation_index * expected_interval
+            if earliest_buffered < expected_pts - MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+                raise _variable_frame_rate()
+            latest_declared_reorder_pts = start_time + (
+                expected_presentation_index + maximum_presentation_lookahead
+            ) * expected_interval
+            if max(presentation_heap) > latest_declared_reorder_pts + MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+                raise _frame_rate_unknown()
 
     if count < MEDIA_PROBE_MIN_PACKET_EVIDENCE:
         raise _frame_rate_unknown()
@@ -432,14 +475,10 @@ def validate_streamed_frame_timing(stream: BinaryIO, metadata: MediaProbeResult)
         raise _frame_rate_unknown()
     if metadata.video_frame_count is not None and count != metadata.video_frame_count:
         raise _frame_rate_unknown()
-    if minimum_index != 0 or maximum_index != count - 1:
-        raise _variable_frame_rate()
-    if index_sum != count * (count - 1) // 2:
-        raise _variable_frame_rate()
-    if index_square_sum != count * (count - 1) * (2 * count - 1) // 6:
-        raise _variable_frame_rate()
-    if index_xor != _xor_zero_through(count - 1):
-        raise _variable_frame_rate()
+    while presentation_heap:
+        accept_next_presentation_timestamp()
+    if expected_presentation_index != count:
+        raise _frame_rate_unknown()
     expected_count = metadata.video_duration_seconds * frame_rate
     if abs(Fraction(count) - expected_count) > MEDIA_PROBE_MAX_FRAME_COUNT_TOLERANCE:
         raise _frame_rate_unknown()

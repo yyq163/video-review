@@ -5,6 +5,7 @@ import io
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from backend.app.modules.final_cut_review.domain.errors import ReviewError
-from backend.app.modules.review_media.service import parse_media_probe_output, probe_media, validate_streamed_frame_timing
+from backend.app.modules.review_media.service import MediaProbeResult, parse_media_probe_output, probe_media, validate_streamed_frame_timing
 
 from .conftest import api_data, api_error, command, tiny_video_bytes, upload_init_request
 
@@ -44,6 +45,7 @@ def _probe_payload(
                 "pix_fmt": "yuv420p",
                 "width": 1920,
                 "height": 1080,
+                "has_b_frames": 2,
                 "duration": duration,
                 "start_time": "0",
                 "nb_frames": str(len(timestamps)),
@@ -145,12 +147,18 @@ def metadata():
     }}
 
 def decode_order():
-    for base in range(0, FRAME_COUNT, 5):
-        block = list(range(base, min(base + 5, FRAME_COUNT)))
-        if len(block) == 5:
-            yield from (block[0], block[4], block[2], block[1], block[3])
-        else:
-            yield from block
+    if FRAME_COUNT <= 0:
+        return
+    yield 0
+    first_block = list(range(1, min(5, FRAME_COUNT)))
+    if len(first_block) == 4:
+        yield from (first_block[3], first_block[1], first_block[0], first_block[2])
+    else:
+        yield from first_block
+    for base in range(5, FRAME_COUNT, 2):
+        if base + 1 < FRAME_COUNT:
+            yield base + 1
+        yield base
 
 args = sys.argv[1:]
 is_packet_phase = "-show_packets" in args
@@ -204,6 +212,37 @@ def _probe_settings(probe: Path) -> Any:
         media_max_dimension=8192,
         media_max_pixels=35_389_440,
     )
+
+
+def _timing_metadata(
+    *,
+    start_time: str,
+    duration: str,
+    frame_count: int,
+    fps_num: int = 24,
+    fps_den: int = 1,
+    reorder_depth: int = 2,
+) -> MediaProbeResult:
+    payload = {
+        "streams": [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "width": 1920,
+                "height": 1080,
+                "has_b_frames": reorder_depth,
+                "start_time": start_time,
+                "duration": duration,
+                "nb_frames": str(frame_count),
+                "nb_read_packets": str(frame_count),
+                "avg_frame_rate": f"{fps_num}/{fps_den}",
+                "r_frame_rate": f"{fps_num}/{fps_den}",
+            }
+        ],
+        "format": {"duration": duration},
+    }
+    return parse_media_probe_output(json.dumps(payload).encode())
 
 
 def _select_probe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: dict[str, Any]) -> None:
@@ -484,6 +523,73 @@ def test_streamed_timing_rejects_frame_count_above_duration_times_allowed_maximu
 
     with media.open("rb") as handle, pytest.raises(ReviewError) as exc_info:
         probe_media(handle.fileno(), _probe_settings(probe))
+
+    assert exc_info.value.code == "MEDIA_FRAME_RATE_UNKNOWN"
+
+
+def test_streamed_timing_rejects_reviewer_collision_instead_of_accepting_summary_statistics() -> None:
+    metadata = _timing_metadata(start_time="0.000000", duration="0.375000", frame_count=9)
+    collision = (0, 0, 3, 3, 5, 5, 6, 6, 8)
+    interval = Fraction(1, 24)
+    evidence = "".join(
+        f"{float(index * interval):.6f}|{float((decode_index - 2) * interval):.6f}|0.041667\n"
+        for decode_index, index in enumerate(collision)
+    ).encode()
+
+    with pytest.raises(ReviewError) as exc_info:
+        validate_streamed_frame_timing(io.BytesIO(evidence), metadata)
+
+    assert exc_info.value.code == "MEDIA_VARIABLE_FRAME_RATE"
+
+
+def test_streamed_timing_rejects_presentation_pts_beyond_declared_reorder_window() -> None:
+    metadata = _timing_metadata(start_time="0.000000", duration="0.375000", frame_count=9, reorder_depth=2)
+    out_of_window = (5, 0, 1, 2, 3, 4, 6, 7, 8)
+    interval = Fraction(1, 24)
+    evidence = "".join(
+        f"{float(index * interval):.6f}|{float((decode_index - 2) * interval):.6f}|0.041667\n"
+        for decode_index, index in enumerate(out_of_window)
+    ).encode()
+
+    with pytest.raises(ReviewError) as exc_info:
+        validate_streamed_frame_timing(io.BytesIO(evidence), metadata)
+
+    assert exc_info.value.code == "MEDIA_FRAME_RATE_UNKNOWN"
+
+
+def test_streamed_timing_accepts_long_six_decimal_timestamps_without_db_integer_numerator_cap() -> None:
+    metadata = _timing_metadata(start_time="3600.000001", duration="0.125000", frame_count=3)
+    evidence = (
+        b"3600.000001|3599.916668|0.041667\n"
+        b"3600.041668|3599.958334|0.041667\n"
+        b"3600.083334|3600.000001|0.041667\n"
+    )
+
+    assert validate_streamed_frame_timing(io.BytesIO(evidence), metadata) == 3
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        (
+            b"0.0000001|-0.0833333|0.0416667\n"
+            b"0.0416668|-0.0416666|0.0416667\n"
+            b"0.0833334|0.0000001|0.0416667\n"
+        ),
+        (
+            b"3600.000001|3599.916668|0.041667\n"
+            b"3600.041668|3599.958334|0.041667\n"
+            b"3600.083334|3600.000001|0.041667\n"
+        ),
+    ],
+)
+def test_streamed_timing_rejects_excess_precision_or_values_outside_authoritative_range(
+    evidence: bytes,
+) -> None:
+    metadata = _timing_metadata(start_time="0.000000", duration="0.125000", frame_count=3)
+
+    with pytest.raises(ReviewError) as exc_info:
+        validate_streamed_frame_timing(io.BytesIO(evidence), metadata)
 
     assert exc_info.value.code == "MEDIA_FRAME_RATE_UNKNOWN"
 

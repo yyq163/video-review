@@ -37,6 +37,7 @@ metadata = {
         "codec_name": "h264",
         "width": 1920,
         "height": 1080,
+        "has_b_frames": 2,
         "start_time": "0.000000",
         "duration": "0.160",
         "nb_frames": "4",
