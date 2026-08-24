@@ -424,8 +424,14 @@ class ReviewDeletionArtifactModel(Base):
             name="ck_review_deletion_artifacts_strong_identity",
         ),
         CheckConstraint(
-            "length(expected_sha256) = 64",
+            "expected_sha256 IS NULL OR length(expected_sha256) = 64",
             name="ck_review_deletion_artifacts_sha256",
+        ),
+        CheckConstraint(
+            "(artifact_kind = 'project_package' AND relative_logical_target LIKE 'packages/%') "
+            "OR (artifact_kind IN ('original_media','playback_derivative','thumbnail') "
+            "AND relative_logical_target LIKE 'files/%')",
+            name="ck_review_deletion_artifacts_kind_namespace",
         ),
     )
 
@@ -437,7 +443,7 @@ class ReviewDeletionArtifactModel(Base):
     expected_inode: Mapped[int] = mapped_column(BigInteger, nullable=False)
     expected_ctime_ns: Mapped[int] = mapped_column(BigInteger, nullable=False)
     expected_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    expected_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    expected_sha256: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error_code: Mapped[str | None] = mapped_column(String(64))
@@ -579,7 +585,8 @@ class ReviewIssueRevisionModel(Base):
         ForeignKeyConstraint(
             ["issue_id", "project_ref_id", "review_item_id", "version_id"],
             ["review_issues.id", "review_issues.project_ref_id", "review_issues.review_item_id", "review_issues.version_id"],
-            ondelete="RESTRICT",
+            name="fk_issue_revisions_issue_identity",
+            ondelete="CASCADE",
         ),
         CheckConstraint("revision_no >= 1", name="ck_issue_revisions_revision_no"),
     )
@@ -605,7 +612,8 @@ class ReviewAnnotationSetModel(Base):
         ForeignKeyConstraint(
             ["issue_id", "project_ref_id", "review_item_id", "version_id"],
             ["review_issues.id", "review_issues.project_ref_id", "review_issues.review_item_id", "review_issues.version_id"],
-            ondelete="RESTRICT",
+            name="fk_annotation_sets_issue_identity",
+            ondelete="CASCADE",
         ),
         CheckConstraint("timestamp_ms >= 0 and frame_number >= 0", name="ck_annotation_sets_time"),
         CheckConstraint("canvas_width > 0 and canvas_height > 0 and video_width > 0 and video_height > 0", name="ck_annotation_sets_dimensions"),

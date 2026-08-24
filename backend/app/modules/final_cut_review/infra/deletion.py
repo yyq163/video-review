@@ -36,12 +36,10 @@ from .sqlalchemy_models import (
     OutboxConsumerReceiptModel,
     OutboxEventModel,
     ProjectRefModel,
-    ReviewAnnotationSetModel,
     ReviewDecisionModel,
     ReviewDeletionArtifactModel,
     ReviewDeletionIntentModel,
     ReviewIssueModel,
-    ReviewIssueRevisionModel,
     ReviewItemModel,
     ReviewThreadMessageModel,
     ReviewVersionModel,
@@ -845,11 +843,6 @@ class DurableDeletionCoordinator:
                     ReviewThreadMessageModel.issue_id.in_(scope.issue_ids),
                 ),
             )
-            self.session.execute(
-                delete(ReviewAnnotationSetModel).where(
-                    ReviewAnnotationSetModel.issue_id.in_(scope.issue_ids),
-                ),
-            )
         if scope.version_ids:
             self.session.execute(
                 delete(ReviewDecisionModel).where(
@@ -857,11 +850,6 @@ class DurableDeletionCoordinator:
                 ),
             )
         if scope.issue_ids:
-            self.session.execute(
-                delete(ReviewIssueRevisionModel).where(
-                    ReviewIssueRevisionModel.issue_id.in_(scope.issue_ids),
-                ),
-            )
             self.session.execute(
                 delete(ReviewIssueModel).where(
                     ReviewIssueModel.id.in_(scope.issue_ids),

@@ -953,6 +953,9 @@ def test_managed_directory_scans_rotate_past_100_referenced_entries(
     scan = _use_ordered_directory_scan(monkeypatch, maintenance, [*blocker_names, cleanable_name])
 
     class ReferencedSession:
+        def scalars(self, _statement: object) -> list[object]:
+            return []
+
         def get(self, _model: object, record_id: str) -> object | None:
             return object() if record_id in blocker_ids else None
 
@@ -1046,6 +1049,9 @@ def test_orphan_file_cleanup_preserves_upload_session_file_references(tmp_path: 
     os.utime(target, (stale.timestamp(), stale.timestamp()))
 
     class UploadReferencedSession:
+        def scalars(self, _statement: object) -> list[object]:
+            return []
+
         def get(self, _model: object, _record_id: str) -> None:
             return None
 
@@ -1128,6 +1134,8 @@ def test_orphan_media_derivative_cleanup_locks_and_preserves_active_task(
     class ActiveTaskSession:
         def scalars(self, statement: object) -> list[object]:
             nonlocal lock_checked
+            if "review_deletion_artifacts" in str(statement):
+                return []
             lock_checked = getattr(statement, "_for_update_arg", None) is not None
             return [SimpleNamespace(id=task_id, kind=kind)]
 

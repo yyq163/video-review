@@ -37,8 +37,10 @@ from backend.app.package_cleanup_files import (
     legacy_package_delete_journal_exists,
 )
 from backend.app.safe_files import (
-    DELETE_QUARANTINE_BATCH_SIZE,
     DELETE_QUARANTINE_DIRECTORY,
+    DELETE_QUARANTINE_MANIFEST,
+    DELETE_QUARANTINE_MANIFEST_MAX_BYTES,
+    DELETE_QUARANTINE_TARGET,
     PinnedRegularFile,
     UnsafeFilePathError,
     contained_path,
@@ -65,6 +67,7 @@ PACKAGE_CLEANUP_BATCH_SIZE = 100
 PACKAGE_CLEANUP_RETRY_SECONDS = 300
 REVIEW_DELETION_CLEANUP_BATCH_SIZE = 100
 REVIEW_DELETION_CLEANUP_LEASE_SECONDS = 300
+REVIEW_DELETION_QUARANTINE_SCAN_MAX_ENTRIES = 10_000
 MAX_UPLOAD_PARTS_PER_SESSION = 256
 APV_H264_PLAYBACK_VARIANT = "apv-h264-v1"
 
@@ -392,6 +395,108 @@ def _regular_file_sha256(pinned: PinnedRegularFile) -> str:
     return digest.hexdigest()
 
 
+def _review_deletion_target_is_quarantined(
+    artifact: ReviewDeletionArtifactModel,
+    storage_root: Path,
+) -> bool:
+    relative = Path(artifact.relative_logical_target)
+    if len(relative.parts) != 2 or relative.parts[0] != "files":
+        return False
+    expected_name = relative.parts[1]
+    with pin_managed_root(storage_root) as (_resolved_root, root_fd):
+        try:
+            quarantine_root_fd = os.open(
+                DELETE_QUARANTINE_DIRECTORY,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=root_fd,
+            )
+        except FileNotFoundError:
+            return False
+        try:
+            entries = os.scandir(quarantine_root_fd)
+            try:
+                for index, entry in enumerate(entries):
+                    if index >= REVIEW_DELETION_QUARANTINE_SCAN_MAX_ENTRIES:
+                        raise UnsafeFilePathError(
+                            "review deletion quarantine scan exceeded its bound",
+                        )
+                    entry_fd = -1
+                    manifest: object = None
+                    target_metadata: os.stat_result | None = None
+                    try:
+                        entry_fd = os.open(
+                            entry.name,
+                            os.O_RDONLY
+                            | os.O_CLOEXEC
+                            | os.O_DIRECTORY
+                            | os.O_NOFOLLOW,
+                            dir_fd=quarantine_root_fd,
+                        )
+                        try:
+                            manifest_fd = os.open(
+                                DELETE_QUARANTINE_MANIFEST,
+                                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                                dir_fd=entry_fd,
+                            )
+                        except FileNotFoundError:
+                            manifest_fd = -1
+                        if manifest_fd >= 0:
+                            try:
+                                manifest_metadata = os.fstat(manifest_fd)
+                                if (
+                                    stat.S_ISREG(manifest_metadata.st_mode)
+                                    and 0 < manifest_metadata.st_size
+                                    <= DELETE_QUARANTINE_MANIFEST_MAX_BYTES
+                                ):
+                                    try:
+                                        manifest = json.loads(
+                                            os.read(
+                                                manifest_fd,
+                                                DELETE_QUARANTINE_MANIFEST_MAX_BYTES
+                                                + 1,
+                                            ).decode("utf-8"),
+                                        )
+                                    except (UnicodeError, ValueError):
+                                        manifest = None
+                            finally:
+                                os.close(manifest_fd)
+                        try:
+                            target_metadata = os.stat(
+                                DELETE_QUARANTINE_TARGET,
+                                dir_fd=entry_fd,
+                                follow_symlinks=False,
+                            )
+                        except FileNotFoundError:
+                            target_metadata = None
+                    except OSError:
+                        continue
+                    finally:
+                        if entry_fd >= 0:
+                            os.close(entry_fd)
+
+                    if target_metadata is not None and (
+                        stat.S_ISREG(target_metadata.st_mode)
+                        and target_metadata.st_dev == artifact.expected_device
+                        and target_metadata.st_ino == artifact.expected_inode
+                    ):
+                        return True
+                    if isinstance(manifest, dict):
+                        identity = manifest.get("identity", manifest)
+                        if (
+                            manifest.get("name") == expected_name
+                            and isinstance(identity, dict)
+                            and identity.get("device") == artifact.expected_device
+                            and identity.get("inode") == artifact.expected_inode
+                            and identity.get("size") == artifact.expected_size
+                        ):
+                            return True
+            finally:
+                entries.close()
+        finally:
+            os.close(quarantine_root_fd)
+    return False
+
+
 def _delete_review_deletion_artifact(
     artifact: ReviewDeletionArtifactModel,
     *,
@@ -402,6 +507,23 @@ def _delete_review_deletion_artifact(
     if relative.is_absolute() or len(relative.parts) != 2:
         raise UnsafeFilePathError("review deletion artifact target is invalid")
     namespace, name = relative.parts
+    expected_namespace = (
+        "packages"
+        if artifact.artifact_kind == "project_package"
+        else "files"
+        if artifact.artifact_kind
+        in {"original_media", "playback_derivative", "thumbnail"}
+        else None
+    )
+    if expected_namespace is None or namespace != expected_namespace:
+        raise UnsafeFilePathError(
+            "review deletion artifact kind and namespace do not match",
+        )
+    if (
+        not isinstance(artifact.expected_sha256, str)
+        or len(artifact.expected_sha256) != 64
+    ):
+        raise UnsafeFilePathError("review deletion artifact lacks a sha256 identity")
     if namespace == "files":
         if FILE_ID_RE.fullmatch(name) is None and DERIVATIVE_FILE_ID_RE.fullmatch(name) is None:
             raise UnsafeFilePathError("review deletion file identity is invalid")
@@ -409,6 +531,13 @@ def _delete_review_deletion_artifact(
         root = settings.storage_root
         with pin_regular_file(target, root) as pinned:
             if pinned is None or not pinned.exists:
+                if _review_deletion_target_is_quarantined(
+                    artifact,
+                    settings.storage_root,
+                ):
+                    raise UnsafeFilePathError(
+                        "review deletion target remains in quarantine",
+                    )
                 return False
             if (
                 pinned.device != artifact.expected_device
@@ -616,41 +745,12 @@ def process_review_deletion_intents(
     *,
     intent_ids: list[str] | None = None,
 ) -> tuple[int, int]:
-    for _batch in range(1_000):
-        try:
-            resolved, quarantine_failures = recover_delete_quarantines(
-                settings.storage_root,
-            )
-        except (OSError, ValueError):
-            return 0, 1
-        if quarantine_failures:
-            return 0, quarantine_failures
-        if resolved < DELETE_QUARANTINE_BATCH_SIZE:
-            break
-    else:
-        return 0, 1
     try:
-        with pin_managed_root(settings.storage_root) as (_root, root_fd):
-            try:
-                quarantine_fd = os.open(
-                    DELETE_QUARANTINE_DIRECTORY,
-                    os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=root_fd,
-                )
-            except FileNotFoundError:
-                quarantine_fd = -1
-            if quarantine_fd >= 0:
-                try:
-                    entries = os.scandir(quarantine_fd)
-                    try:
-                        if next(entries, None) is not None:
-                            return 0, 1
-                    finally:
-                        entries.close()
-                finally:
-                    os.close(quarantine_fd)
+        recover_delete_quarantines(settings.storage_root)
     except (OSError, ValueError):
-        return 0, 1
+        # Recovery is target-scoped below.  A corrupt or locked unrelated
+        # quarantine must not block claims for otherwise safe intents.
+        pass
     with SessionLocal() as session:
         claims = _claim_review_deletion_intents(
             session,
@@ -803,6 +903,40 @@ def _cleanup_orphan_managed_files(
     try:
         with pin_managed_root(root) as (resolved_root, root_fd):
             entries = _directory_scan_batch(root_fd, resolved_root, f"orphan-managed-{kind}")
+            logical_targets = {
+                entry.name: f"{'files' if kind == 'file' else 'packages'}/{entry.name}"
+                for entry in entries
+                if (
+                    kind == "file"
+                    and (
+                        FILE_ID_RE.fullmatch(entry.name)
+                        or DERIVATIVE_FILE_ID_RE.fullmatch(entry.name)
+                    )
+                )
+                or (kind == "package" and PACKAGE_FILE_RE.fullmatch(entry.name))
+            }
+            protected_deletion_targets = set(
+                session.scalars(
+                    select(ReviewDeletionArtifactModel.relative_logical_target)
+                    .join(
+                        ReviewDeletionIntentModel,
+                        ReviewDeletionIntentModel.id
+                        == ReviewDeletionArtifactModel.deletion_intent_id,
+                    )
+                    .where(
+                        ReviewDeletionArtifactModel.relative_logical_target.in_(
+                            tuple(logical_targets.values()),
+                        ),
+                        ReviewDeletionArtifactModel.status.in_(
+                            ("pending", "quarantined", "failed"),
+                        ),
+                        ReviewDeletionIntentModel.status.in_(
+                            ("pending", "cleaning", "failed"),
+                        ),
+                    )
+                    .with_for_update(),
+                ),
+            ) if logical_targets else set()
             active_derivative_ids: set[str] = set()
             if kind == "file" and any(DERIVATIVE_FILE_ID_RE.fullmatch(entry.name) for entry in entries):
                 active_derivative_ids = {
@@ -825,6 +959,8 @@ def _cleanup_orphan_managed_files(
                     match = PACKAGE_FILE_RE.fullmatch(entry.name)
                     record_id = match.group(1) if match else None
                 if record_id is None:
+                    continue
+                if logical_targets.get(entry.name) in protected_deletion_targets:
                     continue
                 try:
                     with _pin_regular_file_beneath(root_fd, resolved_root, Path(entry.name)) as pinned:

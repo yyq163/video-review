@@ -29,14 +29,22 @@ from backend.app.modules.final_cut_review.infra.database import Base
 from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     FileObjectModel,
+    FinalCutPackageSnapshotModel,
+    FinalizationPackageInvalidationModel,
     FinalizationRecordModel,
     IdempotencyRecordModel,
     MediaDerivativeTaskModel,
+    OutboxConsumerReceiptModel,
     OutboxEventModel,
     ProjectRefModel,
+    ReviewAnnotationSetModel,
+    ReviewDecisionModel,
+    ReviewDeletionArtifactModel,
+    ReviewDeletionIntentModel,
     ReviewIssueModel,
     ReviewIssueRevisionModel,
     ReviewItemModel,
+    ReviewThreadMessageModel,
     ReviewVersionModel,
     UploadSessionModel,
     utcnow,
@@ -1506,6 +1514,505 @@ def test_postgresql_delete_review_item_detaches_outbox_and_removes_file() -> Non
         assert events == []
     finally:
         session.close()
+        engine.dispose()
+
+
+def _postgres_delete_context(project_id: str, prefix: str) -> ExecutionContext:
+    return ExecutionContext(
+        entry_source="edit",
+        request_id=f"req_{prefix}",
+        principal=PrincipalRef(
+            kind="system",
+            id="pg-test",
+            project_ref_ids=(project_id,),
+        ),
+        write_guard=WriteGuardState(mode="none", verified=True),
+    )
+
+
+def test_postgresql_delete_project_removes_complete_business_graph_and_artifacts() -> None:
+    from backend.app.maintenance_cleanup import (
+        _claim_review_deletion_intents,
+        _cleanup_claimed_review_deletions,
+    )
+
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url)
+    PgSession = sessionmaker(bind=engine, expire_on_commit=False)
+    session = PgSession()
+    package_path: Path | None = None
+    source_path: Path | None = None
+    try:
+        prefix = _suffix()
+        project, item, version, file = _seed_item(session, prefix)
+        source_path = Path(file.storage_path)
+        item.workflow_status = "in_review"
+        annotation_id = f"ann_{prefix}"
+        issue_id = f"iss_{prefix}"
+        revision_id = f"rev_{prefix}"
+        finalization_id = f"fin_{prefix}"
+        package_id = f"pkg_{uuid.uuid4().hex}"
+        package_blob = f"pg-package-{prefix}".encode()
+        package_path = get_settings().package_root / f"{package_id}.zip"
+        package_path.parent.mkdir(parents=True, exist_ok=True)
+        package_path.write_bytes(package_blob)
+        now = utcnow()
+        issue = ReviewIssueModel(
+            id=issue_id,
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            issue_no=1,
+            status="resolved",
+            current_revision_id=revision_id,
+            timestamp_ms=1,
+            frame_number=1,
+        )
+        session.add(issue)
+        session.flush()
+        session.add(
+            ReviewAnnotationSetModel(
+                id=annotation_id,
+                project_ref_id=project.id,
+                review_item_id=item.id,
+                version_id=version.id,
+                issue_id=issue_id,
+                timestamp_ms=1,
+                frame_number=1,
+                canvas_width=1920,
+                canvas_height=1080,
+                video_width=1920,
+                video_height=1080,
+                shapes=[],
+            ),
+        )
+        session.flush()
+        session.add_all(
+            [
+                ReviewIssueRevisionModel(
+                    id=revision_id,
+                    project_ref_id=project.id,
+                    review_item_id=item.id,
+                    version_id=version.id,
+                    issue_id=issue_id,
+                    revision_no=1,
+                    content="pg full graph",
+                    annotation_set_id=annotation_id,
+                ),
+                ReviewThreadMessageModel(
+                    id=f"msg_{prefix}",
+                    project_ref_id=project.id,
+                    review_item_id=item.id,
+                    version_id=version.id,
+                    issue_id=issue_id,
+                    content="pg message",
+                ),
+                ReviewDecisionModel(
+                    id=f"dec_{prefix}",
+                    project_ref_id=project.id,
+                    review_item_id=item.id,
+                    version_id=version.id,
+                    decision_type="changes_requested",
+                    summary="pg decision",
+                ),
+                FinalizationRecordModel(
+                    id=finalization_id,
+                    project_ref_id=project.id,
+                    review_item_id=item.id,
+                    version_id=version.id,
+                    version_no=1,
+                    original_file_id=file.id,
+                    original_filename=file.original_filename,
+                    mime_type=file.mime_type,
+                    file_size=file.file_size,
+                    sha256=file.sha256,
+                    duration_ms=file.duration_ms,
+                    width=file.width,
+                    height=file.height,
+                    fps_num=file.fps_num,
+                    fps_den=file.fps_den,
+                    media_probe_version=file.media_probe_version,
+                    status="revoked",
+                    finalized_at=now,
+                    revoked_at=now,
+                ),
+                MediaDerivativeTaskModel(
+                    id=f"mdt_{prefix}",
+                    project_ref_id=project.id,
+                    review_item_id=item.id,
+                    version_id=version.id,
+                    kind="playback_faststart",
+                    status="ready",
+                    attempts=1,
+                    output_file_id=file.id,
+                ),
+            ],
+        )
+        package = FinalCutPackageSnapshotModel(
+            id=package_id,
+            project_ref_id=project.id,
+            status="invalidated",
+            package_filename=f"{package_id}.zip",
+            storage_path=str(package_path),
+            expires_at=now - timedelta(seconds=1),
+            total_bytes=len(package_blob),
+            storage_bytes=len(package_blob),
+            sha256=hashlib.sha256(package_blob).hexdigest(),
+            items=[{"finalization_id": finalization_id}],
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(package)
+        session.flush()
+        session.add(
+            FinalizationPackageInvalidationModel(
+                id=f"fpi_{prefix}",
+                project_ref_id=project.id,
+                review_item_id=item.id,
+                finalization_id=finalization_id,
+                package_id=package_id,
+                cleanup_status="pending",
+                cleanup_attempts=0,
+            ),
+        )
+        sequence = int(session.scalar(select(func.max(OutboxEventModel.sequence))) or 0)
+        issue_event = OutboxEventModel(
+            event_id=f"evt_{prefix}_issue",
+            event_type="review.issue.created",
+            aggregate_type="review_issue",
+            aggregate_id=issue_id,
+            aggregate_version=1,
+            sequence=sequence + 1,
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            issue_id=issue_id,
+            correlation_id=f"corr_{prefix}",
+            metadata_json={},
+            payload={},
+        )
+        package_event = OutboxEventModel(
+            event_id=f"evt_{prefix}_package",
+            event_type="review.package.invalidated",
+            aggregate_type="package",
+            aggregate_id=package_id,
+            aggregate_version=1,
+            sequence=sequence + 2,
+            project_ref_id=project.id,
+            package_id=package_id,
+            correlation_id=f"corr_{prefix}",
+            metadata_json={},
+            payload={},
+        )
+        session.add_all([issue_event, package_event])
+        session.flush()
+        session.add(
+            OutboxConsumerReceiptModel(
+                event_id=issue_event.event_id,
+                consumer_name=f"consumer_{prefix}",
+            ),
+        )
+        session.commit()
+
+        repository = SqlAlchemyReviewRepository(session, get_settings())
+        result = repository.execute(
+            "DeleteProject",
+            {"project_ref_id": project.id, "confirmed": True},
+            _postgres_delete_context(project.id, prefix),
+            project.lock_version,
+        )
+        assert result["outcome"] == "deleted"
+        session.commit()
+        intent_ids = list(
+            session.scalars(
+                select(ReviewDeletionIntentModel.id).where(
+                    ReviewDeletionIntentModel.project_ref_id_snapshot == project.id,
+                ),
+            ),
+        )
+        claims = _claim_review_deletion_intents(
+            session,
+            utcnow(),
+            intent_ids=intent_ids,
+        )
+        assert _cleanup_claimed_review_deletions(
+            session,
+            claims,
+            get_settings(),
+        ) == (1, 0)
+        for model, identity in (
+            (ProjectRefModel, project.id),
+            (ReviewItemModel, item.id),
+            (ReviewVersionModel, version.id),
+            (ReviewIssueModel, issue_id),
+            (ReviewIssueRevisionModel, revision_id),
+            (ReviewAnnotationSetModel, annotation_id),
+            (ReviewThreadMessageModel, f"msg_{prefix}"),
+            (ReviewDecisionModel, f"dec_{prefix}"),
+            (FinalizationRecordModel, finalization_id),
+            (FinalCutPackageSnapshotModel, package_id),
+        ):
+            assert session.get(model, identity) is None
+        assert session.scalar(
+            select(func.count()).select_from(OutboxEventModel).where(
+                OutboxEventModel.project_ref_id == project.id,
+            ),
+        ) == 0
+        assert source_path is not None and not source_path.exists()
+        assert package_path is not None and not package_path.exists()
+    finally:
+        session.close()
+        if source_path is not None:
+            source_path.unlink(missing_ok=True)
+        if package_path is not None:
+            package_path.unlink(missing_ok=True)
+        engine.dispose()
+
+
+def test_postgresql_fabricated_intent_does_not_authorize_partial_annotation_delete() -> None:
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url)
+    PgSession = sessionmaker(bind=engine)
+    session = PgSession()
+    try:
+        prefix = _suffix()
+        project, item, version, _file_model = _seed_item(session, prefix)
+        issue_id = f"iss_{prefix}_fabricated"
+        revision_id = f"rev_{prefix}_fabricated"
+        annotation_id = f"ann_{prefix}_fabricated"
+        issue = ReviewIssueModel(
+            id=issue_id,
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            issue_no=1,
+            status="unresolved",
+            current_revision_id=revision_id,
+            timestamp_ms=1,
+            frame_number=1,
+        )
+        session.add(issue)
+        session.flush()
+        annotation = ReviewAnnotationSetModel(
+            id=annotation_id,
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            issue_id=issue_id,
+            timestamp_ms=1,
+            frame_number=1,
+            canvas_width=1,
+            canvas_height=1,
+            video_width=1,
+            video_height=1,
+            shapes=[],
+        )
+        session.add(annotation)
+        session.flush()
+        session.add(
+            ReviewIssueRevisionModel(
+                id=revision_id,
+                project_ref_id=project.id,
+                review_item_id=item.id,
+                version_id=version.id,
+                issue_id=issue_id,
+                revision_no=1,
+                content="fabricated",
+                annotation_set_id=annotation_id,
+            ),
+        )
+        session.add(
+            ReviewDeletionIntentModel(
+                id=f"delete_{uuid.uuid4().hex}",
+                command_type="DeleteReviewItem",
+                operation_identity_hash=hashlib.sha256(prefix.encode()).hexdigest(),
+                subject_type="review_item",
+                project_ref_id_snapshot=project.id,
+                review_item_id_snapshot=item.id,
+                status="pending",
+                attempts=0,
+            ),
+        )
+        session.commit()
+        with pytest.raises(DBAPIError):
+            session.execute(
+                text("DELETE FROM annotation_sets WHERE id = :id"),
+                {"id": annotation_id},
+            )
+            session.commit()
+        session.rollback()
+        assert session.get(ReviewAnnotationSetModel, annotation_id) is not None
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_postgresql_kind_namespace_mismatch_is_rejected() -> None:
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url)
+    PgSession = sessionmaker(bind=engine)
+    session = PgSession()
+    try:
+        prefix = _suffix()
+        intent = ReviewDeletionIntentModel(
+            id=f"delete_{uuid.uuid4().hex}",
+            command_type="DeleteReviewItem",
+            operation_identity_hash=hashlib.sha256(prefix.encode()).hexdigest(),
+            subject_type="review_item",
+            project_ref_id_snapshot=f"prj_{prefix}",
+            review_item_id_snapshot=f"item_{prefix}",
+            status="pending",
+            attempts=0,
+        )
+        session.add(intent)
+        session.flush()
+        session.add(
+            ReviewDeletionArtifactModel(
+                id=f"artifact_{uuid.uuid4().hex}",
+                deletion_intent_id=intent.id,
+                artifact_kind="project_package",
+                relative_logical_target=f"files/file_{uuid.uuid4().hex}",
+                expected_device=1,
+                expected_inode=2,
+                expected_ctime_ns=3,
+                expected_size=4,
+                expected_sha256=hashlib.sha256(b"mismatch").hexdigest(),
+                status="pending",
+                attempts=0,
+            ),
+        )
+        with pytest.raises(DBAPIError):
+            session.commit()
+    finally:
+        session.rollback()
+        session.close()
+        engine.dispose()
+
+
+def test_postgresql_file_failure_keeps_db_delete_and_restart_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.maintenance_cleanup import (
+        _claim_review_deletion_intents,
+        _cleanup_claimed_review_deletions,
+    )
+    from backend.app.safe_files import PinnedRegularFile
+
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url)
+    PgSession = sessionmaker(bind=engine, expire_on_commit=False)
+    session = PgSession()
+    path: Path | None = None
+    original_unlink = PinnedRegularFile.unlink
+    try:
+        prefix = _suffix()
+        project, item, version, file = _seed_item(session, prefix)
+        path = Path(file.storage_path)
+        repository = SqlAlchemyReviewRepository(session, get_settings())
+        repository.execute(
+            "DeleteReviewItem",
+            {
+                "project_ref_id": project.id,
+                "review_item_id": item.id,
+                "confirmed": True,
+            },
+            _postgres_delete_context(project.id, prefix),
+            item.lock_version,
+        )
+        session.commit()
+        assert session.get(ReviewItemModel, item.id) is None
+
+        def fail_unlink(
+            _pinned: PinnedRegularFile,
+            *,
+            missing_ok: bool = True,
+        ) -> bool:
+            del missing_ok
+            raise OSError("forced pg deletion cleanup failure")
+
+        monkeypatch.setattr(PinnedRegularFile, "unlink", fail_unlink)
+        claims = _claim_review_deletion_intents(session, utcnow())
+        assert _cleanup_claimed_review_deletions(
+            session,
+            claims,
+            get_settings(),
+        ) == (0, 1)
+        assert path.is_file()
+        monkeypatch.setattr(PinnedRegularFile, "unlink", original_unlink)
+        session.close()
+
+        restarted = PgSession()
+        try:
+            claims = _claim_review_deletion_intents(restarted, utcnow())
+            assert _cleanup_claimed_review_deletions(
+                restarted,
+                claims,
+                get_settings(),
+            ) == (1, 0)
+            assert not path.exists()
+        finally:
+            restarted.close()
+    finally:
+        monkeypatch.setattr(PinnedRegularFile, "unlink", original_unlink)
+        if session.is_active:
+            session.close()
+        if path is not None:
+            path.unlink(missing_ok=True)
+        engine.dispose()
+
+
+def test_postgresql_replacement_identity_is_preserved_and_intent_stays_failed() -> None:
+    from backend.app.maintenance_cleanup import (
+        _claim_review_deletion_intents,
+        _cleanup_claimed_review_deletions,
+    )
+
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url)
+    PgSession = sessionmaker(bind=engine, expire_on_commit=False)
+    session = PgSession()
+    path: Path | None = None
+    try:
+        prefix = _suffix()
+        project, item, _version_model, file = _seed_item(session, prefix)
+        path = Path(file.storage_path)
+        repository = SqlAlchemyReviewRepository(session, get_settings())
+        repository.execute(
+            "DeleteReviewItem",
+            {
+                "project_ref_id": project.id,
+                "review_item_id": item.id,
+                "confirmed": True,
+            },
+            _postgres_delete_context(project.id, prefix),
+            item.lock_version,
+        )
+        session.commit()
+        path.unlink()
+        replacement = b"pg replacement must survive"
+        path.write_bytes(replacement)
+        claims = _claim_review_deletion_intents(session, utcnow())
+        assert _cleanup_claimed_review_deletions(
+            session,
+            claims,
+            get_settings(),
+        ) == (0, 1)
+        assert path.read_bytes() == replacement
+        intent = session.scalar(
+            select(ReviewDeletionIntentModel).where(
+                ReviewDeletionIntentModel.review_item_id_snapshot == item.id,
+            ),
+        )
+        assert intent is not None and intent.status == "failed"
+    finally:
+        session.close()
+        if path is not None:
+            path.unlink(missing_ok=True)
         engine.dispose()
 
 
