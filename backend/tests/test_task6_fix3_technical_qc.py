@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 import yaml  # type: ignore[import-untyped]
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from .conftest import create_item, create_project_item, upload_video
@@ -232,6 +232,11 @@ def test_postgresql_real_partial_unique_race_refills_another_item(
     models = _models()
     with db.SessionLocal.begin() as setup:
         project_id = _seed_large_ready_backlog(setup, count=3, include_tasks=True)
+        second_project_id = _seed_large_ready_backlog(
+            setup,
+            count=1,
+            include_tasks=True,
+        )
         first_item_id = setup.scalar(
             select(models.ReviewItemModel.id)
             .where(models.ReviewItemModel.project_ref_id == project_id)
@@ -240,6 +245,15 @@ def test_postgresql_real_partial_unique_race_refills_another_item(
         assert first_item_id is not None
         _insert_second_ready_version_for_same_item(setup, first_item_id)
         assert qc.discover_ready_technical_qc_tasks(setup, batch_size=8) == 1
+        cleanup_file_ids = set(
+            setup.scalars(
+                select(models.ReviewVersionModel.original_file_id).where(
+                    models.ReviewVersionModel.project_ref_id.in_(
+                        (project_id, second_project_id),
+                    ),
+                ),
+            ),
+        )
 
     candidates_selected = threading.Event()
     competitor_committed = threading.Event()
@@ -293,14 +307,78 @@ def test_postgresql_real_partial_unique_race_refills_another_item(
         assert not thread.is_alive()
         assert failure == []
         assert len(claimed) == 2
-        assert first_item_id not in {claim.review_item_id for claim in claimed}
+        claims_by_project = {
+            project_ref_id: [
+                claim
+                for claim in claimed
+                if claim.project_ref_id == project_ref_id
+            ]
+            for project_ref_id in (project_id, second_project_id)
+        }
+        assert {project_ref_id: len(rows) for project_ref_id, rows in claims_by_project.items()} == {
+            project_id: 1,
+            second_project_id: 1,
+        }
+        assert claims_by_project[project_id][0].review_item_id != first_item_id
+        with db.SessionLocal() as verification:
+            active_counts = dict(
+                verification.execute(
+                    select(
+                        models.TechnicalQcTaskModel.project_ref_id,
+                        func.count(),
+                    )
+                    .where(
+                        models.TechnicalQcTaskModel.project_ref_id.in_(
+                            (project_id, second_project_id),
+                        ),
+                        models.TechnicalQcTaskModel.status == "running",
+                    )
+                    .group_by(models.TechnicalQcTaskModel.project_ref_id),
+                ).all(),
+            )
+        assert active_counts == {project_id: 2, second_project_id: 1}
+        assert all(count <= 2 for count in active_counts.values())
     finally:
         competitor_committed.set()
         thread.join(timeout=2)
-        with db.SessionLocal.begin() as cleanup:
-            project = cleanup.get(models.ProjectRefModel, project_id)
-            if project is not None:
-                cleanup.delete(project)
+        if not thread.is_alive():
+            project_ids = (project_id, second_project_id)
+            with db.SessionLocal.begin() as cleanup:
+                cleanup.execute(
+                    delete(models.TechnicalQcFindingModel).where(
+                        models.TechnicalQcFindingModel.project_ref_id.in_(project_ids),
+                    ),
+                )
+                cleanup.execute(
+                    delete(models.TechnicalQcTaskModel).where(
+                        models.TechnicalQcTaskModel.project_ref_id.in_(project_ids),
+                    ),
+                )
+                cleanup.execute(
+                    delete(models.MediaDerivativeTaskModel).where(
+                        models.MediaDerivativeTaskModel.project_ref_id.in_(project_ids),
+                    ),
+                )
+                cleanup.execute(
+                    delete(models.ReviewVersionModel).where(
+                        models.ReviewVersionModel.project_ref_id.in_(project_ids),
+                    ),
+                )
+                cleanup.execute(
+                    delete(models.ReviewItemModel).where(
+                        models.ReviewItemModel.project_ref_id.in_(project_ids),
+                    ),
+                )
+                cleanup.execute(
+                    delete(models.ProjectRefModel).where(
+                        models.ProjectRefModel.id.in_(project_ids),
+                    ),
+                )
+                cleanup.execute(
+                    delete(models.FileObjectModel).where(
+                        models.FileObjectModel.id.in_(cleanup_file_ids),
+                    ),
+                )
 
 
 def _result_messages(intervals: list[dict[str, Any]]) -> list[dict[str, Any]]:
