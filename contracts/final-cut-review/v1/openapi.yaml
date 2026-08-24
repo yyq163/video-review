@@ -104,6 +104,21 @@ paths:
                 $ref: "#/components/schemas/EnvelopeProjectSummary"
         <<: *standardNon200Responses
 
+  /final-cut-review/projects/{project_ref_id}/technical-qc-progress:
+    get:
+      operationId: get_project_technical_qc_progress
+      tags: [queries]
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+      responses:
+        "200":
+          description: Currently running per-episode technical review progress only.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeTechnicalQcProgress"
+        <<: *standardNon200Responses
+
   /final-cut-review/projects/{project_ref_id}/items:
     get:
       operationId: list_items
@@ -1724,6 +1739,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ProjectSummaryDTO"
+    EnvelopeTechnicalQcProgress:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TechnicalQcProgressDTO"
     EnvelopePackageSnapshot:
       allOf:
         - $ref: "#/components/schemas/EnvelopeAny"
@@ -2678,6 +2700,27 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ProjectSummaryItemDTO"
+    TechnicalQcRunningEpisodeDTO:
+      type: object
+      required: [episode_no, processed_ms, total_ms]
+      additionalProperties: false
+      properties:
+        episode_no:
+          anyOf:
+            - type: integer
+              minimum: 1
+            - type: "null"
+        processed_ms: {type: integer, minimum: 0}
+        total_ms: {type: integer, minimum: 1}
+    TechnicalQcProgressDTO:
+      type: object
+      required: [episodes]
+      additionalProperties: false
+      properties:
+        episodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/TechnicalQcRunningEpisodeDTO"
     PackageSnapshotDTO:
       type: object
       required: [id, project_ref_id, status, package_filename, expires_at, file_count, total_bytes, items, created_at, updated_at]

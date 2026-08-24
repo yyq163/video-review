@@ -143,6 +143,11 @@ RUN apt-get update \
     && test "$(pg_restore --version | awk '{print $3}' | cut -d. -f1)" = 16 \
     && test "$(dpkg-query --show --showformat='${Version}' ffmpeg)" = "${FFMPEG_PACKAGE_VERSION}" \
     && ffprobe -version >/dev/null \
+    && ffmpeg -hide_banner -filters > /tmp/ffmpeg-filters.txt 2>&1 \
+    && for filter_name in blackframe blackdetect signalstats scdet silencedetect scale metadata split nullsink; do \
+        grep -Eq "[[:space:]]${filter_name}[[:space:]]" /tmp/ffmpeg-filters.txt; \
+    done \
+    && rm /tmp/ffmpeg-filters.txt \
     && ! ffmpeg -buildconf 2>&1 | grep -F -- '--enable-nonfree' \
     && install -d -m 0755 /usr/share/fj-build \
     && ffmpeg -version > /usr/share/fj-build/ffmpeg-version.txt 2>&1 \

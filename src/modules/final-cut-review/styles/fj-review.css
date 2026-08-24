@@ -207,6 +207,68 @@
   margin: 2px 0 0;
 }
 
+.fj-review-technical-qc {
+  background: rgba(88, 225, 212, 0.12);
+  border: 1px solid rgba(88, 225, 212, 0.42);
+  border-radius: 999px;
+  color: var(--fj-review-aqua);
+  cursor: default;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  outline: none;
+  padding: 5px 8px;
+  position: relative;
+  white-space: nowrap;
+}
+
+.fj-review-technical-qc:focus-visible {
+  box-shadow: 0 0 0 2px rgba(88, 225, 212, 0.26);
+}
+
+.fj-review-technical-qc-tooltip {
+  background: var(--fj-review-panel);
+  border: 1px solid var(--fj-review-line);
+  border-radius: 8px;
+  box-shadow: var(--fj-review-shadow);
+  color: var(--fj-review-text);
+  display: grid;
+  gap: 10px;
+  left: 0;
+  min-width: 280px;
+  padding: 12px;
+  position: absolute;
+  top: calc(100% + 8px);
+  z-index: 30;
+}
+
+.fj-review-technical-qc-tooltip > strong {
+  font-size: 12px;
+}
+
+.fj-review-technical-qc-list,
+.fj-review-technical-qc-list > span {
+  display: grid;
+  gap: 8px;
+}
+
+.fj-review-technical-qc-list > span {
+  align-items: center;
+  grid-template-columns: 64px minmax(120px, 1fr) 36px;
+}
+
+.fj-review-technical-qc-list progress {
+  accent-color: var(--fj-review-aqua);
+  height: 7px;
+  width: 100%;
+}
+
+.fj-review-technical-qc-list output {
+  color: var(--fj-review-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .fj-review-page-heading p {
   color: var(--fj-review-muted);
   margin: 0;

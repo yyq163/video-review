@@ -38,6 +38,8 @@ from backend.app.modules.review_contracts.generated import (
     ProjectSummaryDTO,
     ProjectSummaryFinalizationDTO,
     ProjectSummaryItemDTO,
+    TechnicalQcProgressDTO,
+    TechnicalQcRunningEpisodeDTO,
     ReviewAnnotationSetDTO,
     ReviewAnnotationShape,
     ReviewIssueDTO,
@@ -81,6 +83,7 @@ from .sqlalchemy_models import (
     ReviewItemModel,
     ReviewThreadMessageModel,
     ReviewVersionModel,
+    TechnicalQcTaskModel,
     UploadSessionModel,
     utcnow,
 )
@@ -4038,6 +4041,41 @@ class SqlAlchemyReviewRepository:
                 ),
             ),
             items=summary_items,
+        ).model_dump(mode="json")
+
+    def get_project_technical_qc_progress(self, project_ref_id: str) -> dict[str, Any]:
+        project = self._get_project(project_ref_id)
+        self._assert_project_visible(project)
+        rows = self.session.execute(
+            select(
+                ReviewItemModel.episode_no,
+                TechnicalQcTaskModel.processed_ms,
+                TechnicalQcTaskModel.total_ms,
+            )
+            .join(
+                ReviewItemModel,
+                (ReviewItemModel.id == TechnicalQcTaskModel.review_item_id)
+                & (ReviewItemModel.project_ref_id == TechnicalQcTaskModel.project_ref_id),
+            )
+            .where(
+                TechnicalQcTaskModel.project_ref_id == project_ref_id,
+                TechnicalQcTaskModel.status == "running",
+            )
+            .order_by(
+                case((ReviewItemModel.episode_no.is_(None), 1), else_=0),
+                ReviewItemModel.episode_no,
+                TechnicalQcTaskModel.review_item_id,
+            )
+        ).all()
+        return TechnicalQcProgressDTO(
+            episodes=[
+                TechnicalQcRunningEpisodeDTO(
+                    episode_no=episode_no,
+                    processed_ms=int(processed_ms),
+                    total_ms=int(total_ms),
+                )
+                for episode_no, processed_ms, total_ms in rows
+            ],
         ).model_dump(mode="json")
 
     def _summary_derivative_status(

@@ -4,6 +4,7 @@ import {
   type ReviewIssueDTO,
   type ReviewIssueRevisionDTO,
   type ThreadMessageDTO,
+  type TechnicalQcProgressDTO,
 } from '../contracts-generated/backend-contract';
 import type {
   FinalizationRecord,
@@ -13,13 +14,30 @@ import type {
   ReviewItemId,
   VersionId,
 } from '../contracts/types';
-import type { QueryOptions } from '../ports';
+import type { QueryOptions, TechnicalQcProgress } from '../ports';
 import { issueFromDto } from './http-review-issue-mappers';
 import { finalizationFromDto } from './http-review-project-mappers';
 import type { HttpReviewTransport } from './http-review-transport';
 
 export class HttpReviewQueries {
   constructor(private readonly transport: HttpReviewTransport) {}
+
+  async technicalQcProgress(
+    projectRefId: ProjectRefId,
+    options?: QueryOptions,
+  ): Promise<TechnicalQcProgress> {
+    const progress = await this.transport.requestJson<TechnicalQcProgressDTO>(
+      `/api/v1/final-cut-review/projects/${projectRefId}/technical-qc-progress`,
+      { signal: options?.signal },
+    );
+    return {
+      episodes: progress.episodes.map((episode) => ({
+        episodeNo: episode.episode_no,
+        processedMs: episode.processed_ms,
+        totalMs: episode.total_ms,
+      })),
+    };
+  }
 
   async optionalFinalization(
     projectRefId: ProjectRefId,

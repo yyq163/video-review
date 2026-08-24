@@ -113,6 +113,7 @@ type ProjectApi = Pick<
   | 'listProjects'
   | 'listResponsibleEditors'
   | 'getProjectSummary'
+  | 'getTechnicalQcProgress'
   | 'getReviewItem'
   | 'getVersion'
   | 'getVersionIssues'
@@ -236,6 +237,11 @@ export class HttpReviewProjects implements ProjectApi {
     private readonly transport: HttpReviewTransport,
     private readonly queries: HttpReviewQueries,
   ) {}
+
+  readonly getTechnicalQcProgress: ReviewApiPort['getTechnicalQcProgress'] = (
+    projectRefId,
+    options,
+  ) => this.queries.technicalQcProgress(projectRefId, options);
 
   readonly listProjects: ReviewApiPort['listProjects'] = async (options) => {
     const projects = await this.transport.requestList<ProjectDTO[]>(

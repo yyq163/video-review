@@ -6,6 +6,7 @@ import type {
   ReviewVersion,
   ResponsibleEditor,
 } from '../contracts/types';
+import type { TechnicalQcProgress } from '../ports';
 
 export interface InMemoryReviewRepositorySnapshot {
   projects: Project[];
@@ -18,4 +19,5 @@ export interface InMemoryReviewRepositorySnapshot {
 
 export interface InMemoryReviewRepositoryOptions {
   onChange?: () => void;
+  technicalQcProgressByProject?: Record<string, TechnicalQcProgress>;
 }

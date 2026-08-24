@@ -88,10 +88,21 @@ export interface ReviewProjectSummary {
   readonly items: ReviewProjectSummaryItem[];
 }
 
+export interface TechnicalQcRunningEpisode {
+  readonly episodeNo: number | null;
+  readonly processedMs: number;
+  readonly totalMs: number;
+}
+
+export interface TechnicalQcProgress {
+  readonly episodes: TechnicalQcRunningEpisode[];
+}
+
 export interface ReviewQueryPort {
   listProjects(options?: QueryOptions): Promise<Project[]>;
   listResponsibleEditors(options?: QueryOptions): Promise<ResponsibleEditor[]>;
   getProjectSummary(projectRefId: ProjectRefId, options?: QueryOptions): Promise<ReviewProjectSummary>;
+  getTechnicalQcProgress(projectRefId: ProjectRefId, options?: QueryOptions): Promise<TechnicalQcProgress>;
   getReviewItem(
     params: { projectRefId: ProjectRefId; reviewItemId: ReviewItemId },
     options?: QueryOptions,

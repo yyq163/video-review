@@ -437,6 +437,84 @@ services:
       management:
         ipv4_address: ${MEDIA_WORKER_MANAGEMENT_IP:-172.30.0.13}
 
+  technical-qc-worker:
+    image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    cpus: 8.0
+    mem_limit: 8g
+    pids_limit: 256
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - backend.app.technical_qc
+      - run
+      - --interval-seconds
+      - ${TECHNICAL_QC_WORKER_INTERVAL_SECONDS:-2}
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_APP_DB:-final_cut_review}
+      DATABASE_USER: ${POSTGRES_APP_USER:-final_cut_review_app}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_app_password
+      DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
+      STORAGE_ROOT: /data/storage
+      PACKAGE_ROOT: /data/packages
+      TECHNICAL_QC_FFMPEG_COMMAND: /usr/bin/ffmpeg
+      TECHNICAL_QC_TIMEOUT_SECONDS: ${TECHNICAL_QC_TIMEOUT_SECONDS:-7200}
+      TECHNICAL_QC_OUTPUT_LIMIT_BYTES: ${TECHNICAL_QC_OUTPUT_LIMIT_BYTES:-8388608}
+      TECHNICAL_QC_WORKER_CONCURRENCY: ${TECHNICAL_QC_WORKER_CONCURRENCY:-4}
+      TECHNICAL_QC_PER_PROJECT_CONCURRENCY: ${TECHNICAL_QC_PER_PROJECT_CONCURRENCY:-2}
+      TECHNICAL_QC_LEASE_SECONDS: ${TECHNICAL_QC_LEASE_SECONDS:-900}
+      TECHNICAL_QC_WORKER_MAX_ATTEMPTS: ${TECHNICAL_QC_WORKER_MAX_ATTEMPTS:-3}
+      TECHNICAL_QC_WORKER_RETRY_DELAY_SECONDS: ${TECHNICAL_QC_WORKER_RETRY_DELAY_SECONDS:-30}
+      TECHNICAL_QC_ANALYSIS_WIDTH: ${TECHNICAL_QC_ANALYSIS_WIDTH:-640}
+      TECHNICAL_QC_BLACK_PIXEL_RATIO: ${TECHNICAL_QC_BLACK_PIXEL_RATIO:-98}
+      TECHNICAL_QC_BLACK_LUMA: ${TECHNICAL_QC_BLACK_LUMA:-32}
+      TECHNICAL_QC_WHITE_YAVG: ${TECHNICAL_QC_WHITE_YAVG:-250}
+      TECHNICAL_QC_SCENE_SCORE: ${TECHNICAL_QC_SCENE_SCORE:-10}
+      TECHNICAL_QC_SILENCE_DB: ${TECHNICAL_QC_SILENCE_DB:--50}
+      TECHNICAL_QC_WORKER_HEALTH_MAX_AGE_SECONDS: ${TECHNICAL_QC_WORKER_HEALTH_MAX_AGE_SECONDS:-90}
+    secrets:
+      - postgres_app_password
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - gosu
+        - app
+        - python
+        - -c
+        - >-
+          import os,time; from pathlib import Path;
+          p=Path('/tmp/fj-technical-qc-worker-heartbeat'); s=Path('/tmp/fj-technical-qc-worker-status');
+          allowed={'ok','running','degraded'}; limit=int(os.environ['TECHNICAL_QC_WORKER_HEALTH_MAX_AGE_SECONDS']);
+          raise SystemExit(0 if p.is_file() and s.is_file() and s.read_text().strip() in allowed and time.time()-p.stat().st_mtime <= limit else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETGID
+      - SETUID
+    volumes:
+      - fj-final-cut-review-data:/data
+      - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+    networks:
+      app-internal: {}
+
   nginx:
     image: nginx:1.31.3-alpine3.24@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
     restart: unless-stopped

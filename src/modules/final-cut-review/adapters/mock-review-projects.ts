@@ -6,6 +6,7 @@ type ProjectApi = Pick<
   | 'listProjects'
   | 'listResponsibleEditors'
   | 'getProjectSummary'
+  | 'getTechnicalQcProgress'
   | 'getReviewItem'
   | 'getVersion'
   | 'getVersionIssues'
@@ -40,6 +41,12 @@ export class MockReviewProjects implements ProjectApi {
     await this.context.ready();
     this.context.throwIfAborted(options?.signal);
     return this.context.repository.getProjectSummary(projectRefId);
+  };
+
+  readonly getTechnicalQcProgress: ReviewApiPort['getTechnicalQcProgress'] = async (projectRefId, options) => {
+    await this.context.ready();
+    this.context.throwIfAborted(options?.signal);
+    return this.context.repository.getTechnicalQcProgress(projectRefId);
   };
 
   readonly getReviewItem: ReviewApiPort['getReviewItem'] = async (input, options) => {

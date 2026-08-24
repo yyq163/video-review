@@ -27,6 +27,8 @@ export const reviewKeys = {
   responsibleEditors: ['fj-review', 'responsible-editors'] as const,
   projectSummary: (projectRefId: ProjectRefId) =>
     ['fj-review', 'project-summary', projectRefId] as const,
+  technicalQcProgress: (projectRefId: ProjectRefId) =>
+    ['fj-review', 'technical-qc-progress', projectRefId] as const,
   item: (projectRefId: ProjectRefId, reviewItemId: ReviewItemId) =>
     ['fj-review', 'item', projectRefId, reviewItemId] as const,
   revocationAuthority: (
@@ -226,6 +228,18 @@ export function useProjectSummary(mode: EntryMode, projectRefId: ProjectRefId) {
     ...summary,
     data: summary.data ? maskProtectedSummary(summary.data) : summary.data,
   };
+}
+
+export function useTechnicalQcProgress(mode: EntryMode, projectRefId: ProjectRefId) {
+  const api = useReviewApi(mode);
+  return useQuery({
+    queryKey: reviewKeys.technicalQcProgress(projectRefId),
+    queryFn: ({ signal }) => api.getTechnicalQcProgress(projectRefId, { signal }),
+    enabled: Boolean(projectRefId),
+    retry: (failureCount, error) => !isAbortError(error) && failureCount < 2,
+    staleTime: 1_000,
+    refetchInterval: 2_000,
+  });
 }
 
 export function useVersionStatus(

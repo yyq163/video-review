@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { EntryMode, FinalizationRevocation, ReviewItem } from '../contracts/types';
 import { entryLinksFor } from '../entry/entry-links';
-import { useProjectSummary, useResponsibleEditors, useReviewMutations } from '../entry/use-review-queries';
+import { useProjectSummary, useResponsibleEditors, useReviewMutations, useTechnicalQcProgress } from '../entry/use-review-queries';
 import { useMediaMetadata } from '../entry/runtime';
 import { AppShell, CapabilityGate, ErrorView, LoadingBlock, StatusBadge, actionError } from '../components/shared';
 import { CreateItemUploadPanel } from '../components/UploadPanel';
@@ -30,6 +30,7 @@ import {
   type RevokeFinalizationReconciliationState,
 } from '../adapters/http-review-finalization-operation';
 import { ProjectDetailItemList, type ProjectDetailMetadataEpisodeGroup } from './project-detail-item-list';
+import { TechnicalQcProgressIndicator } from '../components/TechnicalQcProgressIndicator';
 
 function revocationSuccessMessage(
   item: Pick<ReviewItem, 'episode'>,
@@ -53,6 +54,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const navigate = useNavigate();
   const { projectRefId = '' } = useParams();
   const detail = useProjectSummary(props.entryMode, projectRefId);
+  const technicalQcProgress = useTechnicalQcProgress(props.entryMode, projectRefId);
   const mutations = useReviewMutations(props.entryMode);
   const responsibleEditors = useResponsibleEditors(props.entryMode);
   const mediaMetadata = useMediaMetadata();
@@ -696,6 +698,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
               <h1>
                 {project.name}
                 <StatusBadge status={project.status} />
+                <TechnicalQcProgressIndicator episodes={technicalQcProgress.data?.episodes ?? []} />
               </h1>
               {!isArchived ? (
                 <CapabilityGate entryMode={props.entryMode} capability="review.project.update">

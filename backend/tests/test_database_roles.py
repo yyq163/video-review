@@ -26,7 +26,7 @@ from backend.scripts.bootstrap_database_roles import (
 from backend.scripts.grant_runtime_role import RuntimeGrantConfig, grant_runtime_role
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_SERVICES = ("backend", "maintenance", "package-worker")
+RUNTIME_SERVICES = ("backend", "maintenance", "package-worker", "technical-qc-worker")
 HIGH_PRIVILEGE_ENV_PREFIXES = (
     "POSTGRES_ADMIN_",
     "POSTGRES_OWNER_",
@@ -135,10 +135,12 @@ def test_compose_isolates_database_role_credentials_and_migration_lifecycle() ->
         assert services["backend"]["environment"][name].endswith(f":-{default}}}")
         assert name not in services["maintenance"]["environment"]
         assert name not in services["package-worker"]["environment"]
+        assert name not in services["technical-qc-worker"]["environment"]
         assert f"{name}={default}" in (ROOT / ".env.example").read_text(encoding="utf-8")
     for service_name in ("backend", "maintenance"):
         assert services[service_name]["environment"]["UPLOAD_SESSION_TTL_SECONDS"].endswith(":-900}")
     assert "UPLOAD_SESSION_TTL_SECONDS" not in services["package-worker"]["environment"]
+    assert "UPLOAD_SESSION_TTL_SECONDS" not in services["technical-qc-worker"]["environment"]
     assert "UPLOAD_SESSION_TTL_SECONDS=900" in (ROOT / ".env.example").read_text(encoding="utf-8")
 
 

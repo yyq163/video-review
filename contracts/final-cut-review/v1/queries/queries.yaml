@@ -5,6 +5,7 @@ queries:
   - list_responsible_editors
   - get_project
   - get_project_summary
+  - get_project_technical_qc_progress
   - list_items
   - get_item
   - list_versions

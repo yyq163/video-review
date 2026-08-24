@@ -316,11 +316,11 @@ fingerprint() {
 }
 
 assert_four_services_healthy() {
-    compose ps --format json postgres backend maintenance package-worker media-worker nginx | python3 -c '
+    compose ps --format json postgres backend maintenance package-worker media-worker technical-qc-worker nginx | python3 -c '
 import json
 import sys
 
-expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "nginx"}
+expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "technical-qc-worker", "nginx"}
 payload = sys.stdin.read().strip()
 if not payload:
     raise SystemExit("Compose returned no service health records")
@@ -357,7 +357,7 @@ restart_four_services_in_dependency_order() {
 
 stop_writers() {
     writers_stopped=1
-    compose stop backend maintenance package-worker media-worker >/dev/null
+    compose stop backend maintenance package-worker media-worker technical-qc-worker >/dev/null
 }
 
 create_sentinel

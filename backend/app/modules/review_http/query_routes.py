@@ -507,6 +507,20 @@ def get_project_summary(
     )
 
 
+@router.get("/projects/{project_ref_id}/technical-qc-progress")
+def get_project_technical_qc_progress(
+    project_ref_id: str,
+    request: Request,
+    session: Session = Depends(session_dependency),
+    request_id: str = Depends(get_request_id),
+) -> dict[str, object]:
+    authorize_query(query_context(request, request_id), "review.project.read", project_ref_id)
+    return ok(
+        query_service(session).get_project_technical_qc_progress(project_ref_id),
+        request_id,
+    )
+
+
 @router.get("/projects/{project_ref_id}/items")
 def list_items(
     project_ref_id: str,

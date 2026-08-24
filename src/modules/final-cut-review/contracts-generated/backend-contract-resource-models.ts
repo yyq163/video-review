@@ -55,6 +55,16 @@ export interface ProjectSummaryDTO {
   items: ProjectSummaryItemDTO[];
 }
 
+export interface TechnicalQcRunningEpisodeDTO {
+  episode_no: number | null;
+  processed_ms: number;
+  total_ms: number;
+}
+
+export interface TechnicalQcProgressDTO {
+  episodes: TechnicalQcRunningEpisodeDTO[];
+}
+
 export interface PackageSnapshotItem {
   review_item_id: string;
   version_id: string;

@@ -23,6 +23,7 @@ export class InMemoryReviewRepository {
   readonly listProjects: InMemoryReviewQueries['listProjects'];
   readonly listResponsibleEditors: InMemoryReviewEditors['listResponsibleEditors'];
   readonly getProjectSummary: InMemoryReviewQueries['getProjectSummary'];
+  readonly getTechnicalQcProgress: InMemoryReviewQueries['getTechnicalQcProgress'];
   readonly getReviewItem: InMemoryReviewQueries['getReviewItem'];
   readonly getVersion: InMemoryReviewQueries['getVersion'];
   readonly getVersionIssues: InMemoryReviewQueries['getVersionIssues'];
@@ -77,6 +78,7 @@ export class InMemoryReviewRepository {
     this.listProjects = queries.listProjects;
     this.listResponsibleEditors = editors.listResponsibleEditors;
     this.getProjectSummary = queries.getProjectSummary;
+    this.getTechnicalQcProgress = queries.getTechnicalQcProgress;
     this.getReviewItem = queries.getReviewItem;
     this.getVersion = queries.getVersion;
     this.getVersionIssues = queries.getVersionIssues;

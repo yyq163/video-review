@@ -6,6 +6,7 @@ import {
   useProjectSummary,
   useResponsibleEditors,
   useReviewMutations,
+  useTechnicalQcProgress,
   useWorkspace,
 } from '../entry/use-review-queries';
 import { ProjectDetailPage } from './ProjectDetailPage';
@@ -15,6 +16,7 @@ vi.mock('../entry/use-review-queries', () => ({
   useProjectSummary: vi.fn(),
   useResponsibleEditors: vi.fn(),
   useReviewMutations: vi.fn(),
+  useTechnicalQcProgress: vi.fn(),
   useWorkspace: vi.fn(),
 }));
 
@@ -25,6 +27,7 @@ vi.mock('../entry/runtime', () => ({
 const projectDetailQuery = vi.mocked(useProjectSummary);
 const responsibleEditorsQuery = vi.mocked(useResponsibleEditors);
 const reviewMutations = vi.mocked(useReviewMutations);
+const technicalQcProgressQuery = vi.mocked(useTechnicalQcProgress);
 const workspaceQuery = vi.mocked(useWorkspace);
 
 afterEach(() => {
@@ -33,6 +36,7 @@ afterEach(() => {
 });
 
 responsibleEditorsQuery.mockReturnValue({ data: [] } as unknown as ReturnType<typeof useResponsibleEditors>);
+technicalQcProgressQuery.mockReturnValue({ data: { episodes: [] } } as unknown as ReturnType<typeof useTechnicalQcProgress>);
 
 function expectApprovedEntryNavigation(entryMode: EntryMode) {
   const navigation = screen.getByRole('navigation', { name: '入口切换' });

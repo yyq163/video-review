@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import type { EntryMode } from '../contracts/types';
-import type { MediaMetadataPort, ReviewApiPort, ReviewPermissionAdapter } from '../ports';
+import type { MediaMetadataPort, ReviewApiPort, ReviewPermissionAdapter, TechnicalQcProgress } from '../ports';
 import { createSeedData } from '../core/seed';
 import { InMemoryReviewRepository, type InMemoryReviewRepositorySnapshot } from '../adapters/in-memory-review-repository';
 import { MockFileStorageAdapter } from '../adapters/mock-file-storage-adapter';
@@ -30,6 +30,7 @@ const ReviewRuntimeContext = createContext<ReviewRuntime | null>(null);
 export interface ReviewRuntimeOptions {
   apiBaseUrl?: string;
   persistMockRuntime?: boolean;
+  technicalQcProgressByProject?: Record<string, TechnicalQcProgress>;
 }
 
 export interface ReviewRuntimeConfiguration {
@@ -125,6 +126,7 @@ export function createReviewRuntime(options: ReviewRuntimeOptions = {}): ReviewR
     const snapshot = persistMockRuntime ? loadMockSnapshot() : null;
     const repository = new InMemoryReviewRepository(snapshot ?? seed, {
       onChange: persistMockRuntime ? () => saveMockSnapshot(repository) : undefined,
+      technicalQcProgressByProject: options.technicalQcProgressByProject,
     });
     const hydrateMockRuntime = persistMockRuntime
       ? fileStorage.whenReady().then(() => {

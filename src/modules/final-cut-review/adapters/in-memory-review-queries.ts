@@ -13,12 +13,28 @@ import { invariant } from '../core/errors';
 import type {
   ReviewItemWithMetadata,
   ReviewProjectSummary,
+  TechnicalQcProgress,
 } from '../ports';
 import { cloneFinalization, cloneIssue, cloneVersion } from './in-memory-review-clones';
 import type { InMemoryReviewStore } from './in-memory-review-store';
 
 export class InMemoryReviewQueries {
   constructor(private readonly store: InMemoryReviewStore) {}
+
+  readonly getTechnicalQcProgress = async (
+    projectRefId: ProjectRefId,
+  ): Promise<TechnicalQcProgress> => {
+    const project = this.store.getProject(projectRefId);
+    this.store.assertProjectVisible(project);
+    const progress = this.store.technicalQcProgressByProject.get(projectRefId);
+    return {
+      episodes: (progress?.episodes ?? [])
+        .map((episode) => ({ ...episode }))
+        .sort((left, right) =>
+          (left.episodeNo === null ? 1 : 0) - (right.episodeNo === null ? 1 : 0)
+          || (left.episodeNo ?? 0) - (right.episodeNo ?? 0)),
+    };
+  };
 
   readonly listProjects = async (): Promise<Project[]> =>
     [...this.store.projects.values()]

@@ -487,6 +487,22 @@ class ProjectSummaryDTO(ContractModel):
     items: list[ProjectSummaryItemDTO]
 
 
+class TechnicalQcRunningEpisodeDTO(ContractModel):
+    episode_no: int | None
+    processed_ms: int = Field(ge=0)
+    total_ms: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_progress(self) -> "TechnicalQcRunningEpisodeDTO":
+        if self.processed_ms > self.total_ms:
+            raise ValueError("processed_ms must not exceed total_ms")
+        return self
+
+
+class TechnicalQcProgressDTO(ContractModel):
+    episodes: list[TechnicalQcRunningEpisodeDTO]
+
+
 class PackageSnapshotItemDTO(ContractModel):
     review_item_id: str
     version_id: str

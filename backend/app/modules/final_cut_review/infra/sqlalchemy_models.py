@@ -519,6 +519,144 @@ Index(
 )
 
 
+class TechnicalQcTaskModel(Base):
+    __tablename__ = "technical_qc_tasks"
+    __table_args__ = (
+        UniqueConstraint("version_id", name="uq_technical_qc_tasks_version"),
+        ForeignKeyConstraint(
+            ["version_id", "project_ref_id", "review_item_id"],
+            ["review_versions.id", "review_versions.project_ref_id", "review_versions.review_item_id"],
+            name="fk_technical_qc_tasks_version_identity",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["input_file_id"],
+            ["file_objects.id"],
+            name="fk_technical_qc_tasks_input_file",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "status in ('queued','running','complete','failed')",
+            name="ck_technical_qc_tasks_status",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_technical_qc_tasks_attempts"),
+        CheckConstraint(
+            "processed_ms >= 0 AND total_ms > 0 AND processed_ms <= total_ms",
+            name="ck_technical_qc_tasks_progress",
+        ),
+        CheckConstraint(
+            "length(trim(rule_version)) BETWEEN 1 AND 64",
+            name="ck_technical_qc_tasks_rule_version",
+        ),
+        CheckConstraint(
+            "(status = 'running' AND claim_id IS NOT NULL AND lease_expires_at IS NOT NULL) "
+            "OR (status != 'running' AND claim_id IS NULL AND lease_expires_at IS NULL)",
+            name="ck_technical_qc_tasks_claim",
+        ),
+        CheckConstraint(
+            "(status = 'complete' AND completed_at IS NOT NULL AND processed_ms = total_ms) "
+            "OR (status != 'complete' AND completed_at IS NULL)",
+            name="ck_technical_qc_tasks_completed",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_ref_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_item_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    version_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_file_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    claim_id: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    total_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+Index(
+    "ix_technical_qc_tasks_claim",
+    TechnicalQcTaskModel.status,
+    TechnicalQcTaskModel.next_attempt_at,
+    TechnicalQcTaskModel.lease_expires_at,
+    TechnicalQcTaskModel.created_at,
+    TechnicalQcTaskModel.id,
+)
+Index(
+    "ix_technical_qc_tasks_project_running",
+    TechnicalQcTaskModel.project_ref_id,
+    TechnicalQcTaskModel.status,
+    TechnicalQcTaskModel.review_item_id,
+    TechnicalQcTaskModel.id,
+)
+
+
+class TechnicalQcFindingModel(Base):
+    __tablename__ = "technical_qc_findings"
+    __table_args__ = (
+        UniqueConstraint("identity_hash", name="uq_technical_qc_findings_identity"),
+        ForeignKeyConstraint(
+            ["task_id"],
+            ["technical_qc_tasks.id"],
+            name="fk_technical_qc_findings_task",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["version_id", "project_ref_id", "review_item_id"],
+            ["review_versions.id", "review_versions.project_ref_id", "review_versions.review_item_id"],
+            name="fk_technical_qc_findings_version_identity",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["issue_id"],
+            ["review_issues.id"],
+            name="fk_technical_qc_findings_issue",
+            ondelete="SET NULL",
+        ),
+        CheckConstraint("length(identity_hash) = 64", name="ck_technical_qc_findings_identity"),
+        CheckConstraint(
+            "start_frame >= 0 AND end_frame >= start_frame",
+            name="ck_technical_qc_findings_frames",
+        ),
+        CheckConstraint(
+            "start_ms >= 0 AND end_ms >= start_ms",
+            name="ck_technical_qc_findings_time",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_ref_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_item_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    version_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    identity_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    issue_id: Mapped[str | None] = mapped_column(String(64))
+    start_frame: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    end_frame: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    start_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    end_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reason_codes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    value_details: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+Index(
+    "ix_technical_qc_findings_task",
+    TechnicalQcFindingModel.task_id,
+    TechnicalQcFindingModel.start_frame,
+    TechnicalQcFindingModel.end_frame,
+    TechnicalQcFindingModel.id,
+)
+Index("ix_technical_qc_findings_issue", TechnicalQcFindingModel.issue_id)
+
+
 class ReviewIssueModel(Base):
     __tablename__ = "review_issues"
     __table_args__ = (

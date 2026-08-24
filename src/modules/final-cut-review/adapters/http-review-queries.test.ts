@@ -391,3 +391,45 @@ describe('HttpReviewQueries issue revisions', () => {
     expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 });
+
+describe('HttpReviewQueries technical QC progress', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the project-scoped running progress resource and maps only episode media time fields', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      data: {
+        episodes: [
+          { episode_no: 2, processed_ms: 250, total_ms: 1_000 },
+          { episode_no: 1, processed_ms: 500, total_ms: 2_000 },
+        ],
+      },
+      meta: { request_id: 'technical-qc-progress', contract_version: '1.0' },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const queries = new HttpReviewQueries(reviewTransport());
+
+    const progress = await queries.technicalQcProgress('project_1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://review.example/api/v1/final-cut-review/projects/project_1/technical-qc-progress',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(progress).toEqual({
+      episodes: [
+        { episodeNo: 2, processedMs: 250, totalMs: 1_000 },
+        { episodeNo: 1, processedMs: 500, totalMs: 2_000 },
+      ],
+    });
+    expect(Object.keys(progress)).toEqual(['episodes']);
+    expect(Object.keys(progress.episodes[0])).toEqual([
+      'episodeNo',
+      'processedMs',
+      'totalMs',
+    ]);
+  });
+});

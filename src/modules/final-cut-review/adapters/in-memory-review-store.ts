@@ -13,6 +13,7 @@ import type {
 } from '../contracts/types';
 import { ReviewDomainError, invariant } from '../core/errors';
 import type { ReviewItemWithMetadata } from '../ports';
+import type { TechnicalQcProgress } from '../ports';
 import {
   cloneFinalization,
   cloneIssue,
@@ -31,6 +32,7 @@ export class InMemoryReviewStore {
   readonly issues = new Map<IssueId, ReviewIssue>();
   readonly finalizations = new Map<string, FinalizationRecord>();
   readonly responsibleEditors = new Map<string, ResponsibleEditor>();
+  readonly technicalQcProgressByProject = new Map<ProjectRefId, TechnicalQcProgress>();
 
   constructor(
     seed: Partial<InMemoryReviewRepositorySnapshot>,
@@ -51,6 +53,11 @@ export class InMemoryReviewStore {
     }
     for (const editor of seed.responsibleEditors ?? []) {
       this.responsibleEditors.set(editor.responsibleEditorId, { ...editor });
+    }
+    for (const [projectRefId, progress] of Object.entries(options.technicalQcProgressByProject ?? {})) {
+      this.technicalQcProgressByProject.set(projectRefId, {
+        episodes: progress.episodes.map((episode) => ({ ...episode })),
+      });
     }
   }
 
