@@ -18,7 +18,7 @@ from alembic import command as alembic_command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import create_engine, event, func, inspect, select, text
+from sqlalchemy import create_engine, delete, event, func, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
@@ -2425,6 +2425,12 @@ def test_postgresql_delete_first_target_lock_blocks_regular_orphan_query(
                 ),
             )
             if intent is not None:
+                cleanup.execute(
+                    delete(ReviewDeletionArtifactModel).where(
+                        ReviewDeletionArtifactModel.deletion_intent_id
+                        == intent.id,
+                    ),
+                )
                 cleanup.delete(intent)
             remaining_project = cleanup.get(ProjectRefModel, project.id)
             if remaining_project is not None:
@@ -2627,6 +2633,12 @@ def test_postgresql_package_orphan_lock_blocks_project_delete_and_replacement(
                 ),
             )
             if intent is not None:
+                cleanup.execute(
+                    delete(ReviewDeletionArtifactModel).where(
+                        ReviewDeletionArtifactModel.deletion_intent_id
+                        == intent.id,
+                    ),
+                )
                 cleanup.delete(intent)
                 cleanup.commit()
         package_path.unlink(missing_ok=True)
