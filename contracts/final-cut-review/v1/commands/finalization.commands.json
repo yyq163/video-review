@@ -33,6 +33,34 @@
       }
     },
     {
+      "command_type": "FinalizeProject",
+      "capability": "review.finalization.create",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "confirmed"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "confirmed": {"type": "boolean", "const": true}
+        }
+      }
+    },
+    {
+      "command_type": "RevokeProjectFinalization",
+      "capability": "review.finalization.revoke",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "confirmed"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "confirmed": {"type": "boolean", "const": true}
+        }
+      }
+    },
+    {
       "command_type": "RetryFinalizationCleanup",
       "capability": "review.finalization.revoke",
       "idempotent": true,

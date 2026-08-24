@@ -99,6 +99,8 @@ export interface ProjectDTO {
   lifecycle_status: "active" | "archived";
   completion_status: "empty" | "in_progress" | "completed";
   deleted_at?: string | null;
+  fps_num: number | null;
+  fps_den: number | null;
   lock_version: number;
   created_at: string;
   updated_at: string;
@@ -113,6 +115,8 @@ export interface ReviewVersionDTO {
   version_label: string;
   is_current: boolean;
   original_media: OriginalMediaSnapshotDTO;
+  responsible_editor_id: string | null;
+  responsible_editor_name_snapshot: string | null;
   playback_status: "processing" | "ready" | "failed";
   playback_asset_id?: string | null;
   thumbnail_status: "processing" | "ready" | "failed";
@@ -121,6 +125,34 @@ export interface ReviewVersionDTO {
   change_summary?: string | null;
   lock_version: number;
   created_at: string;
+}
+
+export interface ResponsibleEditorDTO {
+  id: string;
+  display_name: string;
+  lock_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DeletionOutcome = "deleted" | "failed" | "outcome_unknown";
+
+export interface ProjectDeletionResultDTO {
+  project_ref_id: string;
+  outcome: DeletionOutcome;
+  error_code?: string | null;
+}
+
+export interface ReviewItemDeletionResultDTO {
+  project_ref_id: string;
+  review_item_id: string;
+  outcome: DeletionOutcome;
+  error_code?: string | null;
+}
+
+export interface ReviewItemsBatchDeletionResultDTO {
+  project_ref_id: string;
+  results: ReviewItemDeletionResultDTO[];
 }
 
 export interface ReviewIssueRevisionDTO {
@@ -224,57 +256,4 @@ export interface FinalizationCleanupRetryDTO {
   review_item_id: string;
   cleanup_status: "pending" | "complete";
   requeued_package_ids: string[];
-}
-
-export interface PackageSnapshotItem {
-  review_item_id: string;
-  version_id: string;
-  finalization_id: string;
-  original_file_id: string;
-  original_filename: string;
-  sha256: string;
-  archive_name: string;
-}
-
-export interface PackageSnapshotDTO {
-  id: string;
-  project_ref_id: string;
-  status: "preparing" | "ready" | "failed" | "expired" | "invalidated";
-  package_filename: string;
-  expires_at: string;
-  file_count: number;
-  total_bytes: number;
-  sha256?: string;
-  download_token?: string;
-  download_token_expires_at?: string;
-  created_at: string;
-  updated_at: string;
-  failure_details?: Record<string, unknown>;
-  items: PackageSnapshotItem[];
-}
-
-export interface PackageDownloadSessionDTO {
-  status: "ready";
-}
-
-export interface UploadInitRequest {
-  original_filename: string;
-  mime_type: "video/mp4" | "video/quicktime" | "application/octet-stream";
-  file_size: number;
-  sha256: string;
-  duration_ms?: number;
-  width?: number;
-  height?: number;
-  fps_num?: number;
-  fps_den?: number;
-}
-
-export interface UploadSessionDTO {
-  upload_id: string;
-  status: "initiated" | "receiving" | "completed" | "aborted";
-  original_filename: string;
-  mime_type: string;
-  declared_size: number;
-  received_size: number;
-  file_id?: string | null;
 }

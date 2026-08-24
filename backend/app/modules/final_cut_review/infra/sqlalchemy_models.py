@@ -34,6 +34,11 @@ class ProjectRefModel(Base):
         UniqueConstraint("source", "external_project_id", name="uq_project_refs_source_external_project_id"),
         CheckConstraint("source in ('local','host')", name="ck_project_refs_source"),
         CheckConstraint("lifecycle_status in ('active','archived')", name="ck_project_refs_lifecycle_status"),
+        CheckConstraint(
+            "(fps_num IS NULL AND fps_den IS NULL) "
+            "OR (fps_num IS NOT NULL AND fps_den IS NOT NULL AND fps_num > 0 AND fps_den > 0)",
+            name="ck_project_refs_fps_pair",
+        ),
         CheckConstraint("lock_version >= 1", name="ck_project_refs_lock_version"),
     )
 
@@ -45,6 +50,8 @@ class ProjectRefModel(Base):
     external_project_id: Mapped[str | None] = mapped_column(String(128))
     lifecycle_status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fps_num: Mapped[int | None] = mapped_column(Integer)
+    fps_den: Mapped[int | None] = mapped_column(Integer)
     lock_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -53,6 +60,24 @@ class ProjectRefModel(Base):
 
 Index("ix_project_refs_lifecycle_status", ProjectRefModel.lifecycle_status)
 Index("ix_project_refs_deleted_at", ProjectRefModel.deleted_at)
+
+
+class ResponsibleEditorModel(Base):
+    __tablename__ = "responsible_editors"
+    __table_args__ = (
+        CheckConstraint("length(trim(display_name)) BETWEEN 1 AND 255", name="ck_responsible_editors_display_name"),
+        CheckConstraint("lock_version >= 1", name="ck_responsible_editors_lock_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    lock_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    __mapper_args__ = {"version_id_col": lock_version, "version_id_generator": False}
+
+
+Index("ix_responsible_editors_display_name", ResponsibleEditorModel.display_name)
 
 
 class FileObjectModel(Base):
@@ -232,6 +257,12 @@ class ReviewVersionModel(Base):
         CheckConstraint("duration_ms > 0", name="ck_review_versions_duration_ms"),
         CheckConstraint("width > 0 and height > 0", name="ck_review_versions_dimensions"),
         CheckConstraint("fps_num > 0 and fps_den > 0", name="ck_review_versions_fps"),
+        CheckConstraint(
+            "(responsible_editor_id IS NULL AND responsible_editor_name_snapshot IS NULL) "
+            "OR (responsible_editor_id IS NOT NULL AND responsible_editor_name_snapshot IS NOT NULL "
+            "AND length(trim(responsible_editor_name_snapshot)) BETWEEN 1 AND 255)",
+            name="ck_review_versions_responsible_editor_snapshot_pair",
+        ),
         CheckConstraint("lock_version >= 1", name="ck_review_versions_lock_version"),
     )
 
@@ -253,6 +284,8 @@ class ReviewVersionModel(Base):
     fps_num: Mapped[int] = mapped_column(Integer, nullable=False)
     fps_den: Mapped[int] = mapped_column(Integer, nullable=False)
     media_probe_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    responsible_editor_id: Mapped[str | None] = mapped_column(String(64))
+    responsible_editor_name_snapshot: Mapped[str | None] = mapped_column(String(255))
     playback_asset_id: Mapped[str | None] = mapped_column(String(64))
     thumbnail_asset_id: Mapped[str | None] = mapped_column(String(64))
     version_note: Mapped[str | None] = mapped_column(Text)
@@ -269,6 +302,118 @@ Index(
     postgresql_where=ReviewVersionModel.is_current.is_(True),
 )
 Index("ix_review_versions_project_item", ReviewVersionModel.project_ref_id, ReviewVersionModel.review_item_id)
+Index("ix_review_versions_responsible_editor", ReviewVersionModel.responsible_editor_id)
+
+
+class ReviewDeletionIntentModel(Base):
+    __tablename__ = "review_deletion_intents"
+    __table_args__ = (
+        UniqueConstraint("operation_identity_hash", name="uq_review_deletion_intents_operation_identity"),
+        CheckConstraint(
+            "command_type in ('DeleteProject','DeleteReviewItem','DeleteReviewItemsBatch')",
+            name="ck_review_deletion_intents_command_type",
+        ),
+        CheckConstraint(
+            "subject_type in ('project','review_item')",
+            name="ck_review_deletion_intents_subject_type",
+        ),
+        CheckConstraint(
+            "status in ('pending','cleaning','failed','complete')",
+            name="ck_review_deletion_intents_status",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_review_deletion_intents_attempts"),
+        CheckConstraint(
+            "length(operation_identity_hash) = 64",
+            name="ck_review_deletion_intents_identity_hash",
+        ),
+        CheckConstraint(
+            "(status = 'complete' AND completed_at IS NOT NULL) OR (status != 'complete' AND completed_at IS NULL)",
+            name="ck_review_deletion_intents_completed_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    command_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation_identity_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+Index(
+    "ix_review_deletion_intents_cleanup",
+    ReviewDeletionIntentModel.status,
+    ReviewDeletionIntentModel.updated_at,
+    ReviewDeletionIntentModel.id,
+)
+
+
+class ReviewDeletionArtifactModel(Base):
+    __tablename__ = "review_deletion_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "deletion_intent_id",
+            "relative_logical_target",
+            name="uq_review_deletion_artifacts_intent_target",
+        ),
+        ForeignKeyConstraint(
+            ["deletion_intent_id"],
+            ["review_deletion_intents.id"],
+            name="fk_review_deletion_artifacts_intent",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "artifact_kind in ('original_media','playback_derivative','thumbnail','project_package')",
+            name="ck_review_deletion_artifacts_kind",
+        ),
+        CheckConstraint(
+            "status in ('pending','quarantined','failed','deleted')",
+            name="ck_review_deletion_artifacts_status",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_review_deletion_artifacts_attempts"),
+        CheckConstraint(
+            "length(relative_logical_target) > 0 "
+            "AND substr(relative_logical_target, 1, 1) != '/' "
+            "AND relative_logical_target != '..' "
+            "AND relative_logical_target NOT LIKE '../%' "
+            "AND relative_logical_target NOT LIKE '%/../%'",
+            name="ck_review_deletion_artifacts_relative_target",
+        ),
+        CheckConstraint(
+            "expected_device >= 0 AND expected_inode >= 0 AND expected_ctime_ns >= 0 AND expected_size > 0",
+            name="ck_review_deletion_artifacts_strong_identity",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    deletion_intent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    relative_logical_target: Mapped[str] = mapped_column(String(1024), nullable=False)
+    expected_device: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_inode: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_ctime_ns: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+Index(
+    "ix_review_deletion_artifacts_cleanup",
+    ReviewDeletionArtifactModel.status,
+    ReviewDeletionArtifactModel.updated_at,
+    ReviewDeletionArtifactModel.id,
+)
+Index("ix_review_deletion_artifacts_intent", ReviewDeletionArtifactModel.deletion_intent_id)
 
 
 class MediaDerivativeTaskModel(Base):

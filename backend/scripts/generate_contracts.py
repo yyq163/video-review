@@ -413,6 +413,11 @@ def _validate_contract_schema(schema: dict[str, Any], value: Any, path: str) -> 
         for key in schema.get("required", []):
             if key not in value:
                 raise ValueError(f"{{path}}.{{key}} is required")
+        allowed_frame_rates = schema.get("x-allowed-rational-frame-rates")
+        if allowed_frame_rates is not None:
+            frame_rate = [value.get("fps_num"), value.get("fps_den")]
+            if frame_rate not in allowed_frame_rates:
+                raise ValueError(f"{{path}} frame rate {{frame_rate!r}} is not allowed")
         if schema.get("additionalProperties") is False:
             allowed = set(schema.get("properties", {{}}))
             extra = sorted(set(value) - allowed)
@@ -425,6 +430,8 @@ def _validate_contract_schema(schema: dict[str, Any], value: Any, path: str) -> 
     if schema_type == "array":
         if not isinstance(value, list):
             raise ValueError(f"{{path}} must be an array")
+        if "minItems" in schema and len(value) < int(schema["minItems"]):
+            raise ValueError(f"{{path}} has too few items")
         if "maxItems" in schema and len(value) > int(schema["maxItems"]):
             raise ValueError(f"{{path}} has too many items")
         item_schema = schema.get("items", {{}})
@@ -587,6 +594,8 @@ class ProjectDTO(ContractModel):
     lifecycle_status: Literal["active", "archived"]
     completion_status: Literal["empty", "in_progress", "completed"]
     deleted_at: str | None = None
+    fps_num: int | None
+    fps_den: int | None
     lock_version: int
     created_at: str
     updated_at: str
@@ -601,6 +610,8 @@ class ReviewVersionDTO(ContractModel):
     version_label: str
     is_current: bool
     original_media: OriginalMediaSnapshotDTO
+    responsible_editor_id: str | None
+    responsible_editor_name_snapshot: str | None
     playback_status: Literal["processing", "ready", "failed"]
     playback_asset_id: str | None = None
     thumbnail_status: Literal["processing", "ready", "failed"]
@@ -609,6 +620,32 @@ class ReviewVersionDTO(ContractModel):
     change_summary: str | None = None
     lock_version: int
     created_at: str
+
+
+class ResponsibleEditorDTO(ContractModel):
+    id: str
+    display_name: str
+    lock_version: int
+    created_at: str
+    updated_at: str
+
+
+class ProjectDeletionResultDTO(ContractModel):
+    project_ref_id: str
+    outcome: Literal["deleted", "failed", "outcome_unknown"]
+    error_code: str | None = None
+
+
+class ReviewItemDeletionResultDTO(ContractModel):
+    project_ref_id: str
+    review_item_id: str
+    outcome: Literal["deleted", "failed", "outcome_unknown"]
+    error_code: str | None = None
+
+
+class ReviewItemsBatchDeletionResultDTO(ContractModel):
+    project_ref_id: str
+    results: list[ReviewItemDeletionResultDTO]
 
 
 class ReviewIssueRevisionDTO(ContractModel):
@@ -720,6 +757,12 @@ class ProjectSummaryCurrentVersionDTO(ContractModel):
     version_label: str
     duration_ms: int
     file_size: int
+    width: int
+    height: int
+    fps_num: int
+    fps_den: int
+    responsible_editor_id: str | None
+    responsible_editor_name_snapshot: str | None
     playback_status: Literal["pending", "ready", "failed"]
     playback_url: str | None = None
     thumbnail_status: Literal["pending", "ready", "failed"]
@@ -1021,6 +1064,8 @@ export interface ProjectDTO {{
   lifecycle_status: "active" | "archived";
   completion_status: "empty" | "in_progress" | "completed";
   deleted_at?: string | null;
+  fps_num: number | null;
+  fps_den: number | null;
   lock_version: number;
   created_at: string;
   updated_at: string;
@@ -1035,6 +1080,8 @@ export interface ReviewVersionDTO {{
   version_label: string;
   is_current: boolean;
   original_media: OriginalMediaSnapshotDTO;
+  responsible_editor_id: string | null;
+  responsible_editor_name_snapshot: string | null;
   playback_status: "processing" | "ready" | "failed";
   playback_asset_id?: string | null;
   thumbnail_status: "processing" | "ready" | "failed";
@@ -1043,6 +1090,34 @@ export interface ReviewVersionDTO {{
   change_summary?: string | null;
   lock_version: number;
   created_at: string;
+}}
+
+export interface ResponsibleEditorDTO {{
+  id: string;
+  display_name: string;
+  lock_version: number;
+  created_at: string;
+  updated_at: string;
+}}
+
+export type DeletionOutcome = "deleted" | "failed" | "outcome_unknown";
+
+export interface ProjectDeletionResultDTO {{
+  project_ref_id: string;
+  outcome: DeletionOutcome;
+  error_code?: string | null;
+}}
+
+export interface ReviewItemDeletionResultDTO {{
+  project_ref_id: string;
+  review_item_id: string;
+  outcome: DeletionOutcome;
+  error_code?: string | null;
+}}
+
+export interface ReviewItemsBatchDeletionResultDTO {{
+  project_ref_id: string;
+  results: ReviewItemDeletionResultDTO[];
 }}
 
 export interface ReviewIssueRevisionDTO {{
@@ -1146,6 +1221,60 @@ export interface FinalizationCleanupRetryDTO {{
   review_item_id: string;
   cleanup_status: "pending" | "complete";
   requeued_package_ids: string[];
+}}
+
+export interface ProjectSummaryCurrentVersionDTO {{
+  id: string;
+  version_no: number;
+  version_label: string;
+  duration_ms: number;
+  file_size: number;
+  width: number;
+  height: number;
+  fps_num: number;
+  fps_den: number;
+  responsible_editor_id: string | null;
+  responsible_editor_name_snapshot: string | null;
+  playback_status: "pending" | "ready" | "failed";
+  playback_url: string | null;
+  thumbnail_status: "pending" | "ready" | "failed";
+  thumbnail_url: string | null;
+}}
+
+export interface ProjectSummaryFinalizationDTO {{
+  id: string;
+  version_id: string;
+  version_no: number;
+  status: "active" | "revoked";
+  finalized_at: string;
+  revoked_at: string | null;
+}}
+
+export interface ProjectSummaryBulkDeleteDTO {{
+  eligible: boolean;
+  locked: boolean;
+  reason: string | null;
+}}
+
+export interface ProjectSummaryItemDTO {{
+  id: string;
+  project_ref_id: string;
+  item_code: string;
+  episode_no: number | null;
+  title: string;
+  workflow_state: "pending_review" | "in_review" | "changes_requested" | "finalized";
+  lock_version: number;
+  current_version_id: string;
+  current_version: ProjectSummaryCurrentVersionDTO;
+  unresolved_current_version_count: number;
+  finalization: ProjectSummaryFinalizationDTO | null;
+  revocation_cleanup_status: "none" | "pending" | "failed" | "complete";
+  bulk_delete: ProjectSummaryBulkDeleteDTO;
+}}
+
+export interface ProjectSummaryDTO {{
+  project: ProjectDTO;
+  items: ProjectSummaryItemDTO[];
 }}
 
 export interface PackageSnapshotItem {{
@@ -1297,6 +1426,10 @@ export class FinalCutReviewClient {{
     return this.request<ProjectDTO[]>("/api/v1/final-cut-review/projects", init);
   }}
 
+  listResponsibleEditors(init: RequestInit = {{}}): Promise<ResponsibleEditorDTO[]> {{
+    return this.request<ResponsibleEditorDTO[]>("/api/v1/final-cut-review/responsible-editors", init);
+  }}
+
   getProject(projectRefId: string, init: RequestInit = {{}}): Promise<ProjectDTO> {{
     return this.request<ProjectDTO>(`/api/v1/final-cut-review/projects/${{projectRefId}}`, init);
   }}
@@ -1326,7 +1459,8 @@ def ts_templates(
 ) -> dict[str, str]:
     monolith = ts_template(capabilities, errors, commands, manifest, events, event_payload_schemas)
     metadata, remainder = monolith.split("export interface ErrorBody", 1)
-    models, remainder = remainder.split("export interface FinalizeVersionPayload", 1)
+    models_and_resources, remainder = remainder.split("export interface FinalizeVersionPayload", 1)
+    models, resource_models = models_and_resources.split("export interface ProjectSummaryCurrentVersionDTO", 1)
     payloads, client = remainder.split("export class FinalCutReviewHttpError", 1)
     generated = "// Generated by backend/scripts/generate_contracts.py. Do not edit by hand.\n"
     outputs = {
@@ -1337,13 +1471,19 @@ def ts_templates(
             + "export interface ErrorBody"
             + models
         ),
+        "backend-contract-resource-models.ts": (
+            generated
+            + 'import type { ProjectDTO } from "./backend-contract-models";\n\n'
+            + "export interface ProjectSummaryCurrentVersionDTO"
+            + resource_models
+        ),
         "backend-contract-payloads.ts": (
             generated + 'import type { DomainEventType } from "./backend-contract-metadata";\n' + "\n" + "export interface FinalizeVersionPayload" + payloads
         ),
         "backend-contract-client.ts": (
             generated
             + 'import type { ErrorCode } from "./backend-contract-metadata";\n'
-            + 'import type { CommandEnvelope, Envelope, ErrorBody, ErrorEnvelope, ProjectDTO } from "./backend-contract-models";\n\n'
+            + 'import type { CommandEnvelope, Envelope, ErrorBody, ErrorEnvelope, ProjectDTO, ResponsibleEditorDTO } from "./backend-contract-models";\n\n'
             + "export class FinalCutReviewHttpError"
             + client
         ),
@@ -1351,6 +1491,7 @@ def ts_templates(
             generated
             + 'export * from "./backend-contract-metadata";\n'
             + 'export * from "./backend-contract-models";\n'
+            + 'export * from "./backend-contract-resource-models";\n'
             + 'export * from "./backend-contract-payloads";\n'
             + 'export * from "./backend-contract-client";\n'
         ),

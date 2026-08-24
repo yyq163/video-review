@@ -14,6 +14,16 @@ export interface RevokeFinalizationPayload {
   confirmed: true;
 }
 
+export interface FinalizeProjectPayload {
+  project_ref_id: string;
+  confirmed: true;
+}
+
+export interface RevokeProjectFinalizationPayload {
+  project_ref_id: string;
+  confirmed: true;
+}
+
 export interface RetryFinalizationCleanupPayload {
   project_ref_id: string;
   review_item_id: string;
@@ -83,12 +93,20 @@ export interface CreateProjectPayload {
   project_name: string;
   description?: string;
   external_project_id?: string;
+  fps_num: number;
+  fps_den: number;
 }
 
 export interface UpdateProjectPayload {
   project_ref_id: string;
   project_name: string;
   description: string;
+}
+
+export interface LockProjectFrameRatePayload {
+  project_ref_id: string;
+  fps_num: number;
+  fps_den: number;
 }
 
 export interface ArchiveProjectPayload {
@@ -99,9 +117,18 @@ export interface RestoreProjectPayload {
   project_ref_id: string;
 }
 
-export interface SoftDeleteProjectPayload {
+export interface DeleteProjectPayload {
   project_ref_id: string;
   confirmed: true;
+}
+
+export interface CreateResponsibleEditorPayload {
+  display_name: string;
+}
+
+export interface RenameResponsibleEditorPayload {
+  responsible_editor_id: string;
+  display_name: string;
 }
 
 export interface CreateReviewItemPayload {
@@ -110,6 +137,9 @@ export interface CreateReviewItemPayload {
   episode_no?: number;
   title: string;
   original_file_id: string;
+  responsible_editor_id: string;
+  responsible_editor_name_snapshot: string;
+  local_probe_claim: { "fps_num": number; "fps_den": number; "is_variable_frame_rate": false; "probe_version": string };
   version_note?: string;
 }
 
@@ -126,10 +156,19 @@ export interface DeleteReviewItemPayload {
   confirmed: true;
 }
 
+export interface DeleteReviewItemsBatchPayload {
+  project_ref_id: string;
+  review_item_ids: string[];
+  confirmed: true;
+}
+
 export interface UploadReviewVersionPayload {
   project_ref_id: string;
   review_item_id: string;
   original_file_id: string;
+  responsible_editor_id: string;
+  responsible_editor_name_snapshot: string;
+  local_probe_claim: { "fps_num": number; "fps_den": number; "is_variable_frame_rate": false; "probe_version": string };
   version_note?: string;
   change_summary?: string;
   supersede_reason?: string;

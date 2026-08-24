@@ -4,8 +4,8 @@ export const REVIEW_CAPABILITIES = ["review.download.finalized_original", "revie
 export type ReviewCapability = "review.download.finalized_original" | "review.finalization.create" | "review.finalization.read" | "review.finalization.revoke" | "review.issue.create" | "review.issue.delete" | "review.issue.read" | "review.issue.reopen" | "review.issue.reply" | "review.issue.resolve" | "review.issue.update" | "review.item.create" | "review.item.delete" | "review.item.read" | "review.item.update" | "review.package.create" | "review.package.download" | "review.package.read" | "review.project.archive" | "review.project.create" | "review.project.delete" | "review.project.read" | "review.project.restore" | "review.project.update" | "review.session.start" | "review.version.compare" | "review.version.read" | "review.version.upload";
 export const EDIT_ENTRY_PROFILE = ["review.project.read", "review.project.create", "review.project.update", "review.item.read", "review.item.create", "review.item.update", "review.item.delete", "review.version.read", "review.version.upload", "review.version.compare", "review.issue.read", "review.issue.resolve", "review.finalization.read", "review.download.finalized_original"] as const;
 export const REVIEW_ENTRY_PROFILE = ["review.project.read", "review.project.archive", "review.project.restore", "review.project.delete", "review.item.read", "review.item.delete", "review.version.read", "review.version.compare", "review.issue.read", "review.issue.create", "review.issue.update", "review.issue.reply", "review.issue.reopen", "review.issue.delete", "review.finalization.read", "review.finalization.create", "review.finalization.revoke", "review.download.finalized_original", "review.package.create", "review.package.read", "review.package.download"] as const;
-export type CommandType = "FinalizeVersion" | "RevokeFinalization" | "RetryFinalizationCleanup" | "StartReview" | "CreateReviewIssue" | "UpdateReviewIssue" | "AddReviewMessage" | "ResolveReviewIssue" | "ReopenReviewIssue" | "SoftDeleteReviewIssue" | "PrepareFinalizedPackage" | "CreateProject" | "UpdateProject" | "ArchiveProject" | "RestoreProject" | "SoftDeleteProject" | "CreateReviewItem" | "UpdateReviewItem" | "DeleteReviewItem" | "UploadReviewVersion";
-export const IDEMPOTENT_COMMANDS = ["AddReviewMessage", "CreateProject", "CreateReviewIssue", "CreateReviewItem", "DeleteReviewItem", "FinalizeVersion", "PrepareFinalizedPackage", "RetryFinalizationCleanup", "RevokeFinalization", "UploadReviewVersion"] as const;
+export type CommandType = "FinalizeVersion" | "RevokeFinalization" | "FinalizeProject" | "RevokeProjectFinalization" | "RetryFinalizationCleanup" | "StartReview" | "CreateReviewIssue" | "UpdateReviewIssue" | "AddReviewMessage" | "ResolveReviewIssue" | "ReopenReviewIssue" | "SoftDeleteReviewIssue" | "PrepareFinalizedPackage" | "CreateProject" | "UpdateProject" | "LockProjectFrameRate" | "ArchiveProject" | "RestoreProject" | "DeleteProject" | "CreateResponsibleEditor" | "RenameResponsibleEditor" | "CreateReviewItem" | "UpdateReviewItem" | "DeleteReviewItem" | "DeleteReviewItemsBatch" | "UploadReviewVersion";
+export const IDEMPOTENT_COMMANDS = ["AddReviewMessage", "CreateProject", "CreateResponsibleEditor", "CreateReviewIssue", "CreateReviewItem", "DeleteProject", "DeleteReviewItem", "DeleteReviewItemsBatch", "FinalizeProject", "FinalizeVersion", "LockProjectFrameRate", "PrepareFinalizedPackage", "RetryFinalizationCleanup", "RevokeFinalization", "RevokeProjectFinalization", "UploadReviewVersion"] as const;
 export type DomainEventType = "review.project.created" | "review.project.updated" | "review.project.archived" | "review.project.restored" | "review.project.deleted" | "review.item.created" | "review.item.updated" | "review.item.deleted" | "review.version.uploaded" | "review.session.started" | "review.issue.created" | "review.issue.updated" | "review.issue.message_added" | "review.issue.resolved" | "review.issue.reopened" | "review.issue.deleted" | "review.version.finalized" | "review.finalization.revoked" | "review.finalized_original.download_requested" | "review.package.requested" | "review.package.ready" | "review.package.failed";
 export const DOMAIN_EVENT_TYPES = ["review.project.created", "review.project.updated", "review.project.archived", "review.project.restored", "review.project.deleted", "review.item.created", "review.item.updated", "review.item.deleted", "review.version.uploaded", "review.session.started", "review.issue.created", "review.issue.updated", "review.issue.message_added", "review.issue.resolved", "review.issue.reopened", "review.issue.deleted", "review.version.finalized", "review.finalization.revoked", "review.finalized_original.download_requested", "review.package.requested", "review.package.ready", "review.package.failed"] as const;
 export const DOMAIN_EVENT_PAYLOAD_SCHEMAS = {
@@ -154,6 +154,15 @@ export const ERROR_HTTP_STATUS = {
   "UNRESOLVED_ISSUES_EXIST": 409,
   "NO_UNRESOLVED_ISSUE": 409,
   "VERSION_FILE_NOT_READY": 409,
+  "PROJECT_FRAME_RATE_REQUIRED": 409,
+  "PROJECT_FRAME_RATE_LOCKED": 409,
+  "MEDIA_FRAME_RATE_UNKNOWN": 422,
+  "MEDIA_VARIABLE_FRAME_RATE": 422,
+  "MEDIA_FRAME_RATE_NOT_ALLOWED": 422,
+  "MEDIA_FRAME_RATE_MISMATCH": 409,
+  "RESPONSIBLE_EDITOR_REQUIRED": 422,
+  "RESPONSIBLE_EDITOR_NOT_FOUND": 404,
+  "DELETION_OUTCOME_UNKNOWN": 409,
   "FILE_HASH_MISMATCH": 409,
   "UPLOAD_INCOMPLETE": 409,
   "IDEMPOTENCY_CONFLICT": 409,
@@ -172,6 +181,8 @@ export type ErrorHttpStatus = 401 | 403 | 404 | 405 | 409 | 410 | 413 | 422 | 50
 export const COMMAND_CAPABILITIES = {
   "FinalizeVersion": "review.finalization.create",
   "RevokeFinalization": "review.finalization.revoke",
+  "FinalizeProject": "review.finalization.create",
+  "RevokeProjectFinalization": "review.finalization.revoke",
   "RetryFinalizationCleanup": "review.finalization.revoke",
   "StartReview": "review.session.start",
   "CreateReviewIssue": "review.issue.create",
@@ -183,12 +194,16 @@ export const COMMAND_CAPABILITIES = {
   "PrepareFinalizedPackage": "review.package.create",
   "CreateProject": "review.project.create",
   "UpdateProject": "review.project.update",
+  "LockProjectFrameRate": "review.project.update",
   "ArchiveProject": "review.project.archive",
   "RestoreProject": "review.project.restore",
-  "SoftDeleteProject": "review.project.delete",
+  "DeleteProject": "review.project.delete",
+  "CreateResponsibleEditor": "review.project.update",
+  "RenameResponsibleEditor": "review.project.update",
   "CreateReviewItem": "review.item.create",
   "UpdateReviewItem": "review.item.update",
   "DeleteReviewItem": "review.item.delete",
+  "DeleteReviewItemsBatch": "review.item.delete",
   "UploadReviewVersion": "review.version.upload"
 } as const;
 export const MODULE_MANIFEST = {

@@ -8,13 +8,16 @@
       "payload_schema": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["project_code", "project_name"],
+        "required": ["project_code", "project_name", "fps_num", "fps_den"],
         "properties": {
           "project_code": {"type": "string", "minLength": 1, "maxLength": 128},
           "project_name": {"type": "string", "minLength": 1, "maxLength": 255},
           "description": {"type": "string", "maxLength": 2000},
-          "external_project_id": {"type": "string", "minLength": 1, "maxLength": 128}
-        }
+          "external_project_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "fps_num": {"type": "integer", "minimum": 1},
+          "fps_den": {"type": "integer", "minimum": 1}
+        },
+        "x-allowed-rational-frame-rates": [[24000, 1001], [24, 1], [25, 1], [30000, 1001], [30, 1], [50, 1], [60000, 1001], [60, 1]]
       }
     },
     {
@@ -30,6 +33,22 @@
           "project_name": {"type": "string", "minLength": 1, "maxLength": 255},
           "description": {"type": "string", "maxLength": 2000}
         }
+      }
+    },
+    {
+      "command_type": "LockProjectFrameRate",
+      "capability": "review.project.update",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id", "fps_num", "fps_den"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1},
+          "fps_num": {"type": "integer", "minimum": 1},
+          "fps_den": {"type": "integer", "minimum": 1}
+        },
+        "x-allowed-rational-frame-rates": [[24000, 1001], [24, 1], [25, 1], [30000, 1001], [30, 1], [50, 1], [60000, 1001], [60, 1]]
       }
     },
     {
@@ -59,9 +78,9 @@
       }
     },
     {
-      "command_type": "SoftDeleteProject",
+      "command_type": "DeleteProject",
       "capability": "review.project.delete",
-      "idempotent": false,
+      "idempotent": true,
       "payload_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -69,6 +88,33 @@
         "properties": {
           "project_ref_id": {"type": "string", "minLength": 1},
           "confirmed": {"type": "boolean", "const": true}
+        }
+      }
+    },
+    {
+      "command_type": "CreateResponsibleEditor",
+      "capability": "review.project.update",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["display_name"],
+        "properties": {
+          "display_name": {"type": "string", "minLength": 1, "maxLength": 255}
+        }
+      }
+    },
+    {
+      "command_type": "RenameResponsibleEditor",
+      "capability": "review.project.update",
+      "idempotent": false,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["responsible_editor_id", "display_name"],
+        "properties": {
+          "responsible_editor_id": {"type": "string", "minLength": 1},
+          "display_name": {"type": "string", "minLength": 1, "maxLength": 255}
         }
       }
     }
