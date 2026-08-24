@@ -6,6 +6,7 @@ import fcntl
 import json
 import math
 import os
+import selectors
 import signal
 import socket
 import stat
@@ -46,6 +47,9 @@ MAX_REPLY_BYTES = 16 * 1024 * 1024
 MAX_INTERVALS = 10_000
 MAX_MEDIA_DURATION_MS = 7 * 24 * 60 * 60 * 1_000
 SOCKET_POLL_SECONDS = 0.1
+INITIAL_REQUEST_TIMEOUT_SECONDS = 0.25
+HEALTH_REQUEST_TIMEOUT_SECONDS = 0.15
+MAX_PENDING_HEALTH_CONNECTIONS = 32
 _STOP = threading.Event()
 _FATAL = threading.Event()
 _ACTIVE_LOCK = threading.Lock()
@@ -338,24 +342,19 @@ def _sandbox_status_ready() -> bool:
         return False
 
 
+def sandbox_health_socket_path(socket_path: Path) -> Path:
+    return socket_path.with_suffix(".health.sock")
+
+
 def _handle_connection(connection: socket.socket) -> None:
     with connection:
         with _ACTIVE_LOCK:
             _ACTIVE_CONNECTIONS.add(connection)
         descriptor = -1
         try:
-            request, descriptor = _receive_request_and_fd(connection, allow_health=True)
-            if request["type"] == "health":
-                connection.sendall(
-                    _json_line(
-                        {
-                            "type": "health",
-                            "request_id": request["request_id"],
-                            "status": "ready" if _sandbox_status_ready() else "not_ready",
-                        },
-                    ),
-                )
-                return
+            connection.settimeout(INITIAL_REQUEST_TIMEOUT_SECONDS)
+            request, descriptor = _receive_request_and_fd(connection)
+            connection.settimeout(None)
             reply = _default_handler(request, descriptor, connection)
             connection.sendall(_json_line(reply))
         except TechnicalQcFatalError as exc:
@@ -379,6 +378,77 @@ def _handle_connection(connection: socket.socket) -> None:
                 _ACTIVE_CONNECTIONS.discard(connection)
 
 
+def _serve_health_connections(listener: socket.socket) -> None:
+    selector = selectors.DefaultSelector()
+    pending: dict[socket.socket, float] = {}
+    listener.setblocking(False)
+    selector.register(listener, selectors.EVENT_READ)
+
+    def close_pending(connection: socket.socket) -> None:
+        try:
+            selector.unregister(connection)
+        except (KeyError, ValueError):
+            pass
+        pending.pop(connection, None)
+        connection.close()
+
+    try:
+        while not _STOP.is_set():
+            for key, _events in selector.select(SOCKET_POLL_SECONDS):
+                if key.fileobj is listener:
+                    while True:
+                        try:
+                            connection, _ = listener.accept()
+                        except BlockingIOError:
+                            break
+                        if len(pending) >= MAX_PENDING_HEALTH_CONNECTIONS:
+                            connection.close()
+                            continue
+                        connection.setblocking(False)
+                        pending[connection] = (
+                            time.monotonic() + HEALTH_REQUEST_TIMEOUT_SECONDS
+                        )
+                        selector.register(connection, selectors.EVENT_READ)
+                    continue
+                connection = key.fileobj
+                if not isinstance(connection, socket.socket):
+                    continue
+                try:
+                    request, descriptor = _receive_request_and_fd(
+                        connection,
+                        allow_health=True,
+                    )
+                    if descriptor != -1 or request["type"] != "health":
+                        raise TechnicalQcError(
+                            "TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID",
+                            retryable=False,
+                        )
+                    connection.settimeout(HEALTH_REQUEST_TIMEOUT_SECONDS)
+                    connection.sendall(
+                        _json_line(
+                            {
+                                "type": "health",
+                                "request_id": request["request_id"],
+                                "status": (
+                                    "ready" if _sandbox_status_ready() else "not_ready"
+                                ),
+                            },
+                        ),
+                    )
+                except (OSError, TechnicalQcError):
+                    pass
+                finally:
+                    close_pending(connection)
+            now = time.monotonic()
+            for connection, deadline in tuple(pending.items()):
+                if now >= deadline:
+                    close_pending(connection)
+    finally:
+        for connection in tuple(pending):
+            close_pending(connection)
+        selector.close()
+
+
 def serve_forever(socket_path: Path, *, concurrency: int) -> None:
     global _STATUS_PATH
     if not 1 <= concurrency <= 8:
@@ -386,6 +456,7 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
     _STOP.clear()
     _FATAL.clear()
     status_path = socket_path.with_name("sandbox.status")
+    health_socket_path = sandbox_health_socket_path(socket_path)
     _STATUS_PATH = status_path
 
     def stop(_signum: int, _frame: Any) -> None:
@@ -402,23 +473,42 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
     previous_int = signal.signal(signal.SIGINT, stop)
     try:
         _atomic_worker_state(status_path, "starting")
-        with _prepare_listener(socket_path) as listener, ThreadPoolExecutor(
-            max_workers=concurrency,
-            thread_name_prefix="technical-qc-sandbox",
-        ) as executor:
-            _atomic_worker_state(status_path, "ready")
-            listener.settimeout(SOCKET_POLL_SECONDS)
-            while not _STOP.is_set():
-                try:
-                    connection, _ = listener.accept()
-                except TimeoutError:
-                    continue
-                executor.submit(_handle_connection, connection)
+        with (
+            _prepare_listener(socket_path) as listener,
+            _prepare_listener(health_socket_path) as health_listener,
+            ThreadPoolExecutor(
+                max_workers=concurrency,
+                thread_name_prefix="technical-qc-sandbox",
+            ) as executor,
+        ):
+            health_thread = threading.Thread(
+                target=_serve_health_connections,
+                args=(health_listener,),
+                daemon=True,
+                name="technical-qc-sandbox-health",
+            )
+            health_thread.start()
+            try:
+                _atomic_worker_state(status_path, "ready")
+                listener.settimeout(SOCKET_POLL_SECONDS)
+                while not _STOP.is_set():
+                    try:
+                        connection, _ = listener.accept()
+                    except TimeoutError:
+                        continue
+                    executor.submit(_handle_connection, connection)
+            finally:
+                _STOP.set()
+                health_thread.join(timeout=1)
+                if health_thread.is_alive():
+                    _FATAL.set()
+                    _atomic_worker_state(status_path, "fatal")
         if _FATAL.is_set():
             _atomic_worker_state(status_path, "fatal")
             raise SystemExit(70)
     finally:
         socket_path.unlink(missing_ok=True)
+        health_socket_path.unlink(missing_ok=True)
         if not _FATAL.is_set():
             _atomic_worker_state(status_path, "stopped")
         signal.signal(signal.SIGTERM, previous_term)
@@ -450,7 +540,7 @@ def sandbox_healthcheck(socket_path: Path, *, timeout_seconds: float = 1.0) -> b
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout_seconds)
-            connection.connect(str(socket_path))
+            connection.connect(str(sandbox_health_socket_path(socket_path)))
             connection.sendall(
                 _json_line({"type": "health", "request_id": request_id}),
             )

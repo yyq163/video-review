@@ -1991,6 +1991,7 @@ def _process_technical_qc_claim(
 
     def mark_fatal(error: TechnicalQcFatalError) -> None:
         _WORKER_FATAL.set()
+        _WORKER_STOP.set()
         if on_fatal is not None:
             on_fatal(error)
 
@@ -2028,6 +2029,7 @@ def _process_technical_qc_claim(
         return "complete"
     except TechnicalQcFatalError as exc:
         _WORKER_FATAL.set()
+        _WORKER_STOP.set()
         if on_fatal is not None:
             on_fatal(exc)
         raise
@@ -2061,6 +2063,15 @@ def _process_technical_qc_claim(
         return "failed" if recorded else "skipped"
 
 
+def _raise_if_technical_qc_worker_fatal() -> None:
+    if _WORKER_FATAL.is_set():
+        _WORKER_STOP.set()
+        raise TechnicalQcFatalError(
+            "TECHNICAL_QC_REAP_FAILED",
+            retryable=False,
+        )
+
+
 def process_technical_qc_batch(
     settings: Settings | Any,
     *,
@@ -2076,12 +2087,26 @@ def process_technical_qc_batch(
     )
     if not concurrency <= cycle_max_tasks <= 1_024:
         raise ValueError("technical QC cycle task bound is invalid")
+    counts = {"complete": 0, "failed": 0, "skipped": 0}
+    _raise_if_technical_qc_worker_fatal()
+    if _WORKER_STOP.is_set():
+        return counts
 
     def claim_slots(slot_count: int) -> list[TechnicalQcClaim]:
         if slot_count <= 0:
             return []
+        _raise_if_technical_qc_worker_fatal()
+        if _WORKER_STOP.is_set():
+            return []
         with _technical_qc_session(runtime_binding) as session:
+            _raise_if_technical_qc_worker_fatal()
+            if _WORKER_STOP.is_set():
+                return []
             discover_ready_technical_qc_tasks(session)
+            _raise_if_technical_qc_worker_fatal()
+            if _WORKER_STOP.is_set():
+                session.rollback()
+                return []
             claimed = claim_technical_qc_tasks(
                 session,
                 limit=slot_count,
@@ -2089,13 +2114,19 @@ def process_technical_qc_batch(
                 lease_seconds=int(settings.technical_qc_lease_seconds),
                 max_attempts=int(settings.technical_qc_worker_max_attempts),
             )
+            _raise_if_technical_qc_worker_fatal()
+            if _WORKER_STOP.is_set():
+                session.rollback()
+                return []
             session.commit()
             if on_service_event is not None:
                 on_service_event()
             return claimed
 
     claims = claim_slots(min(concurrency, cycle_max_tasks))
-    counts = {"complete": 0, "failed": 0, "skipped": 0}
+    _raise_if_technical_qc_worker_fatal()
+    if _WORKER_STOP.is_set():
+        return counts
     if not claims:
         return counts
     submitted = len(claims)
@@ -2103,17 +2134,21 @@ def process_technical_qc_batch(
         max_workers=concurrency,
         thread_name_prefix="technical-qc-worker",
     ) as executor:
-        futures: dict[Future[str], TechnicalQcClaim] = {
-            executor.submit(
-                _process_technical_qc_claim,
-                claim,
-                settings,
-                runtime_binding,
-                on_service_event,
-                on_fatal,
-            ): claim
-            for claim in claims
-        }
+        futures: dict[Future[str], TechnicalQcClaim] = {}
+        for claim in claims:
+            _raise_if_technical_qc_worker_fatal()
+            if _WORKER_STOP.is_set():
+                break
+            futures[
+                executor.submit(
+                    _process_technical_qc_claim,
+                    claim,
+                    settings,
+                    runtime_binding,
+                    on_service_event,
+                    on_fatal,
+                )
+            ] = claim
         while futures:
             done, _pending = wait(tuple(futures), return_when=FIRST_COMPLETED)
             for future in done:
@@ -2122,6 +2157,7 @@ def process_technical_qc_batch(
                     status = future.result()
                 except TechnicalQcFatalError as exc:
                     _WORKER_FATAL.set()
+                    _WORKER_STOP.set()
                     if on_fatal is not None:
                         on_fatal(exc)
                     for pending in futures:
@@ -2130,11 +2166,17 @@ def process_technical_qc_batch(
                 except Exception:
                     status = "skipped"
                 counts[status if status in counts else "skipped"] += 1
+            _raise_if_technical_qc_worker_fatal()
+            if _WORKER_STOP.is_set():
+                break
             available = min(
                 concurrency - len(futures),
                 cycle_max_tasks - submitted,
             )
             for claim in claim_slots(available):
+                _raise_if_technical_qc_worker_fatal()
+                if _WORKER_STOP.is_set():
+                    break
                 future = executor.submit(
                     _process_technical_qc_claim,
                     claim,
@@ -2228,6 +2270,7 @@ def run_technical_qc_worker_loop(
 
     def mark_fatal(_error: TechnicalQcFatalError) -> None:
         _WORKER_FATAL.set()
+        _WORKER_STOP.set()
         _atomic_worker_state(status_path, "fatal")
 
     def stop_worker(_signum: int, _frame: Any) -> None:
@@ -2264,11 +2307,15 @@ def run_technical_qc_worker_loop(
                 if _WORKER_STOP.wait(min(WORKER_HEARTBEAT_REFRESH_SECONDS, remaining)):
                     break
                 record_service_event()
+            _raise_if_technical_qc_worker_fatal()
     finally:
+        fatal_exit = _WORKER_FATAL.is_set()
         _atomic_worker_state(
             status_path,
-            "fatal" if _WORKER_FATAL.is_set() else "stopped",
+            "fatal" if fatal_exit else "stopped",
         )
+        if not fatal_exit:
+            _WORKER_STOP.clear()
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
 
