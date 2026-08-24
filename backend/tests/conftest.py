@@ -28,20 +28,16 @@ from backend.app.settings import get_settings  # noqa: E402
 
 FAKE_MEDIA_PROBE = """#!/usr/bin/env python3
 import json
+import sys
 
-print(json.dumps({
-    "packets": [
-        {"stream_index": 0, "pts_time": "0.000000", "duration_time": "0.040000"},
-        {"stream_index": 0, "pts_time": "0.040000", "duration_time": "0.040000"},
-        {"stream_index": 0, "pts_time": "0.080000", "duration_time": "0.040000"},
-        {"stream_index": 0, "pts_time": "0.120000", "duration_time": "0.040000"},
-    ],
+metadata = {
     "streams": [{
         "index": 0,
         "codec_type": "video",
         "codec_name": "h264",
         "width": 1920,
         "height": 1080,
+        "start_time": "0.000000",
         "duration": "0.160",
         "nb_frames": "4",
         "nb_read_packets": "4",
@@ -49,7 +45,17 @@ print(json.dumps({
         "r_frame_rate": "25/1",
     }],
     "format": {"duration": "0.160"},
-}))
+}
+output_format = sys.argv[sys.argv.index("-of") + 1]
+if output_format.startswith("json"):
+    print(json.dumps(metadata))
+else:
+    sys.stdout.write(
+        "0.000000|-0.080000|0.040000\\n"
+        "0.040000|-0.040000|0.040000\\n"
+        "0.080000|0.000000|0.040000\\n"
+        "0.120000|0.040000|0.040000\\n"
+    )
 """
 
 

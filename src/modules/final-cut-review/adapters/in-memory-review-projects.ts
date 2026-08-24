@@ -4,6 +4,17 @@ import { createUuid } from '../core/uuid';
 import { nowIso } from './in-memory-review-clones';
 import type { InMemoryReviewStore } from './in-memory-review-store';
 
+const ALLOWED_PROJECT_FRAME_RATES = new Set([
+  '24000/1001',
+  '24/1',
+  '25/1',
+  '30000/1001',
+  '30/1',
+  '50/1',
+  '60000/1001',
+  '60/1',
+]);
+
 function validateProjectMetadata(input: { name: string; code: string; description: string }): void {
   const name = input.name.trim();
   const code = input.code.trim();
@@ -23,6 +34,14 @@ export class InMemoryReviewProjects {
     frameRate?: { fpsNum: number; fpsDen: number };
   }): Promise<Project> => {
     validateProjectMetadata(input);
+    const frameRate = input.frameRate ?? { fpsNum: 25, fpsDen: 1 };
+    invariant(
+      Number.isSafeInteger(frameRate.fpsNum)
+        && Number.isSafeInteger(frameRate.fpsDen)
+        && ALLOWED_PROJECT_FRAME_RATES.has(`${frameRate.fpsNum}/${frameRate.fpsDen}`),
+      '项目帧率不在允许集合中',
+      'VALIDATION_ERROR',
+    );
     const timestamp = nowIso();
     const project: Project = {
       projectRefId: `prj_${createUuid()}`,
@@ -32,7 +51,7 @@ export class InMemoryReviewProjects {
       status: 'active',
       completionStatus: 'empty',
       deletedAt: null,
-      frameRate: input.frameRate ?? { fpsNum: 25, fpsDen: 1 },
+      frameRate,
       createdAt: timestamp,
       updatedAt: timestamp,
     };

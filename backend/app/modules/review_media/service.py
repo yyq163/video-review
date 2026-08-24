@@ -58,10 +58,12 @@ MEDIA_SIGNATURES = {
 SERVER_COMPUTED_SHA256 = "0" * 64
 ALLOWED_MIME = {mime for rule in MEDIA_SIGNATURES.values() for mime in rule["mimes"]}
 ISO_BMFF_FTYP_MAX_BYTES = 64 * 1024
-MEDIA_PROBE_MAX_OUTPUT_BYTES = 512 * 1024
+MEDIA_PROBE_MAX_OUTPUT_BYTES = 64 * 1024
 MEDIA_PROBE_VERSION = "ffprobe-packet-cfr-v2"
 MEDIA_PROBE_MIN_PACKET_EVIDENCE = 3
 MEDIA_PROBE_TIMESTAMP_TOLERANCE = Fraction(2, 1_000_000)
+MEDIA_PROBE_MAX_TIMING_LINE_BYTES = 128
+MEDIA_PROBE_MAX_FRAME_COUNT_TOLERANCE = 2
 DEFAULT_MEDIA_MAX_DIMENSION = 8192
 DEFAULT_MEDIA_MAX_PIXELS = 35_389_440
 MAX_DATABASE_INTEGER = 2_147_483_647
@@ -84,6 +86,9 @@ class MediaProbeResult:
     video_start_time_ms: int | None = None
     video_duration_ms: int | None = None
     video_frame_count: int | None = None
+    video_packet_count: int | None = None
+    video_start_time_seconds: Fraction | None = None
+    video_duration_seconds: Fraction | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +197,18 @@ def _optional_milliseconds(value: object) -> int | None:
     return None
 
 
+def _optional_seconds_fraction(value: object) -> Fraction | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        seconds = Fraction(str(value))
+    except (ValueError, ZeroDivisionError):
+        return None
+    if seconds.denominator > MAX_DATABASE_INTEGER or abs(seconds.numerator) > MAX_DATABASE_INTEGER:
+        return None
+    return seconds
+
+
 def _optional_positive_int(value: object) -> int | None:
     if value is None or isinstance(value, bool):
         return None
@@ -228,62 +245,16 @@ def _positive_frame_rate(*values: object) -> Fraction:
     raise _media_probe_rejected()
 
 
-def _evidence_fraction(value: object) -> Fraction:
+def _evidence_fraction(value: object, *, allow_negative: bool = False) -> Fraction:
     if value is None or isinstance(value, bool):
         raise _frame_rate_unknown()
     try:
         result = Fraction(str(value))
     except (ValueError, ZeroDivisionError):
         raise _frame_rate_unknown() from None
-    if result < 0 or result.numerator > MAX_DATABASE_INTEGER or result.denominator > MAX_DATABASE_INTEGER:
+    if (result < 0 and not allow_negative) or abs(result.numerator) > MAX_DATABASE_INTEGER or result.denominator > MAX_DATABASE_INTEGER:
         raise _frame_rate_unknown()
     return result
-
-
-def _validate_constant_frame_rate_evidence(
-    payload: dict[str, object],
-    stream: dict[str, object],
-    frame_rate: Fraction,
-) -> None:
-    if (frame_rate.numerator, frame_rate.denominator) not in ALLOWED_FRAME_RATE_PAIRS:
-        raise _frame_rate_not_allowed()
-    packets = payload.get("packets")
-    if not isinstance(packets, list) or len(packets) < MEDIA_PROBE_MIN_PACKET_EVIDENCE:
-        raise _frame_rate_unknown()
-    if not all(isinstance(packet, dict) for packet in packets):
-        raise _frame_rate_unknown()
-    stream_index = stream.get("index")
-    if isinstance(stream_index, bool) or not isinstance(stream_index, int) or stream_index < 0:
-        raise _frame_rate_unknown()
-    video_packets = [packet for packet in packets if packet.get("stream_index") == stream_index]
-    if len(video_packets) < MEDIA_PROBE_MIN_PACKET_EVIDENCE:
-        raise _frame_rate_unknown()
-    read_packet_count = _optional_positive_int(stream.get("nb_read_packets"))
-    if read_packet_count != len(video_packets):
-        raise _frame_rate_unknown()
-    declared_frame_count = _optional_positive_int(stream.get("nb_frames"))
-    if declared_frame_count is not None and declared_frame_count != len(video_packets):
-        raise _frame_rate_unknown()
-
-    timestamps = sorted(_evidence_fraction(packet.get("pts_time")) for packet in video_packets)
-    if len(set(timestamps)) != len(timestamps):
-        raise _variable_frame_rate()
-    expected_interval = Fraction(frame_rate.denominator, frame_rate.numerator)
-    if any(
-        abs((later - earlier) - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE
-        for earlier, later in zip(timestamps, timestamps[1:], strict=False)
-    ):
-        raise _variable_frame_rate()
-
-    duration_values = [packet.get("duration_time") for packet in video_packets]
-    present_durations = [value for value in duration_values if value is not None]
-    if present_durations and len(present_durations) != len(duration_values):
-        raise _frame_rate_unknown()
-    if present_durations and any(
-        abs(_evidence_fraction(value) - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE
-        for value in present_durations
-    ):
-        raise _variable_frame_rate()
 
 
 def _reject_nonstandard_json_constant(_: str) -> None:
@@ -295,7 +266,6 @@ def parse_media_probe_output(
     *,
     max_dimension: int = DEFAULT_MEDIA_MAX_DIMENSION,
     max_pixels: int = DEFAULT_MEDIA_MAX_PIXELS,
-    require_cfr_evidence: bool = False,
 ) -> MediaProbeResult:
     try:
         payload = json.loads(output.decode("utf-8"), parse_constant=_reject_nonstandard_json_constant)
@@ -313,14 +283,7 @@ def parse_media_probe_output(
     if len(video_streams) != 1:
         raise _media_probe_rejected()
     stream = video_streams[0]
-    if require_cfr_evidence:
-        try:
-            frame_rate = _positive_frame_rate(stream.get("avg_frame_rate"), stream.get("r_frame_rate"))
-        except ReviewError:
-            raise _frame_rate_unknown() from None
-        _validate_constant_frame_rate_evidence(payload, stream, frame_rate)
-    else:
-        frame_rate = _positive_frame_rate(stream.get("avg_frame_rate"), stream.get("r_frame_rate"))
+    frame_rate = _positive_frame_rate(stream.get("avg_frame_rate"), stream.get("r_frame_rate"))
     av_streams: list[tuple[str, str, int, int]] = []
     stream_types: list[str] = []
     audio_timings: list[tuple[int | None, int | None]] = []
@@ -379,7 +342,108 @@ def parse_media_probe_output(
         video_start_time_ms=_optional_milliseconds(stream.get("start_time")),
         video_duration_ms=_optional_milliseconds(stream.get("duration")),
         video_frame_count=_optional_positive_int(stream.get("nb_frames")),
+        video_packet_count=_optional_positive_int(stream.get("nb_read_packets")),
+        video_start_time_seconds=_optional_seconds_fraction(stream.get("start_time")),
+        video_duration_seconds=_optional_seconds_fraction(stream.get("duration")),
     )
+
+
+def _ceil_fraction(value: Fraction) -> int:
+    return -(-value.numerator // value.denominator)
+
+
+def _nearest_fraction_integer(value: Fraction) -> int:
+    lower = value.numerator // value.denominator
+    remainder = value - lower
+    return lower + (1 if remainder >= Fraction(1, 2) else 0)
+
+
+def _xor_zero_through(value: int) -> int:
+    remainder = value % 4
+    if remainder == 0:
+        return value
+    if remainder == 1:
+        return 1
+    if remainder == 2:
+        return value + 1
+    return 0
+
+
+def validate_streamed_frame_timing(stream: BinaryIO, metadata: MediaProbeResult) -> int:
+    frame_rate = Fraction(metadata.fps_num, metadata.fps_den)
+    if (frame_rate.numerator, frame_rate.denominator) not in ALLOWED_FRAME_RATE_PAIRS:
+        raise _frame_rate_not_allowed()
+    if metadata.video_start_time_seconds is None or metadata.video_duration_seconds is None:
+        raise _frame_rate_unknown()
+    if metadata.video_duration_seconds <= 0 or metadata.video_packet_count is None:
+        raise _frame_rate_unknown()
+    maximum_frame_count = (
+        _ceil_fraction(metadata.video_duration_seconds * max(Fraction(num, den) for num, den in ALLOWED_FRAME_RATE_PAIRS))
+        + MEDIA_PROBE_MAX_FRAME_COUNT_TOLERANCE
+    )
+    if metadata.video_packet_count > maximum_frame_count:
+        raise _frame_rate_unknown()
+
+    expected_interval = Fraction(frame_rate.denominator, frame_rate.numerator)
+    count = 0
+    previous_dts: Fraction | None = None
+    minimum_index: int | None = None
+    maximum_index: int | None = None
+    index_sum = 0
+    index_square_sum = 0
+    index_xor = 0
+    while True:
+        raw_line = stream.readline(MEDIA_PROBE_MAX_TIMING_LINE_BYTES + 1)
+        if not raw_line:
+            break
+        if len(raw_line) > MEDIA_PROBE_MAX_TIMING_LINE_BYTES or not raw_line.endswith(b"\n"):
+            raise _frame_rate_unknown()
+        try:
+            fields = raw_line.rstrip(b"\r\n").decode("ascii").split("|")
+        except UnicodeDecodeError:
+            raise _frame_rate_unknown() from None
+        if len(fields) != 3 or not all(fields):
+            raise _frame_rate_unknown()
+        pts = _evidence_fraction(fields[0])
+        dts = _evidence_fraction(fields[1], allow_negative=True)
+        duration = _evidence_fraction(fields[2])
+        if previous_dts is not None and abs((dts - previous_dts) - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+            raise _variable_frame_rate()
+        if abs(duration - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+            raise _variable_frame_rate()
+        previous_dts = dts
+
+        grid_position = (pts - metadata.video_start_time_seconds) / expected_interval
+        frame_index = _nearest_fraction_integer(grid_position)
+        if frame_index < 0 or abs(grid_position - frame_index) * expected_interval > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
+            raise _variable_frame_rate()
+        count += 1
+        if count > maximum_frame_count:
+            raise _frame_rate_unknown()
+        minimum_index = frame_index if minimum_index is None else min(minimum_index, frame_index)
+        maximum_index = frame_index if maximum_index is None else max(maximum_index, frame_index)
+        index_sum += frame_index
+        index_square_sum += frame_index * frame_index
+        index_xor ^= frame_index
+
+    if count < MEDIA_PROBE_MIN_PACKET_EVIDENCE:
+        raise _frame_rate_unknown()
+    if count != metadata.video_packet_count:
+        raise _frame_rate_unknown()
+    if metadata.video_frame_count is not None and count != metadata.video_frame_count:
+        raise _frame_rate_unknown()
+    if minimum_index != 0 or maximum_index != count - 1:
+        raise _variable_frame_rate()
+    if index_sum != count * (count - 1) // 2:
+        raise _variable_frame_rate()
+    if index_square_sum != count * (count - 1) * (2 * count - 1) // 6:
+        raise _variable_frame_rate()
+    if index_xor != _xor_zero_through(count - 1):
+        raise _variable_frame_rate()
+    expected_count = metadata.video_duration_seconds * frame_rate
+    if abs(Fraction(count) - expected_count) > MEDIA_PROBE_MAX_FRAME_COUNT_TOLERANCE:
+        raise _frame_rate_unknown()
+    return count
 
 
 def _kill_probe_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -419,27 +483,7 @@ def _read_probe_stdout(
         _kill_probe_process_group(process)
 
 
-def probe_media(
-    descriptor: int,
-    settings: Settings,
-    probe_command: str | None = None,
-) -> MediaProbeResult:
-    probe_path = f"/dev/fd/{descriptor}"
-    command = [
-        probe_command or settings.media_probe_command,
-        "-hide_banner",
-        "-v",
-        "error",
-        "-protocol_whitelist",
-        "file",
-        "-count_packets",
-        "-show_packets",
-        "-show_entries",
-        "format=duration:stream=index,codec_type,codec_name,codec_tag_string,pix_fmt,width,height,duration,start_time,nb_frames,nb_read_packets,avg_frame_rate,r_frame_rate,channels,sample_rate:packet=stream_index,pts_time,duration_time",
-        "-of",
-        "json=c=1",
-        probe_path,
-    ]
+def _start_probe_process(command: list[str], descriptor: int) -> subprocess.Popen[bytes]:
     try:
         process = subprocess.Popen(
             command,
@@ -453,10 +497,56 @@ def probe_media(
         )
     except OSError:
         raise _media_probe_unavailable() from None
-
     if process.stdout is None:
         _kill_probe_process_group(process)
         process.wait()
+        raise _media_probe_unavailable()
+    return process
+
+
+def _wait_for_probe_reader(
+    process: subprocess.Popen[bytes],
+    reader: threading.Thread,
+    stream: BinaryIO,
+    timeout_seconds: float,
+) -> None:
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _kill_probe_process_group(process)
+        process.wait()
+        reader.join(timeout=1)
+        stream.close()
+        raise _media_probe_unavailable() from None
+    reader.join(timeout=1)
+    if reader.is_alive():
+        _kill_probe_process_group(process)
+        stream.close()
+        raise _media_probe_unavailable()
+    stream.close()
+
+
+def _run_metadata_probe(
+    descriptor: int,
+    settings: Settings,
+    probe_executable: str,
+) -> MediaProbeResult:
+    command = [
+        probe_executable,
+        "-hide_banner",
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        "file",
+        "-count_packets",
+        "-show_entries",
+        "format=duration:stream=index,codec_type,codec_name,codec_tag_string,pix_fmt,width,height,duration,start_time,nb_frames,nb_read_packets,avg_frame_rate,r_frame_rate,channels,sample_rate,has_b_frames",
+        "-of",
+        "json=c=1",
+        f"/dev/fd/{descriptor}",
+    ]
+    process = _start_probe_process(command, descriptor)
+    if process.stdout is None:
         raise _media_probe_unavailable()
 
     output = bytearray()
@@ -469,21 +559,7 @@ def probe_media(
         name="media-probe-stdout",
     )
     reader.start()
-    try:
-        process.wait(timeout=settings.media_probe_timeout_seconds)
-    except subprocess.TimeoutExpired:
-        _kill_probe_process_group(process)
-        process.wait()
-        reader.join(timeout=1)
-        process.stdout.close()
-        raise _media_probe_unavailable() from None
-
-    reader.join(timeout=1)
-    if reader.is_alive():
-        _kill_probe_process_group(process)
-        process.stdout.close()
-        raise _media_probe_unavailable()
-    process.stdout.close()
+    _wait_for_probe_reader(process, reader, process.stdout, settings.media_probe_timeout_seconds)
     if output_failed.is_set():
         raise _media_probe_unavailable()
     if output_too_large.is_set() or process.returncode != 0:
@@ -492,8 +568,80 @@ def probe_media(
         bytes(output),
         max_dimension=settings.media_max_dimension,
         max_pixels=settings.media_max_pixels,
-        require_cfr_evidence=True,
     )
+
+
+def _read_timing_stdout(
+    stream: BinaryIO,
+    process: subprocess.Popen[bytes],
+    metadata: MediaProbeResult,
+    result: list[int],
+    errors: list[ReviewError],
+    output_failed: threading.Event,
+) -> None:
+    try:
+        result.append(validate_streamed_frame_timing(stream, metadata))
+    except ReviewError as exc:
+        errors.append(exc)
+        _kill_probe_process_group(process)
+    except (OSError, ValueError):
+        output_failed.set()
+        _kill_probe_process_group(process)
+
+
+def _run_timing_probe(
+    descriptor: int,
+    settings: Settings,
+    probe_executable: str,
+    metadata: MediaProbeResult,
+) -> None:
+    command = [
+        probe_executable,
+        "-hide_banner",
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        "file",
+        "-select_streams",
+        "v:0",
+        "-show_packets",
+        "-show_entries",
+        "packet=pts_time,dts_time,duration_time",
+        "-of",
+        "compact=p=0:nk=1:item_sep=|",
+        f"/dev/fd/{descriptor}",
+    ]
+    process = _start_probe_process(command, descriptor)
+    if process.stdout is None:
+        raise _media_probe_unavailable()
+    result: list[int] = []
+    errors: list[ReviewError] = []
+    output_failed = threading.Event()
+    reader = threading.Thread(
+        target=_read_timing_stdout,
+        args=(process.stdout, process, metadata, result, errors, output_failed),
+        daemon=True,
+        name="media-probe-timing-stdout",
+    )
+    reader.start()
+    _wait_for_probe_reader(process, reader, process.stdout, settings.media_probe_timeout_seconds)
+    if errors:
+        raise errors[0]
+    if output_failed.is_set():
+        raise _media_probe_unavailable()
+    if process.returncode != 0 or result != [metadata.video_packet_count]:
+        raise _frame_rate_unknown()
+
+
+def probe_media(
+    descriptor: int,
+    settings: Settings,
+    probe_command: str | None = None,
+) -> MediaProbeResult:
+    probe_executable = probe_command or settings.media_probe_command
+    metadata = _run_metadata_probe(descriptor, settings, probe_executable)
+    _run_timing_probe(descriptor, settings, probe_executable, metadata)
+    return metadata
 
 
 def _valid_iso_bmff_brand(brand: bytes) -> bool:

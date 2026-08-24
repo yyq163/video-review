@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -12,7 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from backend.app.modules.final_cut_review.domain.errors import ReviewError
-from backend.app.modules.review_media.service import parse_media_probe_output
+from backend.app.modules.review_media.service import parse_media_probe_output, probe_media, validate_streamed_frame_timing
 
 from .conftest import api_data, api_error, command, tiny_video_bytes, upload_init_request
 
@@ -23,7 +25,7 @@ def _probe_payload(
     fps_den: int = 1,
     timestamps: tuple[str, ...] = ("0.000000", "0.040000", "0.080000", "0.120000"),
 ) -> dict[str, Any]:
-    duration = str(float(timestamps[-1]) + (fps_den / fps_num))
+    duration = f"{float(timestamps[-1]) + (fps_den / fps_num):.6f}"
     return {
         "packets": [
             {
@@ -56,15 +58,152 @@ def _probe_payload(
 
 def _write_probe(tmp_path: Path, payload: dict[str, Any]) -> Path:
     probe = tmp_path / f"task2-probe-{uuid.uuid4().hex}"
-    encoded = json.dumps(payload, separators=(",", ":"))
+    metadata_payload = {key: value for key, value in payload.items() if key != "packets"}
+    encoded = json.dumps(metadata_payload, separators=(",", ":"))
+    video_stream = next((stream for stream in payload.get("streams", []) if stream.get("codec_type") == "video"), None)
+    frame_rate = str((video_stream or {}).get("avg_frame_rate", "0/1")).split("/", maxsplit=1)
+    try:
+        interval = int(frame_rate[1]) / int(frame_rate[0])
+    except (IndexError, ValueError, ZeroDivisionError):
+        interval = 0
+    video_index = (video_stream or {}).get("index", 0)
+    video_packets = [packet for packet in payload.get("packets", []) if packet.get("stream_index") == video_index]
+    timing_output = "".join(
+        f"{packet.get('pts_time', '')}|{(index - 2) * interval:.6f}|{packet.get('duration_time', '')}\n"
+        for index, packet in enumerate(video_packets)
+    )
     probe.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        f"sys.stdout.write({encoded!r})\n",
+        "output_format = sys.argv[sys.argv.index('-of') + 1]\n"
+        f"sys.stdout.write({encoded!r} if output_format.startswith('json') else {timing_output!r})\n",
         encoding="utf-8",
     )
     probe.chmod(0o700)
     return probe
+
+
+def _write_two_stage_probe(
+    tmp_path: Path,
+    *,
+    fps_num: int,
+    fps_den: int,
+    duration_seconds: int,
+    mode: str = "cfr",
+) -> tuple[Path, Path]:
+    probe = tmp_path / f"task2-streaming-probe-{uuid.uuid4().hex}"
+    marker = tmp_path / f"task2-streaming-probe-{uuid.uuid4().hex}.log"
+    probe.write_text(
+        f'''#!/usr/bin/env python3
+import json
+import sys
+
+FPS_NUM = {fps_num}
+FPS_DEN = {fps_den}
+DURATION = {duration_seconds}
+MODE = {mode!r}
+MARKER = {str(marker)!r}
+FRAME_COUNT = round(DURATION * FPS_NUM / FPS_DEN)
+AUDIO_PACKET_COUNT = round(DURATION * 48000 / 1024)
+INTERVAL = FPS_DEN / FPS_NUM
+
+def metadata():
+    return {{
+        "streams": [
+            {{
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "codec_tag_string": "avc1",
+                "pix_fmt": "yuv420p",
+                "width": 1920,
+                "height": 1080,
+                "has_b_frames": 2,
+                "duration": f"{{DURATION:.6f}}",
+                "start_time": "0.000000",
+                "nb_frames": str(FRAME_COUNT),
+                "nb_read_packets": str(FRAME_COUNT),
+                "avg_frame_rate": f"{{FPS_NUM}}/{{FPS_DEN}}",
+                "r_frame_rate": f"{{FPS_NUM}}/{{FPS_DEN}}",
+            }},
+            {{
+                "index": 1,
+                "codec_type": "audio",
+                "codec_name": "aac",
+                "codec_tag_string": "mp4a",
+                "channels": 2,
+                "sample_rate": "48000",
+                "duration": f"{{DURATION:.6f}}",
+                "start_time": "0.000000",
+                "nb_frames": str(AUDIO_PACKET_COUNT),
+                "nb_read_packets": str(AUDIO_PACKET_COUNT),
+                "avg_frame_rate": "0/0",
+                "r_frame_rate": "0/0",
+            }},
+        ],
+        "format": {{"duration": f"{{DURATION:.6f}}"}},
+    }}
+
+def decode_order():
+    for base in range(0, FRAME_COUNT, 5):
+        block = list(range(base, min(base + 5, FRAME_COUNT)))
+        if len(block) == 5:
+            yield from (block[0], block[4], block[2], block[1], block[3])
+        else:
+            yield from block
+
+args = sys.argv[1:]
+is_packet_phase = "-show_packets" in args
+output_format = args[args.index("-of") + 1] if "-of" in args else ""
+if output_format.startswith("json") and is_packet_phase:
+    with open(MARKER, "a", encoding="utf-8") as handle:
+        handle.write("legacy-combined\\n")
+    payload = metadata()
+    payload["packets"] = [
+        {{"stream_index": 0, "pts_time": f"{{index * INTERVAL:.6f}}", "duration_time": f"{{INTERVAL:.6f}}"}}
+        for index in range(FRAME_COUNT)
+    ] + [
+        {{"stream_index": 1, "pts_time": f"{{index * 1024 / 48000:.6f}}", "duration_time": f"{{1024 / 48000:.6f}}"}}
+        for index in range(AUDIO_PACKET_COUNT)
+    ]
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")))
+elif output_format.startswith("json"):
+    with open(MARKER, "a", encoding="utf-8") as handle:
+        handle.write("metadata\\n")
+    sys.stdout.write(json.dumps(metadata(), separators=(",", ":")))
+else:
+    with open(MARKER, "a", encoding="utf-8") as handle:
+        handle.write("timing\\n")
+    if MODE == "long-line":
+        sys.stdout.write("x" * 1024 + "\\n")
+        raise SystemExit(0)
+    limit = FRAME_COUNT - 1 if MODE == "truncated" else FRAME_COUNT
+    for decode_index, presentation_index in enumerate(decode_order()):
+        if decode_index >= limit:
+            break
+        if MODE == "missing-first" and presentation_index == 0:
+            continue
+        pts = presentation_index * INTERVAL
+        dts = (decode_index - 2) * INTERVAL
+        duration = INTERVAL
+        if MODE == "vfr" and presentation_index == FRAME_COUNT // 2:
+            pts += INTERVAL / 2
+            duration += INTERVAL / 2
+        sys.stdout.write(f"{{pts:.6f}}|{{dts:.6f}}|{{duration:.6f}}\\n")
+''',
+        encoding="utf-8",
+    )
+    probe.chmod(0o700)
+    return probe, marker
+
+
+def _probe_settings(probe: Path) -> Any:
+    return SimpleNamespace(
+        media_probe_command=str(probe),
+        media_probe_timeout_seconds=5,
+        media_max_dimension=8192,
+        media_max_pixels=35_389_440,
+    )
 
 
 def _select_probe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: dict[str, Any]) -> None:
@@ -212,18 +351,22 @@ def _list_versions(client: TestClient, project_ref_id: str, review_item_id: str)
 def test_frame_rate_requires_bounded_packet_timestamp_and_count_evidence() -> None:
     missing_evidence = _probe_payload()
     missing_evidence.pop("packets")
+    metadata = parse_media_probe_output(json.dumps(missing_evidence).encode())
     with pytest.raises(ReviewError) as exc_info:
-        parse_media_probe_output(json.dumps(missing_evidence).encode(), require_cfr_evidence=True)
+        validate_streamed_frame_timing(io.BytesIO(), metadata)
     assert exc_info.value.code == "MEDIA_FRAME_RATE_UNKNOWN"
 
-    result = parse_media_probe_output(json.dumps(_probe_payload()).encode(), require_cfr_evidence=True)
-    assert (result.fps_num, result.fps_den) == (25, 1)
+    evidence = b"0.000000|-0.080000|0.040000\n0.040000|-0.040000|0.040000\n0.080000|0.000000|0.040000\n0.120000|0.040000|0.040000\n"
+    assert validate_streamed_frame_timing(io.BytesIO(evidence), metadata) == 4
 
 
 def test_frame_rate_uses_packet_timestamps_instead_of_equal_avg_and_nominal_rates() -> None:
     variable = _probe_payload(timestamps=("0.000000", "0.040000", "0.086000", "0.126000"))
+    variable.pop("packets")
+    metadata = parse_media_probe_output(json.dumps(variable).encode())
+    evidence = b"0.000000|-0.080000|0.040000\n0.040000|-0.040000|0.040000\n0.086000|0.006000|0.046000\n0.126000|0.046000|0.040000\n"
     with pytest.raises(ReviewError) as exc_info:
-        parse_media_probe_output(json.dumps(variable).encode(), require_cfr_evidence=True)
+        validate_streamed_frame_timing(io.BytesIO(evidence), metadata)
     assert exc_info.value.code == "MEDIA_VARIABLE_FRAME_RATE"
 
 
@@ -233,8 +376,10 @@ def test_frame_rate_rejects_non_allowed_rational_even_with_constant_timestamps()
         fps_den=1,
         timestamps=("0.000000", "0.020833", "0.041667", "0.062500"),
     )
+    unsupported.pop("packets")
+    metadata = parse_media_probe_output(json.dumps(unsupported).encode())
     with pytest.raises(ReviewError) as exc_info:
-        parse_media_probe_output(json.dumps(unsupported).encode(), require_cfr_evidence=True)
+        validate_streamed_frame_timing(io.BytesIO(), metadata)
     assert exc_info.value.code == "MEDIA_FRAME_RATE_NOT_ALLOWED"
 
 
@@ -256,12 +401,91 @@ def test_frame_rate_evidence_keeps_existing_audio_video_stream_inventory() -> No
         {"stream_index": 1, "pts_time": "0", "duration_time": "0.021333"}
     )
 
-    result = parse_media_probe_output(json.dumps(payload).encode(), require_cfr_evidence=True)
+    result = parse_media_probe_output(json.dumps(payload).encode())
 
     assert result.av_streams == (
         ("video", "h264", 0, 0),
         ("audio", "aac", 2, 48_000),
     )
+
+
+@pytest.mark.parametrize(("fps_num", "fps_den"), [(30, 1), (60, 1)])
+def test_two_stage_probe_streams_120_second_b_frame_timing_without_combined_json_cap(
+    tmp_path: Path,
+    fps_num: int,
+    fps_den: int,
+) -> None:
+    probe, marker = _write_two_stage_probe(
+        tmp_path,
+        fps_num=fps_num,
+        fps_den=fps_den,
+        duration_seconds=120,
+    )
+    media = tmp_path / "controlled-input.bin"
+    media.write_bytes(b"controlled")
+
+    with media.open("rb") as handle:
+        result = probe_media(handle.fileno(), _probe_settings(probe))
+
+    assert (result.fps_num, result.fps_den) == (fps_num, fps_den)
+    assert result.duration_ms == 120_000
+    assert result.stream_types == ("video", "audio")
+    assert result.video_frame_count == 120 * fps_num // fps_den
+    assert marker.read_text(encoding="utf-8").splitlines() == ["metadata", "timing"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_code"),
+    [
+        ("vfr", "MEDIA_VARIABLE_FRAME_RATE"),
+        ("missing-first", "MEDIA_FRAME_RATE_UNKNOWN"),
+        ("truncated", "MEDIA_FRAME_RATE_UNKNOWN"),
+        ("long-line", "MEDIA_FRAME_RATE_UNKNOWN"),
+    ],
+)
+def test_streamed_timing_fails_closed_for_vfr_incomplete_or_overlong_evidence(
+    tmp_path: Path,
+    mode: str,
+    expected_code: str,
+) -> None:
+    probe, _marker = _write_two_stage_probe(
+        tmp_path,
+        fps_num=60,
+        fps_den=1,
+        duration_seconds=2,
+        mode=mode,
+    )
+    media = tmp_path / "controlled-input.bin"
+    media.write_bytes(b"controlled")
+
+    with media.open("rb") as handle, pytest.raises(ReviewError) as exc_info:
+        probe_media(handle.fileno(), _probe_settings(probe))
+
+    assert exc_info.value.code == expected_code
+
+
+def test_streamed_timing_rejects_frame_count_above_duration_times_allowed_maximum(
+    tmp_path: Path,
+) -> None:
+    probe, _marker = _write_two_stage_probe(
+        tmp_path,
+        fps_num=60,
+        fps_den=1,
+        duration_seconds=1,
+    )
+    script = probe.read_text(encoding="utf-8")
+    probe.write_text(
+        script.replace("FRAME_COUNT = round(DURATION * FPS_NUM / FPS_DEN)", "FRAME_COUNT = 63"),
+        encoding="utf-8",
+    )
+    probe.chmod(0o700)
+    media = tmp_path / "controlled-input.bin"
+    media.write_bytes(b"controlled")
+
+    with media.open("rb") as handle, pytest.raises(ReviewError) as exc_info:
+        probe_media(handle.fileno(), _probe_settings(probe))
+
+    assert exc_info.value.code == "MEDIA_FRAME_RATE_UNKNOWN"
 
 
 def test_new_project_persists_required_frame_rate_and_old_project_lock_succeeds_once(
@@ -481,3 +705,137 @@ def test_binding_rejects_missing_project_frame_rate_and_missing_editor_without_u
     assert api_error(response)["code"] == "RESPONSIBLE_EDITOR_NOT_FOUND"
     with SessionLocal() as session:
         assert session.get(FileObjectModel, file_id) is None
+
+
+def test_rejected_cleanup_does_not_delete_or_queue_an_already_referenced_file(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.modules.final_cut_review.application.context import ExecutionContext, PrincipalRef, WriteGuardState
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.repositories import (
+        POST_COMMIT_FILE_DELETIONS_KEY,
+        SqlAlchemyReviewRepository,
+    )
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel
+    from backend.app.settings import get_settings
+
+    project = _create_project(client, code="REFERENCED-CLEANUP")
+    editor = _create_editor(client, "Referenced Editor")
+    file_id = _upload_file(client, monkeypatch, tmp_path, _probe_payload(), seed=b"referenced")
+    body = command(
+        "CreateReviewItem",
+        _binding_payload(project["project_ref_id"], file_id, editor["id"], item_code="REFERENCED"),
+    )
+    response = client.post(
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items",
+        json=body,
+        headers={"Idempotency-Key": body["command_id"]},
+    )
+    assert response.status_code == 201, response.text
+
+    context = ExecutionContext(
+        entry_source="edit",
+        request_id="referenced-cleanup",
+        principal=PrincipalRef(kind="system", id="test-system", project_ref_ids=("*",)),
+        write_guard=WriteGuardState(mode="none", verified=True),
+    )
+    with SessionLocal() as session:
+        repository = SqlAlchemyReviewRepository(session, get_settings())
+        assert repository.cleanup_unbound_uploaded_file(file_id, context) is False
+        assert POST_COMMIT_FILE_DELETIONS_KEY not in session.info
+        file = session.get(FileObjectModel, file_id)
+        assert file is not None
+        storage_path = Path(file.storage_path)
+    assert storage_path.is_file()
+    pending_root = get_settings().storage_root / "pending-deletes"
+    assert not pending_root.exists() or list(pending_root.glob("*.json")) == []
+
+
+def test_rejected_cleanup_does_not_delete_or_queue_another_principals_unbound_file(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.modules.final_cut_review.application.context import ExecutionContext, PrincipalRef, WriteGuardState
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.repositories import (
+        POST_COMMIT_FILE_DELETIONS_KEY,
+        SqlAlchemyReviewRepository,
+    )
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel
+    from backend.app.settings import get_settings
+
+    file_id = _upload_file(client, monkeypatch, tmp_path, _probe_payload(), seed=b"other-principal")
+    context = ExecutionContext(
+        entry_source="edit",
+        request_id="other-principal-cleanup",
+        principal=PrincipalRef(kind="system", id="different-principal", project_ref_ids=("*",)),
+        write_guard=WriteGuardState(mode="none", verified=True),
+    )
+    with SessionLocal() as session:
+        repository = SqlAlchemyReviewRepository(session, get_settings())
+        assert repository.cleanup_unbound_uploaded_file(file_id, context) is False
+        assert POST_COMMIT_FILE_DELETIONS_KEY not in session.info
+        file = session.get(FileObjectModel, file_id)
+        assert file is not None
+        storage_path = Path(file.storage_path)
+    assert storage_path.is_file()
+    pending_root = get_settings().storage_root / "pending-deletes"
+    assert not pending_root.exists() or list(pending_root.glob("*.json")) == []
+
+
+def test_binding_commit_outcome_unknown_preserves_unbound_file_without_post_commit_unlink(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, IdempotencyRecordModel, ReviewItemModel
+    from backend.app.settings import get_settings
+    from sqlalchemy.orm import Session as OrmSession
+
+    project = _create_project(client, code="BIND-UNKNOWN")
+    editor = _create_editor(client, "Unknown Commit Editor")
+    file_id = _upload_file(client, monkeypatch, tmp_path, _probe_payload(), seed=b"commit-unknown")
+    with SessionLocal() as session:
+        file = session.get(FileObjectModel, file_id)
+        assert file is not None
+        storage_path = Path(file.storage_path)
+
+    body = command(
+        "CreateReviewItem",
+        _binding_payload(project["project_ref_id"], file_id, editor["id"], item_code="UNKNOWN"),
+    )
+    original_commit = OrmSession.commit
+    raised = False
+
+    def fail_binding_commit(session: OrmSession) -> None:
+        nonlocal raised
+        record = session.get(IdempotencyRecordModel, body["command_id"])
+        is_binding_commit = record is not None and record.command_type == "CreateReviewItem" and record.status_code == 200
+        if is_binding_commit and not raised:
+            raised = True
+            raise RuntimeError("synthetic binding commit outcome unknown")
+        original_commit(session)
+
+    monkeypatch.setattr(OrmSession, "commit", fail_binding_commit)
+    no_raise = TestClient(client.app, headers=client.headers, raise_server_exceptions=False)
+    try:
+        response = no_raise.post(
+            f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items",
+            json=body,
+            headers={"Idempotency-Key": body["command_id"]},
+        )
+    finally:
+        no_raise.close()
+
+    assert response.status_code == 500
+    assert raised is True
+    with SessionLocal() as session:
+        assert session.get(FileObjectModel, file_id) is not None
+        assert session.scalar(select(ReviewItemModel).where(ReviewItemModel.item_code == "UNKNOWN")) is None
+    assert storage_path.is_file()
+    pending_root = get_settings().storage_root / "pending-deletes"
+    assert not pending_root.exists() or list(pending_root.glob("*.json")) == []

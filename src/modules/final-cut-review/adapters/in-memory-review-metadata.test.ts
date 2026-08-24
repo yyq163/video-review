@@ -73,6 +73,20 @@ describe('in-memory review metadata persistence', () => {
       repository.createProject({ name: 'New project', code: '  ', description: '' }),
     ).rejects.toThrow('项目编号长度必须在 1 到 128 之间');
     await expect(
+      repository.createProject({
+        name: 'Unsupported fps',
+        code: 'FPS-48',
+        description: '',
+        frameRate: { fpsNum: 48, fpsDen: 1 },
+      }),
+    ).rejects.toThrow('项目帧率不在允许集合中');
+    const defaultFrameRate = await repository.createProject({
+      name: 'Default fps',
+      code: 'FPS-DEFAULT',
+      description: '',
+    });
+    expect(defaultFrameRate.frameRate).toEqual({ fpsNum: 25, fpsDen: 1 });
+    await expect(
       repository.updateProject({ projectRefId: project.projectRefId, name: '  ', code: project.code, description: '' }),
     ).rejects.toThrow('项目名称长度必须在 1 到 255 之间');
     await expect(
