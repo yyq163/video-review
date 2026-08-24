@@ -20,6 +20,7 @@ export class InMemoryReviewProjects {
     name: string;
     code: string;
     description: string;
+    frameRate?: { fpsNum: number; fpsDen: number };
   }): Promise<Project> => {
     validateProjectMetadata(input);
     const timestamp = nowIso();
@@ -31,6 +32,7 @@ export class InMemoryReviewProjects {
       status: 'active',
       completionStatus: 'empty',
       deletedAt: null,
+      frameRate: input.frameRate ?? { fpsNum: 25, fpsDen: 1 },
       createdAt: timestamp,
       updatedAt: timestamp,
     };

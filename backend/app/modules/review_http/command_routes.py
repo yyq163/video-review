@@ -37,6 +37,9 @@ LOGGER = logging.getLogger(__name__)
 COMMAND_ROUTE_TYPES = {
     "edit_create_project": "CreateProject",
     "edit_update_project": "UpdateProject",
+    "edit_lock_project_frame_rate": "LockProjectFrameRate",
+    "edit_create_responsible_editor": "CreateResponsibleEditor",
+    "edit_rename_responsible_editor": "RenameResponsibleEditor",
     "review_archive_project": "ArchiveProject",
     "review_restore_project": "RestoreProject",
     "review_soft_delete_project": "SoftDeleteProject",
@@ -130,6 +133,8 @@ class AuditedCommandRoute(APIRoute):
 router = APIRouter(prefix="/api/v1/final-cut-review", route_class=AuditedCommandRoute)
 LOCK_REQUIRED_COMMANDS = {
     "UpdateProject",
+    "LockProjectFrameRate",
+    "RenameResponsibleEditor",
     "ArchiveProject",
     "RestoreProject",
     "SoftDeleteProject",
@@ -145,6 +150,14 @@ LOCK_REQUIRED_COMMANDS = {
     "FinalizeVersion",
     "RevokeFinalization",
     "RetryFinalizationCleanup",
+}
+DEFINITIVE_UPLOAD_BINDING_REJECTION_CODES = {
+    "PROJECT_FRAME_RATE_REQUIRED",
+    "MEDIA_FRAME_RATE_UNKNOWN",
+    "MEDIA_VARIABLE_FRAME_RATE",
+    "MEDIA_FRAME_RATE_NOT_ALLOWED",
+    "MEDIA_FRAME_RATE_MISMATCH",
+    "RESPONSIBLE_EDITOR_NOT_FOUND",
 }
 
 
@@ -180,6 +193,34 @@ def normalize_idempotency_key(idempotency_key: str | None) -> str | None:
 def rollback_command(repo: SqlAlchemyReviewRepository) -> None:
     repo.discard_post_commit_file_deletions()
     repo.session.rollback()
+
+
+def cleanup_rejected_unbound_upload(
+    command_type: str,
+    payload: dict[str, Any],
+    context: ExecutionContext,
+    error_code: str,
+) -> None:
+    if command_type not in {"CreateReviewItem", "UploadReviewVersion"}:
+        return
+    if error_code not in DEFINITIVE_UPLOAD_BINDING_REJECTION_CODES:
+        return
+    file_id = payload.get("original_file_id")
+    if not isinstance(file_id, str) or not file_id:
+        return
+    cleanup_repo: SqlAlchemyReviewRepository | None = None
+    try:
+        with SessionLocal() as cleanup_session:
+            cleanup_repo = SqlAlchemyReviewRepository(cleanup_session, get_settings())
+            if not cleanup_repo.cleanup_unbound_uploaded_file(file_id, context):
+                cleanup_session.rollback()
+                return
+            cleanup_session.commit()
+            cleanup_repo.run_post_commit_file_deletions()
+    except Exception:
+        if cleanup_repo is not None:
+            cleanup_repo.preserve_post_commit_file_deletions()
+        LOGGER.warning("rejected_unbound_upload_cleanup_outcome_unknown")
 
 
 def audit_resource(path_payload: dict[str, Any]) -> tuple[str, str | None]:
@@ -322,6 +363,7 @@ def run_command(
                 resource_id=resource_id,
                 failure_stage=audit_stage,
             )
+            cleanup_rejected_unbound_upload(fixed_command_type, envelope.payload, context, error_code)
         raise
 
 
@@ -415,6 +457,63 @@ def edit_update_project(
     if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
 ) -> dict[str, Any]:
     return _execute("edit", "UpdateProject", envelope, {"project_ref_id": project_ref_id}, deps, None, if_match)
+
+
+@router.post("/edit/projects/{project_ref_id}/frame-rate/lock")
+def edit_lock_project_frame_rate(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "edit",
+        "LockProjectFrameRate",
+        envelope,
+        {"project_ref_id": project_ref_id},
+        deps,
+        idempotency_key,
+        if_match,
+    )
+
+
+@router.post("/edit/responsible-editors")
+def edit_create_responsible_editor(
+    response: Response,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    return _execute(
+        "edit",
+        "CreateResponsibleEditor",
+        envelope,
+        {},
+        deps,
+        idempotency_key,
+        None,
+        response=response,
+        success_status=201,
+    )
+
+
+@router.patch("/edit/responsible-editors/{responsible_editor_id}")
+def edit_rename_responsible_editor(
+    responsible_editor_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "edit",
+        "RenameResponsibleEditor",
+        envelope,
+        {"responsible_editor_id": responsible_editor_id},
+        deps,
+        None,
+        if_match,
+    )
 
 
 @router.post("/review/projects/{project_ref_id}/archive")

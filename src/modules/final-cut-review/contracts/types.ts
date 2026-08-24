@@ -125,6 +125,7 @@ export interface Project {
   status: 'active' | 'archived';
   completionStatus: 'empty' | 'in_progress' | 'completed';
   deletedAt: string | null;
+  frameRate?: ReviewFrameRate | null;
   createdAt: string;
   updatedAt: string;
 }

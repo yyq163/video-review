@@ -9,6 +9,7 @@ import type {
   PackageResult,
   Project,
   ProjectRefId,
+  ReviewFrameRate,
   ReviewAnnotationShape,
   ReviewIssue,
   ReviewItem,
@@ -22,6 +23,26 @@ import type {
 
 export interface QueryOptions {
   signal?: AbortSignal;
+}
+
+export interface MediaMetadata {
+  readonly durationMs: number;
+  readonly width: number;
+  readonly height: number;
+  readonly bitrateBps: number;
+  readonly fpsNum: number;
+  readonly fpsDen: number;
+  readonly isVariableFrameRate: false;
+  readonly probeVersion: 'mediainfo.js-0.3.7';
+}
+
+export interface MediaMetadataProbeOptions {
+  readonly signal?: AbortSignal;
+  readonly expectedFrameRate?: ReviewFrameRate;
+}
+
+export interface MediaMetadataPort {
+  probe(blob: Blob, options?: MediaMetadataProbeOptions): Promise<MediaMetadata>;
 }
 
 export interface ReviewItemWithMetadata extends ReviewItem {
@@ -103,7 +124,10 @@ export interface ReviewQueryPort {
 }
 
 export interface ReviewCommandPort {
-  createProject(input: { name: string; code: string; description: string }, context: ExecutionContext): Promise<Project>;
+  createProject(
+    input: { name: string; code: string; description: string; frameRate?: ReviewFrameRate },
+    context: ExecutionContext,
+  ): Promise<Project>;
   updateProject(
     input: {
       projectRefId: ProjectRefId;

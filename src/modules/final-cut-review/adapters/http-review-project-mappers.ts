@@ -22,6 +22,9 @@ export function projectFromDto(dto: ProjectDTO): Project {
     status: dto.lifecycle_status,
     completionStatus: dto.completion_status,
     deletedAt: dto.deleted_at ?? null,
+    frameRate: dto.fps_num === null || dto.fps_den === null
+      ? null
+      : { fpsNum: dto.fps_num, fpsDen: dto.fps_den },
     createdAt: dto.created_at,
     updatedAt: dto.updated_at,
   };

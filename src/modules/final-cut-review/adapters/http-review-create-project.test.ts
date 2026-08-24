@@ -35,6 +35,8 @@ describe('HTTP project creation without crypto.randomUUID', () => {
           project_code: 'QA-HTTP',
           project_name: 'LAN HTTP project',
           description: 'UUID fallback regression',
+          fps_num: 25,
+          fps_den: 1,
         },
       });
       expect(headers['Idempotency-Key']).toBe(command.command_id);
@@ -51,6 +53,8 @@ describe('HTTP project creation without crypto.randomUUID', () => {
             lifecycle_status: 'active',
             completion_status: 'empty',
             deleted_at: null,
+            fps_num: 25,
+            fps_den: 1,
             lock_version: 1,
             created_at: '2026-07-16T00:00:00.000Z',
             updated_at: '2026-07-16T00:00:00.000Z',
@@ -75,7 +79,12 @@ describe('HTTP project creation without crypto.randomUUID', () => {
     );
 
     expect(context.requestId).toBe('00010203-0405-4607-8809-0a0b0c0d0e0f');
-    expect(project).toMatchObject({ projectRefId: 'prj_lan_http', code: 'QA-HTTP', name: 'LAN HTTP project' });
+    expect(project).toMatchObject({
+      projectRefId: 'prj_lan_http',
+      code: 'QA-HTTP',
+      name: 'LAN HTTP project',
+      frameRate: { fpsNum: 25, fpsDen: 1 },
+    });
     expect(getRandomValues).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledOnce();
     runtime.dispose();

@@ -1,10 +1,11 @@
 import { preview } from 'vite';
+import { readdir, stat } from 'node:fs/promises';
 
 const requiredDirectives = [
   "default-src 'self'",
   "base-uri 'self'",
   "object-src 'none'",
-  "script-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
   "form-action 'self'",
 ];
 
@@ -18,6 +19,16 @@ const server = await preview({
 });
 
 try {
+  const assetDirectory = new URL('../dist/assets/', import.meta.url);
+  const wasmAssets = (await readdir(assetDirectory))
+    .filter((entry) => /^MediaInfoModule-[A-Za-z0-9_-]+\.wasm$/.test(entry));
+  if (wasmAssets.length !== 1) {
+    throw new Error('production build must contain exactly one self-hosted MediaInfoModule WASM asset');
+  }
+  if ((await stat(new URL(wasmAssets[0], assetDirectory))).size <= 0) {
+    throw new Error('MediaInfoModule WASM asset is empty');
+  }
+
   const address = server.httpServer.address();
   if (!address || typeof address === 'string') {
     throw new Error('preview server did not expose a TCP address');
@@ -60,6 +71,9 @@ try {
     if (!headerPolicy.includes(directive)) {
       throw new Error(`CSP is missing required directive: ${directive}`);
     }
+  }
+  if (headerPolicy.includes("'unsafe-eval'")) {
+    throw new Error("CSP must not enable general 'unsafe-eval'");
   }
 
   const configuredApiBaseUrl = process.env.VITE_FINAL_CUT_REVIEW_API_BASE_URL?.trim();

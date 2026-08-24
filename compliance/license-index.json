@@ -968,6 +968,18 @@
       "source": "node_modules/chalk/license"
     },
     {
+      "bundled_file": "compliance/license-texts/2dc0465729366c3a7890dfa9e972a1ba7048a26c02116fb8b419a6a1ac110149.txt",
+      "component": "npm:node_modules/cliui",
+      "sha256": "2dc0465729366c3a7890dfa9e972a1ba7048a26c02116fb8b419a6a1ac110149",
+      "source": "node_modules/cliui/LICENSE.txt"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/cliui/node_modules/string-width",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/cliui/node_modules/string-width/license"
+    },
+    {
       "bundled_file": "compliance/license-texts/693866fc419c6f61c8570438ec00659d156ec2b4d4a4d04091711f5f11a365d4.txt",
       "component": "npm:node_modules/color-convert",
       "sha256": "693866fc419c6f61c8570438ec00659d156ec2b4d4a4d04091711f5f11a365d4",
@@ -1086,6 +1098,12 @@
       "component": "npm:node_modules/electron-to-chromium",
       "sha256": "25ba5c59dad3e0dd8f9540beaa0f0a86a10e3aec35af5fdc8e88c5f6a5c0d8c6",
       "source": "node_modules/electron-to-chromium/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a.txt",
+      "component": "npm:node_modules/emoji-regex",
+      "sha256": "483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a",
+      "source": "node_modules/emoji-regex/LICENSE-MIT.txt"
     },
     {
       "bundled_file": "compliance/license-texts/cb992345949ccd6e8394b2cd6c465f7b897c864f845937dbf64e8997f389e164.txt",
@@ -1242,6 +1260,18 @@
       "component": "npm:node_modules/gensync",
       "sha256": "e3a956681ee067f971ac413994171b3d90ca801ec6324e76c9c55366cfe31cb0",
       "source": "node_modules/gensync/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/902dbb4154679fb2b8d7c33878183f45b268d01eae5e5033dddaa8852d45f213.txt",
+      "component": "npm:node_modules/get-caller-file",
+      "sha256": "902dbb4154679fb2b8d7c33878183f45b268d01eae5e5033dddaa8852d45f213",
+      "source": "node_modules/get-caller-file/LICENSE.md"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/get-east-asian-width",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/get-east-asian-width/license"
     },
     {
       "bundled_file": "compliance/license-texts/fc68eb8f1c8e1d6b8be50f3c177927e24791cae7dc251e6253a012f37926a30c.txt",
@@ -1452,6 +1482,12 @@
       "component": "npm:node_modules/mdn-data",
       "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673",
       "source": "node_modules/mdn-data/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/4997496865cae27ceba179fecb7c90fbe563f4e661fa17d038d3e2b008d2fdb5.txt",
+      "component": "npm:node_modules/mediainfo.js",
+      "sha256": "4997496865cae27ceba179fecb7c90fbe563f4e661fa17d038d3e2b008d2fdb5",
+      "source": "node_modules/mediainfo.js/LICENSE.txt"
     },
     {
       "bundled_file": "compliance/license-texts/9638fa87f845af6cecc56fab498c1f74f4a98522d3b53377bedcbdb44b5a8dcc.txt",
@@ -1748,10 +1784,28 @@
       "source": "node_modules/std-env/LICENCE"
     },
     {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/string-width",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/string-width/license"
+    },
+    {
       "bundled_file": "compliance/license-texts/11f2aafb37d06b3ee5bdaf06e9811141d0da05263c316f3d627f45c20d43261b.txt",
       "component": "npm:node_modules/string_decoder",
       "sha256": "11f2aafb37d06b3ee5bdaf06e9811141d0da05263c316f3d627f45c20d43261b",
       "source": "node_modules/string_decoder/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/strip-ansi",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/strip-ansi/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/strip-ansi/node_modules/ansi-regex",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/strip-ansi/node_modules/ansi-regex/license"
     },
     {
       "bundled_file": "compliance/license-texts/48da2f39e100d4085767e94966b43f4fa95ff6a0698fba57ed460914e35f94a0.txt",
@@ -1934,6 +1988,24 @@
       "source": "node_modules/word-wrap/LICENSE"
     },
     {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/wrap-ansi",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/wrap-ansi/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/wrap-ansi/node_modules/ansi-styles",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/wrap-ansi/node_modules/ansi-styles/license"
+    },
+    {
+      "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",
+      "component": "npm:node_modules/wrap-ansi/node_modules/string-width",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3",
+      "source": "node_modules/wrap-ansi/node_modules/string-width/license"
+    },
+    {
       "bundled_file": "compliance/license-texts/2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef.txt",
       "component": "npm:node_modules/ws",
       "sha256": "2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef",
@@ -1952,10 +2024,28 @@
       "source": "node_modules/xmlchars/LICENSE"
     },
     {
+      "bundled_file": "compliance/license-texts/2034cce3b6fafcddd642c4175e01d3ddfc332a53b9f20fdc46b1466dc89ac469.txt",
+      "component": "npm:node_modules/y18n",
+      "sha256": "2034cce3b6fafcddd642c4175e01d3ddfc332a53b9f20fdc46b1466dc89ac469",
+      "source": "node_modules/y18n/LICENSE"
+    },
+    {
       "bundled_file": "compliance/license-texts/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt",
       "component": "npm:node_modules/yallist",
       "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
       "source": "node_modules/yallist/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/2f1a503bfab84b3ba7393627308b3274501e459e3b5185bbb56bbf16cb1602d4.txt",
+      "component": "npm:node_modules/yargs",
+      "sha256": "2f1a503bfab84b3ba7393627308b3274501e459e3b5185bbb56bbf16cb1602d4",
+      "source": "node_modules/yargs/LICENSE"
+    },
+    {
+      "bundled_file": "compliance/license-texts/365496ca1f56da40b23c9815fc40fa9005847b2f8f8fd1c1a4929ef25ec8cd1d.txt",
+      "component": "npm:node_modules/yargs-parser",
+      "sha256": "365496ca1f56da40b23c9815fc40fa9005847b2f8f8fd1c1a4929ef25ec8cd1d",
+      "source": "node_modules/yargs-parser/LICENSE.txt"
     },
     {
       "bundled_file": "compliance/license-texts/5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3.txt",

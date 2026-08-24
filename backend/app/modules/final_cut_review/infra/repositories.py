@@ -26,6 +26,7 @@ from backend.app.modules.final_cut_review.application.context import ExecutionCo
 from backend.app.modules.final_cut_review.domain import invariants
 from backend.app.modules.final_cut_review.domain.errors import ReviewError, not_found
 from backend.app.modules.review_contracts.generated import (
+    ALLOWED_FRAME_RATE_PAIRS,
     DOMAIN_EVENT_TYPES,
     FinalizationDTO,
     OriginalMediaSnapshotDTO,
@@ -43,6 +44,7 @@ from backend.app.modules.review_contracts.generated import (
     ReviewIssueRevisionDTO,
     ReviewItemDTO,
     ReviewPlaybackTarget,
+    ResponsibleEditorDTO,
     ThreadMessageDTO,
     ReviewVersionDTO,
     validate_domain_event_payload,
@@ -72,6 +74,7 @@ from .sqlalchemy_models import (
     OperationLogModel,
     OutboxEventModel,
     ProjectRefModel,
+    ResponsibleEditorModel,
     MediaDerivativeTaskModel,
     ReviewAnnotationSetModel,
     ReviewIssueModel,
@@ -717,6 +720,9 @@ class SqlAlchemyReviewRepository:
         handlers = {
             "CreateProject": self.create_project,
             "UpdateProject": self.update_project,
+            "LockProjectFrameRate": self.lock_project_frame_rate,
+            "CreateResponsibleEditor": self.create_responsible_editor,
+            "RenameResponsibleEditor": self.rename_responsible_editor,
             "ArchiveProject": self.archive_project,
             "RestoreProject": self.restore_project,
             "SoftDeleteProject": self.soft_delete_project,
@@ -1030,6 +1036,8 @@ class SqlAlchemyReviewRepository:
             lifecycle_status=project.lifecycle_status,  # type: ignore[arg-type]
             completion_status=completion,  # type: ignore[arg-type]
             deleted_at=iso(project.deleted_at) if project.deleted_at else None,
+            fps_num=project.fps_num,
+            fps_den=project.fps_den,
             lock_version=project.lock_version,
             created_at=iso(project.created_at),
             updated_at=iso(project.updated_at),
@@ -1080,6 +1088,8 @@ class SqlAlchemyReviewRepository:
             version_label=version.version_label,
             is_current=version.is_current,
             original_media=_media_from_version(version),
+            responsible_editor_id=version.responsible_editor_id,
+            responsible_editor_name_snapshot=version.responsible_editor_name_snapshot,
             playback_status=playback_status,  # type: ignore[arg-type]
             playback_asset_id=version.playback_asset_id,
             thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
@@ -1371,6 +1381,84 @@ class SqlAlchemyReviewRepository:
             raise ReviewError("PRINCIPAL_PERMISSION_DENIED", "当前 principal 无权使用该文件")
         return file
 
+    def _authoritative_binding_probe(self, project: ProjectRefModel, file: FileObjectModel) -> None:
+        if project.fps_num is None or project.fps_den is None:
+            raise ReviewError("PROJECT_FRAME_RATE_REQUIRED", "老项目必须先人工锁定项目帧率")
+        from backend.app.modules.review_media.service import probe_media
+
+        try:
+            with pin_regular_file(file.storage_path, self.settings.storage_root) as pinned:
+                if pinned is None or not pinned.exists:
+                    raise ReviewError("VERSION_FILE_NOT_READY", "文件尚未完成上传")
+                with pinned.open_readonly() as handle:
+                    before = os.fstat(handle.fileno())
+                    if not stat.S_ISREG(before.st_mode) or before.st_size != file.file_size:
+                        raise ReviewError("FILE_HASH_MISMATCH", "绑定前文件身份不匹配")
+                    probe = probe_media(handle.fileno(), self.settings)
+                    after = os.fstat(handle.fileno())
+                if (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_ctime_ns,
+                    before.st_mtime_ns,
+                    before.st_size,
+                ) != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_ctime_ns,
+                    after.st_mtime_ns,
+                    after.st_size,
+                ):
+                    raise ReviewError("FILE_HASH_MISMATCH", "绑定前文件身份发生变化")
+        except UnsafeFilePathError as exc:
+            raise ReviewError("STORAGE_UNAVAILABLE", "绑定前文件路径不安全") from exc
+
+        if (probe.fps_num, probe.fps_den) not in ALLOWED_FRAME_RATE_PAIRS:
+            raise ReviewError("MEDIA_FRAME_RATE_NOT_ALLOWED", "视频帧率不在允许集合中")
+        if (probe.fps_num, probe.fps_den) != (project.fps_num, project.fps_den):
+            raise ReviewError("MEDIA_FRAME_RATE_MISMATCH", "视频帧率与项目帧率不匹配")
+        if (
+            probe.duration_ms,
+            probe.width,
+            probe.height,
+            probe.fps_num,
+            probe.fps_den,
+        ) != (
+            file.duration_ms,
+            file.width,
+            file.height,
+            file.fps_num,
+            file.fps_den,
+        ):
+            raise ReviewError("FILE_HASH_MISMATCH", "绑定前媒体元数据已变化")
+
+    def _binding_editor_snapshot(self, editor_id: str) -> tuple[str, str]:
+        editor = self._get_responsible_editor(editor_id, for_update=True)
+        return editor.id, editor.display_name
+
+    def cleanup_unbound_uploaded_file(self, file_id: str, context: ExecutionContext) -> bool:
+        file = self.session.scalar(select(FileObjectModel).where(FileObjectModel.id == file_id).with_for_update())
+        if file is None:
+            return False
+        if (
+            not context.principal.id
+            or file.owner_principal_id != context.principal.id
+            or file.owner_principal_kind != context.principal.kind
+        ):
+            return False
+        reference_count = (
+            self.session.scalar(
+                select(func.count())
+                .select_from(ReviewVersionModel)
+                .where(ReviewVersionModel.original_file_id == file_id)
+            )
+            or 0
+        )
+        if reference_count:
+            return False
+        self._delete_file_object_if_unreferenced(file_id)
+        return True
+
     def _assert_playback_ready(self, version: ReviewVersionModel) -> None:
         if not self._playback_asset_is_ready(version.playback_asset_id):
             raise ReviewError("PLAYBACK_NOT_READY", "播放文件尚未就绪")
@@ -1394,11 +1482,104 @@ class SqlAlchemyReviewRepository:
             description=payload.get("description", ""),
             source="host" if payload.get("external_project_id") else "local",
             external_project_id=payload.get("external_project_id"),
+            fps_num=payload["fps_num"],
+            fps_den=payload["fps_den"],
         )
         self.session.add(project)
         self.session.flush()
         self._event("review.project.created", context, project.id, "project", project.id, project.lock_version, payload={"project_code": project.project_code})
         return self.project_dto(project)
+
+    def lock_project_frame_rate(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        project = self._get_project(payload["project_ref_id"])
+        self._assert_project_active(project)
+        self._expect_lock(project, expected_version)
+        if project.fps_num is not None or project.fps_den is not None:
+            raise ReviewError("PROJECT_FRAME_RATE_LOCKED", "项目帧率已锁定")
+        now = utcnow()
+        result = self.session.execute(
+            update(ProjectRefModel)
+            .where(
+                ProjectRefModel.id == project.id,
+                ProjectRefModel.fps_num.is_(None),
+                ProjectRefModel.fps_den.is_(None),
+                ProjectRefModel.lock_version == project.lock_version,
+            )
+            .values(
+                fps_num=payload["fps_num"],
+                fps_den=payload["fps_den"],
+                lock_version=project.lock_version + 1,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            self.session.expire_all()
+            raise ReviewError("PROJECT_FRAME_RATE_LOCKED", "项目帧率已被其他请求锁定")
+        self.session.expire(project)
+        self.session.refresh(project)
+        self._event("review.project.updated", context, project.id, "project", project.id, project.lock_version)
+        return self.project_dto(project)
+
+    @staticmethod
+    def responsible_editor_dto(editor: ResponsibleEditorModel) -> dict[str, Any]:
+        return ResponsibleEditorDTO(
+            id=editor.id,
+            display_name=editor.display_name,
+            lock_version=editor.lock_version,
+            created_at=iso(editor.created_at),
+            updated_at=iso(editor.updated_at),
+        ).model_dump(mode="json")
+
+    def _get_responsible_editor(self, editor_id: str, *, for_update: bool = False) -> ResponsibleEditorModel:
+        statement = select(ResponsibleEditorModel).where(ResponsibleEditorModel.id == editor_id)
+        if for_update:
+            statement = statement.with_for_update()
+        editor = self.session.scalar(statement)
+        if editor is None:
+            raise ReviewError("RESPONSIBLE_EDITOR_NOT_FOUND", "责任剪辑师选项不存在")
+        return editor
+
+    def create_responsible_editor(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        del context, expected_version
+        display_name = payload["display_name"].strip()
+        if not display_name:
+            raise ReviewError("RESPONSIBLE_EDITOR_REQUIRED", "责任剪辑师名称不能为空")
+        editor = ResponsibleEditorModel(
+            id=new_id("editor"),
+            display_name=display_name,
+        )
+        self.session.add(editor)
+        self.session.flush()
+        return self.responsible_editor_dto(editor)
+
+    def rename_responsible_editor(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        del context
+        editor = self._get_responsible_editor(payload["responsible_editor_id"], for_update=True)
+        self._expect_lock(editor, expected_version)
+        display_name = payload["display_name"].strip()
+        if not display_name:
+            raise ReviewError("RESPONSIBLE_EDITOR_REQUIRED", "责任剪辑师名称不能为空")
+        editor.display_name = display_name
+        editor.lock_version += 1
+        editor.updated_at = utcnow()
+        self.session.flush()
+        return self.responsible_editor_dto(editor)
 
     def update_project(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
         project = self._get_project(payload["project_ref_id"], for_update=True)
@@ -1454,6 +1635,8 @@ class SqlAlchemyReviewRepository:
         project = self._get_project(payload["project_ref_id"], for_update=True)
         self._assert_project_active(project)
         file = self._get_ready_file(payload["original_file_id"], context)
+        self._authoritative_binding_probe(project, file)
+        editor_id, editor_name_snapshot = self._binding_editor_snapshot(payload["responsible_editor_id"])
         item = ReviewItemModel(
             id=new_id("item"),
             project_ref_id=project.id,
@@ -1465,7 +1648,15 @@ class SqlAlchemyReviewRepository:
         self.session.add(item)
         self.session.flush()
         version = self._create_version(
-            project.id, item.id, file, previous_version_id=None, version_no=1, version_note=payload.get("version_note"), change_summary=None
+            project.id,
+            item.id,
+            file,
+            previous_version_id=None,
+            version_no=1,
+            version_note=payload.get("version_note"),
+            change_summary=None,
+            responsible_editor_id=editor_id,
+            responsible_editor_name_snapshot=editor_name_snapshot,
         )
         item.current_version_id = version.id
         item.updated_at = utcnow()
@@ -1636,6 +1827,8 @@ class SqlAlchemyReviewRepository:
         version_no: int,
         version_note: str | None,
         change_summary: str | None,
+        responsible_editor_id: str,
+        responsible_editor_name_snapshot: str,
     ) -> ReviewVersionModel:
         version = ReviewVersionModel(
             id=new_id("ver"),
@@ -1656,6 +1849,8 @@ class SqlAlchemyReviewRepository:
             fps_num=file.fps_num,
             fps_den=file.fps_den,
             media_probe_version=file.media_probe_version,
+            responsible_editor_id=responsible_editor_id,
+            responsible_editor_name_snapshot=responsible_editor_name_snapshot,
             playback_asset_id=None,
             thumbnail_asset_id=None,
             version_note=version_note,
@@ -1703,6 +1898,8 @@ class SqlAlchemyReviewRepository:
         )
         invariants.ensure_can_upload_version(item.workflow_status, int(current_issue_count))
         file = self._get_ready_file(payload["original_file_id"], context)
+        self._authoritative_binding_probe(project, file)
+        editor_id, editor_name_snapshot = self._binding_editor_snapshot(payload["responsible_editor_id"])
         item.current_version_id = None
         self.session.flush()
         self.session.execute(
@@ -1717,6 +1914,8 @@ class SqlAlchemyReviewRepository:
             version_no=version_no,
             version_note=payload.get("version_note"),
             change_summary=payload.get("change_summary") or payload.get("supersede_reason"),
+            responsible_editor_id=editor_id,
+            responsible_editor_name_snapshot=editor_name_snapshot,
         )
         item.current_version_id = version.id
         item.workflow_status = "pending_review"
@@ -3649,6 +3848,12 @@ class SqlAlchemyReviewRepository:
                         version_label=version.version_label,
                         duration_ms=version.duration_ms,
                         file_size=version.file_size,
+                        fps_num=version.fps_num,
+                        fps_den=version.fps_den,
+                        width=version.width,
+                        height=version.height,
+                        responsible_editor_id=version.responsible_editor_id,
+                        responsible_editor_name_snapshot=version.responsible_editor_name_snapshot,
                         playback_status=playback_status,  # type: ignore[arg-type]
                         playback_url=playback_url,
                         thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
@@ -4025,6 +4230,17 @@ class SqlAlchemyReviewRepository:
         return [
             self.project_dto(project)
             for project in self.session.scalars(select(ProjectRefModel).where(ProjectRefModel.deleted_at.is_(None)).order_by(ProjectRefModel.created_at.desc()))
+        ]
+
+    def list_responsible_editors(self) -> list[dict[str, Any]]:
+        return [
+            self.responsible_editor_dto(editor)
+            for editor in self.session.scalars(
+                select(ResponsibleEditorModel).order_by(
+                    ResponsibleEditorModel.display_name,
+                    ResponsibleEditorModel.id,
+                )
+            )
         ]
 
     def list_items(self, project_ref_id: str) -> list[dict[str, Any]]:

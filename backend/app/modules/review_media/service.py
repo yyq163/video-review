@@ -29,7 +29,7 @@ from backend.app.modules.final_cut_review.infra.repositories import (
     storage_roots_share_filesystem,
 )
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, UploadSessionModel, utcnow
-from backend.app.modules.review_contracts.generated import UploadSessionDTO
+from backend.app.modules.review_contracts.generated import ALLOWED_FRAME_RATE_PAIRS, UploadSessionDTO
 from backend.app.safe_files import (
     UnsafeFilePathError,
     contained_path,
@@ -58,8 +58,10 @@ MEDIA_SIGNATURES = {
 SERVER_COMPUTED_SHA256 = "0" * 64
 ALLOWED_MIME = {mime for rule in MEDIA_SIGNATURES.values() for mime in rule["mimes"]}
 ISO_BMFF_FTYP_MAX_BYTES = 64 * 1024
-MEDIA_PROBE_MAX_OUTPUT_BYTES = 64 * 1024
-MEDIA_PROBE_VERSION = "ffprobe-json-v1"
+MEDIA_PROBE_MAX_OUTPUT_BYTES = 512 * 1024
+MEDIA_PROBE_VERSION = "ffprobe-packet-cfr-v2"
+MEDIA_PROBE_MIN_PACKET_EVIDENCE = 3
+MEDIA_PROBE_TIMESTAMP_TOLERANCE = Fraction(2, 1_000_000)
 DEFAULT_MEDIA_MAX_DIMENSION = 8192
 DEFAULT_MEDIA_MAX_PIXELS = 35_389_440
 MAX_DATABASE_INTEGER = 2_147_483_647
@@ -141,6 +143,18 @@ def _media_probe_unavailable() -> ReviewError:
     return ReviewError("STORAGE_UNAVAILABLE", "媒体探测服务不可用")
 
 
+def _frame_rate_unknown() -> ReviewError:
+    return ReviewError("MEDIA_FRAME_RATE_UNKNOWN", "无法以有界帧时间证据确认帧率")
+
+
+def _variable_frame_rate() -> ReviewError:
+    return ReviewError("MEDIA_VARIABLE_FRAME_RATE", "不允许可变帧率视频")
+
+
+def _frame_rate_not_allowed() -> ReviewError:
+    return ReviewError("MEDIA_FRAME_RATE_NOT_ALLOWED", "视频帧率不在允许集合中")
+
+
 def _positive_int(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value > MAX_DATABASE_INTEGER:
         raise _media_probe_rejected()
@@ -214,6 +228,64 @@ def _positive_frame_rate(*values: object) -> Fraction:
     raise _media_probe_rejected()
 
 
+def _evidence_fraction(value: object) -> Fraction:
+    if value is None or isinstance(value, bool):
+        raise _frame_rate_unknown()
+    try:
+        result = Fraction(str(value))
+    except (ValueError, ZeroDivisionError):
+        raise _frame_rate_unknown() from None
+    if result < 0 or result.numerator > MAX_DATABASE_INTEGER or result.denominator > MAX_DATABASE_INTEGER:
+        raise _frame_rate_unknown()
+    return result
+
+
+def _validate_constant_frame_rate_evidence(
+    payload: dict[str, object],
+    stream: dict[str, object],
+    frame_rate: Fraction,
+) -> None:
+    if (frame_rate.numerator, frame_rate.denominator) not in ALLOWED_FRAME_RATE_PAIRS:
+        raise _frame_rate_not_allowed()
+    packets = payload.get("packets")
+    if not isinstance(packets, list) or len(packets) < MEDIA_PROBE_MIN_PACKET_EVIDENCE:
+        raise _frame_rate_unknown()
+    if not all(isinstance(packet, dict) for packet in packets):
+        raise _frame_rate_unknown()
+    stream_index = stream.get("index")
+    if isinstance(stream_index, bool) or not isinstance(stream_index, int) or stream_index < 0:
+        raise _frame_rate_unknown()
+    video_packets = [packet for packet in packets if packet.get("stream_index") == stream_index]
+    if len(video_packets) < MEDIA_PROBE_MIN_PACKET_EVIDENCE:
+        raise _frame_rate_unknown()
+    read_packet_count = _optional_positive_int(stream.get("nb_read_packets"))
+    if read_packet_count != len(video_packets):
+        raise _frame_rate_unknown()
+    declared_frame_count = _optional_positive_int(stream.get("nb_frames"))
+    if declared_frame_count is not None and declared_frame_count != len(video_packets):
+        raise _frame_rate_unknown()
+
+    timestamps = sorted(_evidence_fraction(packet.get("pts_time")) for packet in video_packets)
+    if len(set(timestamps)) != len(timestamps):
+        raise _variable_frame_rate()
+    expected_interval = Fraction(frame_rate.denominator, frame_rate.numerator)
+    if any(
+        abs((later - earlier) - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE
+        for earlier, later in zip(timestamps, timestamps[1:], strict=False)
+    ):
+        raise _variable_frame_rate()
+
+    duration_values = [packet.get("duration_time") for packet in video_packets]
+    present_durations = [value for value in duration_values if value is not None]
+    if present_durations and len(present_durations) != len(duration_values):
+        raise _frame_rate_unknown()
+    if present_durations and any(
+        abs(_evidence_fraction(value) - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE
+        for value in present_durations
+    ):
+        raise _variable_frame_rate()
+
+
 def _reject_nonstandard_json_constant(_: str) -> None:
     raise ValueError("non-standard JSON constant")
 
@@ -223,6 +295,7 @@ def parse_media_probe_output(
     *,
     max_dimension: int = DEFAULT_MEDIA_MAX_DIMENSION,
     max_pixels: int = DEFAULT_MEDIA_MAX_PIXELS,
+    require_cfr_evidence: bool = False,
 ) -> MediaProbeResult:
     try:
         payload = json.loads(output.decode("utf-8"), parse_constant=_reject_nonstandard_json_constant)
@@ -240,7 +313,14 @@ def parse_media_probe_output(
     if len(video_streams) != 1:
         raise _media_probe_rejected()
     stream = video_streams[0]
-    frame_rate = _positive_frame_rate(stream.get("avg_frame_rate"), stream.get("r_frame_rate"))
+    if require_cfr_evidence:
+        try:
+            frame_rate = _positive_frame_rate(stream.get("avg_frame_rate"), stream.get("r_frame_rate"))
+        except ReviewError:
+            raise _frame_rate_unknown() from None
+        _validate_constant_frame_rate_evidence(payload, stream, frame_rate)
+    else:
+        frame_rate = _positive_frame_rate(stream.get("avg_frame_rate"), stream.get("r_frame_rate"))
     av_streams: list[tuple[str, str, int, int]] = []
     stream_types: list[str] = []
     audio_timings: list[tuple[int | None, int | None]] = []
@@ -352,10 +432,12 @@ def probe_media(
         "error",
         "-protocol_whitelist",
         "file",
+        "-count_packets",
+        "-show_packets",
         "-show_entries",
-        "format=duration:stream=codec_type,codec_name,codec_tag_string,pix_fmt,width,height,duration,start_time,nb_frames,avg_frame_rate,r_frame_rate,channels,sample_rate",
+        "format=duration:stream=index,codec_type,codec_name,codec_tag_string,pix_fmt,width,height,duration,start_time,nb_frames,nb_read_packets,avg_frame_rate,r_frame_rate,channels,sample_rate:packet=stream_index,pts_time,duration_time",
         "-of",
-        "json",
+        "json=c=1",
         probe_path,
     ]
     try:
@@ -410,6 +492,7 @@ def probe_media(
         bytes(output),
         max_dimension=settings.media_max_dimension,
         max_pixels=settings.media_max_pixels,
+        require_cfr_evidence=True,
     )
 
 

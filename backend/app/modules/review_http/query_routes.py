@@ -472,6 +472,17 @@ def list_projects(
     return paginated_ok(projects, total_count, request_id, page, page_size)
 
 
+@router.get("/responsible-editors")
+def list_responsible_editors(
+    request: Request,
+    session: Session = Depends(session_dependency),
+    request_id: str = Depends(get_request_id),
+) -> dict[str, object]:
+    context = query_context(request, request_id)
+    authorize_query(context, "review.project.read")
+    return ok(SqlAlchemyReviewRepository(session, get_settings()).list_responsible_editors(), request_id)
+
+
 @router.get("/projects/{project_ref_id}")
 def get_project(
     project_ref_id: str, request: Request, session: Session = Depends(session_dependency), request_id: str = Depends(get_request_id)

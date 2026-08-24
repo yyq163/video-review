@@ -30,16 +30,25 @@ FAKE_MEDIA_PROBE = """#!/usr/bin/env python3
 import json
 
 print(json.dumps({
+    "packets": [
+        {"stream_index": 0, "pts_time": "0.000000", "duration_time": "0.040000"},
+        {"stream_index": 0, "pts_time": "0.040000", "duration_time": "0.040000"},
+        {"stream_index": 0, "pts_time": "0.080000", "duration_time": "0.040000"},
+        {"stream_index": 0, "pts_time": "0.120000", "duration_time": "0.040000"},
+    ],
     "streams": [{
+        "index": 0,
         "codec_type": "video",
         "codec_name": "h264",
         "width": 1920,
         "height": 1080,
-        "duration": "10.000",
+        "duration": "0.160",
+        "nb_frames": "4",
+        "nb_read_packets": "4",
         "avg_frame_rate": "25/1",
         "r_frame_rate": "25/1",
     }],
-    "format": {"duration": "10.000"},
+    "format": {"duration": "0.160"},
 }))
 """
 
@@ -88,6 +97,14 @@ def _fresh_client(
     alembic_cfg = Config(str(root / "backend/alembic.ini"))
     alembic_cfg.set_main_option("script_location", str(root / "backend/alembic"))
     alembic_command.upgrade(alembic_cfg, "head")
+    models_mod: Any = importlib.import_module("backend.app.modules.final_cut_review.infra.sqlalchemy_models")
+    with db_mod.SessionLocal.begin() as seed_session:
+        seed_session.add(
+            models_mod.ResponsibleEditorModel(
+                id="editor_test_default",
+                display_name="Test Editor",
+            )
+        )
     main_mod = importlib.import_module("backend.app.main")
     # main.py intentionally keeps its runtime settings at module scope. Tests
     # reuse that module, so refresh the binding after applying this fixture's
@@ -112,6 +129,21 @@ def shared_code_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
 
 def command(command_type: str, payload: dict[str, Any] | None = None, command_id: str | None = None) -> dict[str, Any]:
     command_payload = dict(payload or {})
+    if command_type == "CreateProject":
+        command_payload.setdefault("fps_num", 25)
+        command_payload.setdefault("fps_den", 1)
+    if command_type in {"CreateReviewItem", "UploadReviewVersion"}:
+        command_payload.setdefault("responsible_editor_id", "editor_test_default")
+        command_payload.setdefault("responsible_editor_name_snapshot", "Test Editor")
+        command_payload.setdefault(
+            "local_probe_claim",
+            {
+                "fps_num": 25,
+                "fps_den": 1,
+                "is_variable_frame_rate": False,
+                "probe_version": "controlled-test-claim",
+            },
+        )
     if command_type == "PrepareFinalizedPackage":
         command_payload.setdefault("unified_name", "测试统一命名")
     return {
@@ -190,7 +222,10 @@ def upload_video(
 
 
 def create_project(client: TestClient, code: str = "P001") -> dict[str, Any]:
-    body = command("CreateProject", {"project_code": code, "project_name": f"Project {code}"})
+    body = command(
+        "CreateProject",
+        {"project_code": code, "project_name": f"Project {code}", "fps_num": 25, "fps_den": 1},
+    )
     response = client.post("/api/v1/final-cut-review/edit/projects", json=body, headers={"Idempotency-Key": body["command_id"]})
     assert response.status_code == 201, response.text
     return api_data(response)
@@ -204,11 +239,30 @@ def create_item(
     *,
     episode_no: int | None = 1,
 ) -> dict[str, Any]:
+    db_mod: Any = importlib.import_module("backend.app.modules.final_cut_review.infra.database")
+    models_mod: Any = importlib.import_module("backend.app.modules.final_cut_review.infra.sqlalchemy_models")
+    editor_id = "editor_test_default"
+    with db_mod.SessionLocal.begin() as session:
+        editor = session.get(models_mod.ResponsibleEditorModel, editor_id)
+        if editor is None:
+            editor = models_mod.ResponsibleEditorModel(
+                id=editor_id,
+                display_name="Test Editor",
+            )
+            session.add(editor)
     payload: dict[str, Any] = {
         "project_ref_id": project_ref_id,
         "item_code": item_code,
         "title": f"Cut {item_code}",
         "original_file_id": file_id,
+        "responsible_editor_id": editor_id,
+        "responsible_editor_name_snapshot": "Test Editor",
+        "local_probe_claim": {
+            "fps_num": 25,
+            "fps_den": 1,
+            "is_variable_frame_rate": False,
+            "probe_version": "controlled-test-claim",
+        },
     }
     if episode_no is not None:
         payload["episode_no"] = episode_no
@@ -219,8 +273,6 @@ def create_item(
     # Most API contract tests exercise review behavior with the legacy tiny
     # pseudo-media fixture. Mark that fixture as a ready legacy playback asset;
     # dedicated media-worker tests cover the real asynchronous derivative path.
-    db_mod: Any = importlib.import_module("backend.app.modules.final_cut_review.infra.database")
-    models_mod: Any = importlib.import_module("backend.app.modules.final_cut_review.infra.sqlalchemy_models")
     with db_mod.SessionLocal() as session:
         version = session.get(models_mod.ReviewVersionModel, item["current_version_id"])
         assert version is not None

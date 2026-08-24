@@ -13,5 +13,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["vite.config.ts", "eslint.config.js", "playwright.config.ts"]
+  "include": ["vite.config.ts", "src/frontend-security-policy.ts", "eslint.config.js", "playwright.config.ts"]
 }

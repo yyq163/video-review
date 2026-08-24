@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+
 import react from '@vitejs/plugin-react';
 import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
 
+import { createMetaPolicy } from './src/frontend-security-policy';
+
 const cspPlaceholder = '__FCR_CONTENT_SECURITY_POLICY__';
+const mediaInfoWasmPath = createRequire(import.meta.url).resolve('mediainfo.js/MediaInfoModule.wasm');
 
 function resolveApiOrigin(apiBaseUrl: string | undefined, required: boolean): string | undefined {
   const normalizedApiBaseUrl = apiBaseUrl?.trim() ?? '';
@@ -18,25 +24,6 @@ function resolveApiOrigin(apiBaseUrl: string | undefined, required: boolean): st
     throw new Error('VITE_FINAL_CUT_REVIEW_API_BASE_URL must be an absolute credential-free HTTP(S) URL');
   }
   return parsed.origin;
-}
-
-function createMetaPolicy(apiOrigin: string | undefined, isDevelopmentServer: boolean): string {
-  const scriptSources = isDevelopmentServer ? "'self' 'unsafe-inline'" : "'self'";
-  const developmentSocketSources = isDevelopmentServer ? ' ws://127.0.0.1:* ws://localhost:*' : '';
-  const apiSource = apiOrigin && apiOrigin !== 'null' ? ` ${apiOrigin}` : '';
-
-  return [
-    "default-src 'self'",
-    "base-uri 'self'",
-    "object-src 'none'",
-    `script-src ${scriptSources}`,
-    "style-src 'self' 'unsafe-inline'",
-    `img-src 'self' data: blob:${apiSource}`,
-    "font-src 'self' data:",
-    `connect-src 'self'${apiSource}${developmentSocketSources}`,
-    `media-src 'self' blob:${apiSource}`,
-    "form-action 'self'",
-  ].join('; ');
 }
 
 export default defineConfig(({ command, isPreview, mode }) => {
@@ -56,6 +43,17 @@ export default defineConfig(({ command, isPreview, mode }) => {
   return {
     plugins: [
       react(),
+      {
+        name: 'self-hosted-mediainfo-wasm',
+        apply: 'build',
+        buildStart() {
+          this.emitFile({
+            type: 'asset',
+            name: 'MediaInfoModule.wasm',
+            source: readFileSync(mediaInfoWasmPath),
+          });
+        },
+      },
       {
         name: 'frontend-security-policy',
         transformIndexHtml(html: string) {

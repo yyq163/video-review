@@ -305,9 +305,10 @@ export class HttpReviewProjects implements ProjectApi {
 
   readonly createProject: ReviewApiPort['createProject'] = async (input, context) => {
     this.transport.assertWriteContext(context, ['edit']);
+    const frameRate = input.frameRate ?? { fpsNum: 25, fpsDen: 1 };
     const project = await this.transport.command<
       ProjectDTO,
-      { project_code: string; project_name: string; description?: string }
+      { project_code: string; project_name: string; description?: string; fps_num: number; fps_den: number }
     >(
       '/api/v1/final-cut-review/edit/projects',
       'CreateProject',
@@ -315,6 +316,8 @@ export class HttpReviewProjects implements ProjectApi {
         project_code: input.code,
         project_name: input.name,
         description: input.description || undefined,
+        fps_num: frameRate.fpsNum,
+        fps_den: frameRate.fpsDen,
       },
       context,
       undefined,

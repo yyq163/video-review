@@ -6981,7 +6981,7 @@ def test_upload_probe_failures_are_closed_clean_and_sanitized(
         "no-video": f'import json\nprint(json.dumps({{"streams": [], "format": {{"duration": "1"}}, "raw": "{secret_marker}"}}))',
         "multi-video": 'import json\nstream = {"codec_type": "video", "width": 1920, "height": 1080, "avg_frame_rate": "25/1"}\nprint(json.dumps({"streams": [stream, stream], "format": {"duration": "1"}}))',
         "invalid-metadata": 'import json\nprint(json.dumps({"streams": [{"codec_type": "video", "width": 0, "height": 1080, "avg_frame_rate": "0/1"}], "format": {"duration": "0"}}))',
-        "oversize": 'print("x" * 70000)',
+        "oversize": 'print("x" * 600000)',
     }
     if mode == "missing":
         probe_path = tmp_path / "missing-private-probe"
