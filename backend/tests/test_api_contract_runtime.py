@@ -1917,12 +1917,26 @@ def test_delete_review_item_keeps_file_when_database_transaction_rolls_back(clie
         )
         from backend.app.maintenance import cleanup_temporary_files
 
-        cleanup_result = cleanup_temporary_files()
+        cleanup_started = Event()
+
+        def run_cleanup() -> dict[str, int]:
+            cleanup_started.set()
+            return cleanup_temporary_files()
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        cleanup_future = executor.submit(run_cleanup)
+        try:
+            assert cleanup_started.wait(timeout=5)
+            with pytest.raises(TimeoutError):
+                cleanup_future.result(timeout=0.25)
+        finally:
+            session.rollback()
+            repo.discard_post_commit_file_deletions()
+        cleanup_result = cleanup_future.result(timeout=5)
+        executor.shutdown(wait=True)
         assert cleanup_result["removed_pending_deletes"] == 0
         assert cleanup_result["completed_review_deletions"] == 0
         assert original_storage_path.exists()
-        session.rollback()
-        repo.discard_post_commit_file_deletions()
         assert original_storage_path.exists()
     finally:
         session.close()
