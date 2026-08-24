@@ -10,9 +10,11 @@ import type {
   FinalizationCleanupRetry,
   FinalizationRevocation,
   ReviewItem,
+  ReviewFrameRate,
 } from '../contracts/types';
 import { formatEpisodeDisplayValue, type ReviewEpisodeGroup } from '../core/episode-dedupe';
 import type { ReviewProjectSummaryItem } from '../ports';
+import { formatTimestampTimecode } from '../core/timecode';
 
 export type ProjectDetailMetadataEpisodeGroup = Omit<ReviewEpisodeGroup, 'items' | 'representative'> & {
   items: ReviewProjectSummaryItem[];
@@ -61,6 +63,7 @@ interface ProjectDetailItemListProps {
     values: ReviewItemMetadataValues,
   ) => Promise<void>;
   projectRefId: string;
+  projectFrameRate?: ReviewFrameRate | null;
 }
 
 function isControlTarget(target: EventTarget | null): boolean {
@@ -164,6 +167,7 @@ export function ProjectDetailItemList({
   revocationUncertainIds,
   onUpdateReviewItemMetadata,
   projectRefId,
+  projectFrameRate,
 }: ProjectDetailItemListProps) {
   const [selectedDeleteIds, setSelectedDeleteIds] = useState<Set<string>>(() => new Set());
   const [batchDeleteFailures, setBatchDeleteFailures] = useState<Record<string, string>>({});
@@ -334,7 +338,7 @@ export function ProjectDetailItemList({
           disabled={!selectedItems.length || batchDeletePending || itemActionPending}
           onClick={() => {
             const batch = [...selectedItems];
-            if (!window.confirm(`确认批量删除已选择的 ${batch.length} 条待审分集？该操作逐条执行且无法撤销。`)) {
+            if (!window.confirm(`确认批量删除已选择的 ${batch.length} 条待审分集？该操作由后端逐对象结算且无法撤销。`)) {
               return;
             }
             setBatchDeletePending(true);
@@ -496,6 +500,16 @@ export function ProjectDetailItemList({
                 <span>
                   {item.title} · {item.currentVersion.versionLabel} · {Math.round(item.currentVersion.durationMs / 1000)} 秒 · {Math.round(item.currentVersion.fileSize / 1024 / 1024)} MiB
                 </span>
+                <code
+                  className="fj-review-item-timecode"
+                  data-testid={`item-row-timecode-${item.reviewItemId}`}
+                >
+                  {formatTimestampTimecode(
+                    item.currentVersion.durationMs,
+                    projectFrameRate?.fpsNum ?? item.currentVersion.fpsNum,
+                    projectFrameRate?.fpsDen ?? item.currentVersion.fpsDen,
+                  )}
+                </code>
               </div>
               <span
                 aria-hidden="true"

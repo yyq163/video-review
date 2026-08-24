@@ -52,6 +52,7 @@ describe('project and review item metadata editing', () => {
       runtime = createdRuntime;
     });
     const createItem = vi.spyOn(runtime!.getApi('edit'), 'createReviewItemWithVersion');
+    await userEvent.click(await screen.findByRole('button', { name: '创建并上传 V1' }));
     await userEvent.upload(
       await screen.findByTestId('create-item-file'),
       new File(['video'], 'blank-title.mp4', { type: 'video/mp4' }),

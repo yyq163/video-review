@@ -2,14 +2,17 @@ import {
   FinalCutReviewHttpError,
   type ProjectDTO,
   type ProjectDeletionResultDTO,
+  type ProjectSummaryDTO,
   type ReviewItemDTO,
   type ReviewVersionDTO,
+  type ResponsibleEditorDTO,
 } from '../contracts-generated/backend-contract';
 import type { ReviewApiPort, ReviewProjectSummary, ReviewProjectSummaryItem } from '../ports';
 import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
 import {
   itemFromDto,
   projectFromDto,
+  responsibleEditorFromDto,
   versionFromDto,
 } from './http-review-project-mappers';
 import type { HttpReviewQueries } from './http-review-queries';
@@ -107,6 +110,7 @@ function clearProjectDeleteOperation(projectRefId: string): void {
 type ProjectApi = Pick<
   ReviewApiPort,
   | 'listProjects'
+  | 'listResponsibleEditors'
   | 'getProjectSummary'
   | 'getReviewItem'
   | 'getVersion'
@@ -115,50 +119,16 @@ type ProjectApi = Pick<
   | 'getWorkspace'
   | 'createProject'
   | 'updateProject'
+  | 'lockProjectFrameRate'
+  | 'createResponsibleEditor'
+  | 'renameResponsibleEditor'
   | 'updateReviewItem'
   | 'archiveProject'
   | 'restoreProject'
   | 'deleteProject'
+  | 'finalizeProject'
+  | 'revokeProjectFinalization'
 >;
-
-interface ReviewProjectSummaryDTO {
-  project: ProjectDTO;
-  items: ReviewProjectSummaryItemDTO[];
-}
-
-interface ReviewProjectSummaryItemDTO {
-  id: string;
-  project_ref_id: string;
-  item_code: string;
-  episode_no?: number | null;
-  title: string;
-  workflow_state: ReviewProjectSummaryItem['status'];
-  lock_version: number;
-  current_version_id: string;
-  current_version: {
-    id: string;
-    version_no: number;
-    version_label: string;
-    duration_ms: number;
-    file_size: number;
-    playback_status: 'pending' | 'ready' | 'failed';
-    playback_url: string | null;
-    thumbnail_status: 'pending' | 'ready' | 'failed';
-    thumbnail_url: string | null;
-  };
-  unresolved_current_version_count: number;
-  finalization: {
-    id: string;
-    status: 'active' | 'revoked';
-    revoked_at?: string | null;
-  } | null;
-  revocation_cleanup_status: 'none' | 'pending' | 'failed' | 'complete';
-  bulk_delete: {
-    eligible: boolean;
-    locked: boolean;
-    reason: string | null;
-  };
-}
 
 function editableItemFromDto(dto: ReviewItemDTO) {
   return Object.assign(itemFromDto(dto), { itemCode: dto.item_code });
@@ -181,7 +151,7 @@ function protectedMediaUrl(
 }
 
 function summaryItemFromDto(
-  dto: ReviewProjectSummaryItemDTO,
+  dto: ProjectSummaryDTO['items'][number],
   project: ReviewProjectSummary['project'],
   baseUrl: string,
 ): ReviewProjectSummaryItem {
@@ -230,6 +200,12 @@ function summaryItemFromDto(
       versionLabel: dto.current_version.version_label,
       durationMs: dto.current_version.duration_ms,
       fileSize: dto.current_version.file_size,
+      width: dto.current_version.width,
+      height: dto.current_version.height,
+      fpsNum: dto.current_version.fps_num,
+      fpsDen: dto.current_version.fps_den,
+      responsibleEditorId: dto.current_version.responsible_editor_id,
+      responsibleEditorNameSnapshot: dto.current_version.responsible_editor_name_snapshot,
       playbackStatus:
         dto.current_version.playback_status === 'ready' && !playbackUrl
           ? 'failed'
@@ -248,6 +224,14 @@ function summaryItemFromDto(
   };
 }
 
+function projectSummaryFromDto(dto: ProjectSummaryDTO, baseUrl: string): ReviewProjectSummary {
+  const project = projectFromDto(dto.project);
+  return {
+    project,
+    items: dto.items.map((item) => summaryItemFromDto(item, project, baseUrl)),
+  };
+}
+
 export class HttpReviewProjects implements ProjectApi {
   constructor(
     private readonly transport: HttpReviewTransport,
@@ -262,16 +246,18 @@ export class HttpReviewProjects implements ProjectApi {
     return projects.map(projectFromDto);
   };
 
+  readonly listResponsibleEditors: ReviewApiPort['listResponsibleEditors'] = async (options) =>
+    (await this.transport.requestList<ResponsibleEditorDTO[]>(
+      '/api/v1/final-cut-review/responsible-editors',
+      options,
+    )).map(responsibleEditorFromDto);
+
   readonly getProjectSummary: ReviewApiPort['getProjectSummary'] = async (projectRefId, options) => {
-    const dto = await this.transport.requestJson<ReviewProjectSummaryDTO>(
+    const dto = await this.transport.requestJson<ProjectSummaryDTO>(
       `/api/v1/final-cut-review/projects/${projectRefId}/summary`,
       { signal: options?.signal },
     );
-    const project = projectFromDto(dto.project);
-    return {
-      project,
-      items: dto.items.map((item) => summaryItemFromDto(item, project, this.transport.baseUrl)),
-    };
+    return projectSummaryFromDto(dto, this.transport.baseUrl);
   };
 
   readonly getReviewItem: ReviewApiPort['getReviewItem'] = async (params, options) =>
@@ -440,6 +426,59 @@ export class HttpReviewProjects implements ProjectApi {
     return projectFromDto(project);
   };
 
+  readonly lockProjectFrameRate: ReviewApiPort['lockProjectFrameRate'] = async (input, context) => {
+    this.transport.assertWriteContext(context, ['edit']);
+    const current = await this.transport.projectForWrite(input.projectRefId);
+    const project = await this.transport.command<
+      ProjectDTO,
+      { project_ref_id: string; fps_num: number; fps_den: number }
+    >(
+      `/api/v1/final-cut-review/edit/projects/${input.projectRefId}/frame-rate/lock`,
+      'LockProjectFrameRate',
+      {
+        project_ref_id: input.projectRefId,
+        fps_num: input.frameRate.fpsNum,
+        fps_den: input.frameRate.fpsDen,
+      },
+      context,
+      current.lock_version,
+      { idempotent: true },
+    );
+    return projectFromDto(project);
+  };
+
+  readonly createResponsibleEditor: ReviewApiPort['createResponsibleEditor'] = async (input, context) => {
+    this.transport.assertWriteContext(context, ['edit']);
+    const editor = await this.transport.command<ResponsibleEditorDTO, { display_name: string }>(
+      '/api/v1/final-cut-review/edit/responsible-editors',
+      'CreateResponsibleEditor',
+      { display_name: input.displayName },
+      context,
+      undefined,
+      { idempotent: true },
+    );
+    return responsibleEditorFromDto(editor);
+  };
+
+  readonly renameResponsibleEditor: ReviewApiPort['renameResponsibleEditor'] = async (input, context) => {
+    this.transport.assertWriteContext(context, ['edit']);
+    const editor = await this.transport.command<
+      ResponsibleEditorDTO,
+      { responsible_editor_id: string; display_name: string }
+    >(
+      `/api/v1/final-cut-review/edit/responsible-editors/${input.responsibleEditorId}`,
+      'RenameResponsibleEditor',
+      {
+        responsible_editor_id: input.responsibleEditorId,
+        display_name: input.displayName,
+      },
+      context,
+      input.lockVersion,
+      { method: 'PATCH' },
+    );
+    return responsibleEditorFromDto(editor);
+  };
+
   readonly updateReviewItem: ReviewApiPort['updateReviewItem'] = async (input, context) => {
     this.transport.assertWriteContext(context, ['edit']);
     const current = await this.transport.requestJson<ReviewItemDTO>(
@@ -488,6 +527,40 @@ export class HttpReviewProjects implements ProjectApi {
       current.lock_version,
     );
     return projectFromDto(project);
+  };
+
+  readonly finalizeProject: ReviewApiPort['finalizeProject'] = async (input, context) => {
+    this.transport.assertWriteContext(context, ['review']);
+    const current = await this.transport.projectForWrite(input.projectRefId);
+    const summary = await this.transport.command<
+      ProjectSummaryDTO,
+      { project_ref_id: string; confirmed: true }
+    >(
+      `/api/v1/final-cut-review/review/projects/${input.projectRefId}/finalize`,
+      'FinalizeProject',
+      { project_ref_id: input.projectRefId, confirmed: input.confirmed },
+      context,
+      current.lock_version,
+      { idempotent: true },
+    );
+    return projectSummaryFromDto(summary, this.transport.baseUrl);
+  };
+
+  readonly revokeProjectFinalization: ReviewApiPort['revokeProjectFinalization'] = async (input, context) => {
+    this.transport.assertWriteContext(context, ['review']);
+    const current = await this.transport.projectForWrite(input.projectRefId);
+    const summary = await this.transport.command<
+      ProjectSummaryDTO,
+      { project_ref_id: string; confirmed: true }
+    >(
+      `/api/v1/final-cut-review/review/projects/${input.projectRefId}/finalization/revoke`,
+      'RevokeProjectFinalization',
+      { project_ref_id: input.projectRefId, confirmed: input.confirmed },
+      context,
+      current.lock_version,
+      { idempotent: true },
+    );
+    return projectSummaryFromDto(summary, this.transport.baseUrl);
   };
 
   readonly deleteProject: ReviewApiPort['deleteProject'] = async (input, context) => {

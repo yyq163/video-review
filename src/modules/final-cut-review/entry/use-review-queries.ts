@@ -24,6 +24,7 @@ import { useReviewApi } from './runtime';
 
 export const reviewKeys = {
   projects: ['fj-review', 'projects'] as const,
+  responsibleEditors: ['fj-review', 'responsible-editors'] as const,
   projectSummary: (projectRefId: ProjectRefId) =>
     ['fj-review', 'project-summary', projectRefId] as const,
   item: (projectRefId: ProjectRefId, reviewItemId: ReviewItemId) =>
@@ -191,6 +192,16 @@ export function useProjects(mode: EntryMode) {
     ...projects,
     data: projects.data?.map(maskProtectedProject),
   };
+}
+
+export function useResponsibleEditors(mode: EntryMode) {
+  const api = useReviewApi(mode);
+  return useQuery({
+    queryKey: reviewKeys.responsibleEditors,
+    queryFn: ({ signal }) => api.listResponsibleEditors({ signal }),
+    retry: (failureCount, error) => !isAbortError(error) && failureCount < 2,
+    staleTime: 5_000,
+  });
 }
 
 export function useProjectSummary(mode: EntryMode, projectRefId: ProjectRefId) {
@@ -568,6 +579,26 @@ export function useReviewMutations(mode: EntryMode) {
         ]);
       },
     }),
+    lockProjectFrameRate: useMutation({
+      mutationFn: (input: Parameters<typeof api.lockProjectFrameRate>[0]) =>
+        api.lockProjectFrameRate(input, context()),
+      onSuccess: async (project) => {
+        await Promise.all([
+          invalidateProject(project.projectRefId),
+          queryClient.invalidateQueries({ queryKey: reviewKeys.projects }),
+        ]);
+      },
+    }),
+    createResponsibleEditor: useMutation({
+      mutationFn: (input: Parameters<typeof api.createResponsibleEditor>[0]) =>
+        api.createResponsibleEditor(input, context()),
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: reviewKeys.responsibleEditors }),
+    }),
+    renameResponsibleEditor: useMutation({
+      mutationFn: (input: Parameters<typeof api.renameResponsibleEditor>[0]) =>
+        api.renameResponsibleEditor(input, context()),
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: reviewKeys.responsibleEditors }),
+    }),
     archiveProject: useMutation({
       mutationFn: (input: Parameters<typeof api.archiveProject>[0]) => api.archiveProject(input, context()),
       onSuccess: (project) => {
@@ -586,6 +617,21 @@ export function useReviewMutations(mode: EntryMode) {
       mutationFn: (input: Parameters<typeof api.deleteProject>[0]) => api.deleteProject(input, context()),
       onSuccess: (project) => {
         invalidateProject(project.projectRefId);
+        queryClient.invalidateQueries({ queryKey: reviewKeys.projects });
+      },
+    }),
+    finalizeProject: useMutation({
+      mutationFn: (input: Parameters<typeof api.finalizeProject>[0]) => api.finalizeProject(input, context()),
+      onSuccess: (summary) => {
+        queryClient.setQueryData(reviewKeys.projectSummary(summary.project.projectRefId), summary);
+        queryClient.invalidateQueries({ queryKey: reviewKeys.projects });
+      },
+    }),
+    revokeProjectFinalization: useMutation({
+      mutationFn: (input: Parameters<typeof api.revokeProjectFinalization>[0]) =>
+        api.revokeProjectFinalization(input, context()),
+      onSuccess: (summary) => {
+        queryClient.setQueryData(reviewKeys.projectSummary(summary.project.projectRefId), summary);
         queryClient.invalidateQueries({ queryKey: reviewKeys.projects });
       },
     }),

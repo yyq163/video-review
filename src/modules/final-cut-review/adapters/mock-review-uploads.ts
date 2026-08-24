@@ -44,7 +44,7 @@ export class MockReviewUploads implements UploadApi {
       percent: 5,
       totalBytes: input.file.size,
     });
-    const storedFile = await this.context.fileStorage.storeOriginal(input.file);
+    const storedFile = await this.context.fileStorage.storeOriginal(input.file, input.localProbe);
     await reportMockUploadProgress(input.onProgress, {
       stage: 'uploading',
       percent: 85,
@@ -99,7 +99,7 @@ export class MockReviewUploads implements UploadApi {
       percent: 5,
       totalBytes: input.file.size,
     });
-    const storedFile = await this.context.fileStorage.storeOriginal(input.file);
+    const storedFile = await this.context.fileStorage.storeOriginal(input.file, input.localProbe);
     await reportMockUploadProgress(input.onProgress, {
       stage: 'uploading',
       percent: 85,

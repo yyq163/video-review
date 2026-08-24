@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { EntryMode } from '../contracts/types';
 import {
   useProjectSummary,
+  useResponsibleEditors,
   useReviewMutations,
   useWorkspace,
 } from '../entry/use-review-queries';
@@ -12,11 +13,17 @@ import { ReviewWorkspacePage } from './ReviewWorkspacePage';
 
 vi.mock('../entry/use-review-queries', () => ({
   useProjectSummary: vi.fn(),
+  useResponsibleEditors: vi.fn(),
   useReviewMutations: vi.fn(),
   useWorkspace: vi.fn(),
 }));
 
+vi.mock('../entry/runtime', () => ({
+  useMediaMetadata: vi.fn(() => ({ probe: vi.fn() })),
+}));
+
 const projectDetailQuery = vi.mocked(useProjectSummary);
+const responsibleEditorsQuery = vi.mocked(useResponsibleEditors);
 const reviewMutations = vi.mocked(useReviewMutations);
 const workspaceQuery = vi.mocked(useWorkspace);
 
@@ -24,6 +31,8 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
+
+responsibleEditorsQuery.mockReturnValue({ data: [] } as unknown as ReturnType<typeof useResponsibleEditors>);
 
 function expectApprovedEntryNavigation(entryMode: EntryMode) {
   const navigation = screen.getByRole('navigation', { name: '入口切换' });

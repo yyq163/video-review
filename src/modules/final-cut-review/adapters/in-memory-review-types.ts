@@ -4,6 +4,7 @@ import type {
   ReviewIssue,
   ReviewItem,
   ReviewVersion,
+  ResponsibleEditor,
 } from '../contracts/types';
 
 export interface InMemoryReviewRepositorySnapshot {
@@ -12,6 +13,7 @@ export interface InMemoryReviewRepositorySnapshot {
   versions: ReviewVersion[];
   issues: ReviewIssue[];
   finalizations: FinalizationRecord[];
+  responsibleEditors?: ResponsibleEditor[];
 }
 
 export interface InMemoryReviewRepositoryOptions {

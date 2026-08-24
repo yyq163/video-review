@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { EntryMode, FinalizationRevocation, ReviewItem } from '../contracts/types';
 import { entryLinksFor } from '../entry/entry-links';
-import { useProjectSummary, useReviewMutations } from '../entry/use-review-queries';
+import { useProjectSummary, useResponsibleEditors, useReviewMutations } from '../entry/use-review-queries';
+import { useMediaMetadata } from '../entry/runtime';
 import { AppShell, CapabilityGate, ErrorView, LoadingBlock, StatusBadge, actionError } from '../components/shared';
 import { CreateItemUploadPanel } from '../components/UploadPanel';
+import { CenteredModal } from '../components/CenteredModal';
 import { ProjectMetadataEditor, type ReviewItemMetadataValues } from '../components/MetadataEditors';
 import { ProjectPackageControl } from '../components/ProjectPackageControl';
 import { uploadSchema, type ProjectFormValues } from '../components/ProjectForms';
@@ -53,9 +55,16 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const { projectRefId = '' } = useParams();
   const detail = useProjectSummary(props.entryMode, projectRefId);
   const mutations = useReviewMutations(props.entryMode);
+  const responsibleEditors = useResponsibleEditors(props.entryMode);
+  const mediaMetadata = useMediaMetadata();
   const [projectActionError, setProjectActionError] = useState<string | null>(null);
   const [projectActionMessage, setProjectActionMessage] = useState<ProjectActionMessage | null>(null);
   const [bulkActionsHost, setBulkActionsHost] = useState<HTMLSpanElement | null>(null);
+  const [v1UploadOpen, setV1UploadOpen] = useState(false);
+  const [editorManagerOpen, setEditorManagerOpen] = useState(false);
+  const [editingEditorId, setEditingEditorId] = useState<string | null>(null);
+  const [editorDisplayName, setEditorDisplayName] = useState('');
+  const [legacyFrameRate, setLegacyFrameRate] = useState('25/1');
   const v1ListRefreshSequenceRef = useRef(0);
   const thumbnailAuthorityRefreshRef = useRef<Promise<unknown> | null>(null);
   const activeV1UploadCountRef = useRef(0);
@@ -381,9 +390,12 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const isArchived = project.status === 'archived';
   const projectActionPending =
     mutations.updateProject.isPending ||
-    mutations.archiveProject.isPending ||
-    mutations.restoreProject.isPending ||
-    mutations.deleteProject.isPending;
+    mutations.deleteProject.isPending ||
+    mutations.lockProjectFrameRate.isPending ||
+    mutations.createResponsibleEditor.isPending ||
+    mutations.renameResponsibleEditor.isPending ||
+    mutations.finalizeProject.isPending ||
+    mutations.revokeProjectFinalization.isPending;
   const itemActionPending =
     mutations.updateReviewItem.isPending ||
     mutations.deleteReviewItem.isPending ||
@@ -402,7 +414,12 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const updateProjectMetadata = async (values: ProjectFormValues) => {
     setProjectActionError(null);
     setProjectActionMessage(null);
-    await mutations.updateProject.mutateAsync({ projectRefId, ...values });
+    await mutations.updateProject.mutateAsync({
+      projectRefId,
+      name: values.name,
+      code: values.code,
+      description: values.description,
+    });
     setProjectActionMessage('项目资料已更新。');
   };
 
@@ -413,36 +430,72 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     setProjectActionMessage(`成片「${values.title}」元数据已更新。`);
   };
 
-  const archiveProject = async () => {
-    setProjectActionError(null);
-    setProjectActionMessage(null);
-    try {
-      await mutations.archiveProject.mutateAsync({ projectRefId });
-      setProjectActionMessage('项目已归档，现有成片、版本、意见、定稿和文件保持可读。');
-    } catch (caught) {
-      setProjectActionError(actionError(caught));
-    }
-  };
-
-  const restoreProject = async () => {
-    setProjectActionError(null);
-    setProjectActionMessage(null);
-    try {
-      await mutations.restoreProject.mutateAsync({ projectRefId });
-      setProjectActionMessage('项目已恢复，可继续剪辑管理。');
-    } catch (caught) {
-      setProjectActionError(actionError(caught));
-    }
-  };
-
   const deleteProject = async () => {
     setProjectActionError(null);
     setProjectActionMessage(null);
-    const confirmed = window.confirm(`确认删除项目「${project.name}」？删除后项目会从审阅列表移除，历史记录和媒体文件仍保留。`);
+    const confirmed = window.confirm(`确认永久删除项目「${project.name}」及其分集、版本、意见和可安全释放的媒体文件？该操作无法撤销；已定稿项目必须先撤销全部定稿。`);
     if (!confirmed) return;
     try {
       await mutations.deleteProject.mutateAsync({ projectRefId, confirmed: true });
       navigate(`/${props.entryMode}/projects`);
+    } catch (caught) {
+      setProjectActionError(actionError(caught));
+    }
+  };
+
+  const allFinalized = items.length > 0 && items.every(
+    (item) => item.status === 'finalized' && item.finalization?.status === 'active',
+  );
+
+  const runProjectFinalizationCommand = async () => {
+    setProjectActionError(null);
+    setProjectActionMessage(null);
+    const confirmed = window.confirm(allFinalized ? '确认撤销该项目全部分集的定稿？' : '确认一次性定稿该项目全部未定稿分集？');
+    if (!confirmed) return;
+    try {
+      if (allFinalized) {
+        await mutations.revokeProjectFinalization.mutateAsync({ projectRefId, confirmed: true });
+        setProjectActionMessage('已撤销全部定稿。');
+      } else {
+        await mutations.finalizeProject.mutateAsync({ projectRefId, confirmed: true });
+        setProjectActionMessage('项目全部分集已定稿。');
+      }
+    } catch (caught) {
+      setProjectActionError(actionError(caught));
+    }
+  };
+
+  const lockLegacyFrameRate = async () => {
+    const [fpsNum, fpsDen] = legacyFrameRate.split('/').map(Number);
+    setProjectActionError(null);
+    try {
+      await mutations.lockProjectFrameRate.mutateAsync({
+        projectRefId,
+        frameRate: { fpsNum, fpsDen },
+      });
+      setProjectActionMessage(`项目帧率已锁定为 ${fpsNum}/${fpsDen} fps。`);
+    } catch (caught) {
+      setProjectActionError(actionError(caught));
+    }
+  };
+
+  const saveResponsibleEditor = async () => {
+    setProjectActionError(null);
+    try {
+      const current = responsibleEditors.data?.find(
+        (editor) => editor.responsibleEditorId === editingEditorId,
+      );
+      if (current) {
+        await mutations.renameResponsibleEditor.mutateAsync({
+          responsibleEditorId: current.responsibleEditorId,
+          displayName: editorDisplayName,
+          lockVersion: current.lockVersion,
+        });
+      } else {
+        await mutations.createResponsibleEditor.mutateAsync({ displayName: editorDisplayName });
+      }
+      setEditorManagerOpen(false);
+      setProjectActionMessage('责任剪辑师目录已更新。');
     } catch (caught) {
       setProjectActionError(actionError(caught));
     }
@@ -607,19 +660,22 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
               setProjectActionMessage({ display: 'prominent', kind: 'package-download' });
             }}
           />
-          {isArchived ? (
-            <CapabilityGate entryMode={props.entryMode} capability="review.project.restore">
-              <button className="fj-review-secondary" disabled={projectActionPending} onClick={restoreProject} type="button">
-                恢复项目
+          {!isArchived ? (
+            <CapabilityGate
+              entryMode={props.entryMode}
+              capability={allFinalized ? 'review.finalization.revoke' : 'review.finalization.create'}
+            >
+              <button
+                className={`fj-review-secondary ${allFinalized ? 'is-warning' : 'is-success'}`}
+                data-testid="project-finalization-command"
+                disabled={projectActionPending || items.length === 0}
+                onClick={() => void runProjectFinalizationCommand()}
+                type="button"
+              >
+                {allFinalized ? '撤销全部定稿' : '全部定稿'}
               </button>
             </CapabilityGate>
-          ) : (
-            <CapabilityGate entryMode={props.entryMode} capability="review.project.archive">
-              <button className="fj-review-secondary" disabled={projectActionPending} onClick={archiveProject} type="button">
-                归档项目
-              </button>
-            </CapabilityGate>
-          )}
+          ) : null}
           {!isArchived ? (
             <CapabilityGate entryMode={props.entryMode} capability="review.project.delete">
               <button className="fj-review-secondary is-danger" disabled={projectActionPending} onClick={deleteProject} type="button">
@@ -719,13 +775,48 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
             <strong>项目已归档</strong>
             <span>归档状态只允许查看既有资料；恢复项目后才能创建成片、上传版本或执行写操作。</span>
           </section>
+        ) : !project.frameRate ? (
+          <section className="fj-review-readonly-notice" data-testid="legacy-frame-rate-lock">
+            <strong>上传 V1 前请人工锁定项目帧率</strong>
+            <span>老项目不会从既有视频自动推断或追溯锁定帧率。</span>
+            <label>
+              <span>项目帧率</span>
+              <select aria-label="待锁定项目帧率" value={legacyFrameRate} onChange={(event) => setLegacyFrameRate(event.target.value)}>
+                <option value="24000/1001">24000/1001</option><option value="24/1">24</option>
+                <option value="25/1">25</option><option value="30000/1001">30000/1001</option>
+                <option value="30/1">30</option><option value="50/1">50</option>
+                <option value="60000/1001">60000/1001</option><option value="60/1">60</option>
+              </select>
+            </label>
+            <button className="fj-review-primary" disabled={mutations.lockProjectFrameRate.isPending} onClick={() => void lockLegacyFrameRate()} type="button">
+              {mutations.lockProjectFrameRate.isPending ? '锁定中...' : '锁定项目帧率'}
+            </button>
+          </section>
         ) : (
           <CapabilityGate entryMode={props.entryMode} capability="review.item.create">
-            <CreateItemUploadPanel
-              pending={mutations.createReviewItemWithVersion.isPending}
-              blockedForListConfirmation={v1ListConfirmationRequired}
-              setBulkActionsHost={setBulkActionsHost}
-              existingEpisodes={items.map((item) => item.episode)}
+            <button className="fj-review-primary" onClick={() => setV1UploadOpen(true)} type="button">
+              创建并上传 V1
+            </button>
+            <CenteredModal
+              onClose={() => setV1UploadOpen(false)}
+              open={v1UploadOpen}
+              pending={mutations.createReviewItemWithVersion.isPending || activeV1UploadCount > 0}
+              testId="v1-upload-modal"
+              title="创建成片并上传 V1"
+            >
+              <CreateItemUploadPanel
+                pending={mutations.createReviewItemWithVersion.isPending}
+                blockedForListConfirmation={v1ListConfirmationRequired}
+                existingEpisodes={items.map((item) => item.episode)}
+                mediaMetadata={mediaMetadata}
+                projectFrameRate={project.frameRate}
+                responsibleEditors={responsibleEditors.data ?? []}
+                onEditResponsibleEditor={() => {
+                  const first = responsibleEditors.data?.[0] ?? null;
+                  setEditingEditorId(first?.responsibleEditorId ?? null);
+                  setEditorDisplayName(first?.displayName ?? '');
+                  setEditorManagerOpen(true);
+                }}
               onSubmit={async (input, onProgress) => {
                 const parsedInput = uploadSchema.safeParse(input);
                 if (!parsedInput.success) {
@@ -734,7 +825,15 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
                     message: parsedInput.error.issues[0]?.message ?? '成片信息校验失败。',
                   };
                 }
-                const validatedInput = parsedInput.data;
+                if (!input.responsibleEditorId || !input.responsibleEditorNameSnapshot || !input.localProbe) {
+                  return { outcome: 'failed' as const, message: '责任剪辑师和媒体预检结果必填。' };
+                }
+                const validatedInput = {
+                  ...parsedInput.data,
+                  responsibleEditorId: input.responsibleEditorId,
+                  responsibleEditorNameSnapshot: input.responsibleEditorNameSnapshot,
+                  localProbe: input.localProbe,
+                };
                 setProjectActionError(null);
                 setProjectActionMessage(null);
                 onProgress?.({ stage: 'validating', percent: 0, totalBytes: validatedInput.file.size });
@@ -786,9 +885,41 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
                   return { outcome: 'failed' as const, message: actionError(caught) };
                 }
               }}
-            />
+              />
+            </CenteredModal>
+            <CenteredModal
+              onClose={() => setEditorManagerOpen(false)}
+              open={editorManagerOpen}
+              pending={mutations.createResponsibleEditor.isPending || mutations.renameResponsibleEditor.isPending}
+              testId="responsible-editor-modal"
+              title="编辑责任剪辑师"
+            >
+              <label>
+                <span>待编辑责任剪辑师</span>
+                <select
+                  aria-label="待编辑责任剪辑师"
+                  value={editingEditorId ?? ''}
+                  onChange={(event) => {
+                    const editor = responsibleEditors.data?.find((candidate) => candidate.responsibleEditorId === event.target.value) ?? null;
+                    setEditingEditorId(editor?.responsibleEditorId ?? null);
+                    setEditorDisplayName(editor?.displayName ?? '');
+                  }}
+                >
+                  <option value="">新建责任剪辑师</option>
+                  {(responsibleEditors.data ?? []).map((editor) => (
+                    <option key={editor.responsibleEditorId} value={editor.responsibleEditorId}>{editor.displayName}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>显示名称</span>
+                <input aria-label="责任剪辑师显示名称" value={editorDisplayName} onChange={(event) => setEditorDisplayName(event.target.value)} />
+              </label>
+              <button className="fj-review-primary" disabled={!editorDisplayName.trim()} onClick={() => void saveResponsibleEditor()} type="button">保存责任剪辑师</button>
+            </CenteredModal>
           </CapabilityGate>
         )}
+        <span className="fj-review-project-bulk-actions-host" ref={setBulkActionsHost} />
         <ProjectDetailItemList
           entryMode={props.entryMode}
           episodeGroups={episodeGroups}
@@ -802,6 +933,7 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
           onRetryFinalizationCleanup={retryFinalizationCleanup}
           onUpdateReviewItemMetadata={updateReviewItemMetadata}
           projectRefId={projectRefId}
+          projectFrameRate={project.frameRate}
           revocationUncertainIds={revocationUncertainIds}
         />
       </section>

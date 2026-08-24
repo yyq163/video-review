@@ -114,6 +114,9 @@ export function ProjectMetadataEditor(props: {
             name: props.project.name,
             code: props.project.code,
             description: props.project.description,
+            frameRate: props.project.frameRate
+              ? `${props.project.frameRate.fpsNum}/${props.project.frameRate.fpsDen}` as ProjectFormValues['frameRate']
+              : undefined,
           }}
           pending={props.pending}
           submitLabel="保存项目资料"

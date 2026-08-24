@@ -60,6 +60,7 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [activeTextEditor, setActiveTextEditor] = useState<{ scopeKey: string; shapeId: string } | null>(null);
   const activeScopeRef = useRef(options.scopeKey);
+  const suppressPlaybackClickRef = useRef(false);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const activeTextShapeId = activeTextEditor?.scopeKey === options.scopeKey ? activeTextEditor.shapeId : null;
 
@@ -200,6 +201,7 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
   };
 
   const beginDraw = (event: PointerEvent<HTMLDivElement>) => {
+    suppressPlaybackClickRef.current = false;
     if (options.readonly) return;
     const point = pointFromEvent(event);
     if (!point) return;
@@ -213,6 +215,7 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
       renderedVideo.height,
     );
     if (existingShape) {
+      suppressPlaybackClickRef.current = true;
       setSelectedShapeId(existingShape.shapeId);
       closeTextEditor();
       draggingRef.current = {
@@ -228,6 +231,7 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
       return;
     }
     if (tool === 'select') return;
+    suppressPlaybackClickRef.current = true;
     setSelectedShapeId(null);
     options.videoRef.current?.pause();
     options.onPause();
@@ -356,12 +360,19 @@ export function useReviewPlayerAnnotations(options: AnnotationOptions) {
     if (activeTextShapeId) updateDraftTextShape(activeTextShapeId, { fontSize: clamped });
   };
 
+  const consumePlaybackClickSuppression = () => {
+    const suppressed = suppressPlaybackClickRef.current;
+    suppressPlaybackClickRef.current = false;
+    return suppressed;
+  };
+
   return {
     activeShape,
     activeTextShapeId,
     beginDraw,
     clearDraft,
     closeTextEditor,
+    consumePlaybackClickSuppression,
     color,
     draftShapes,
     endDraw,

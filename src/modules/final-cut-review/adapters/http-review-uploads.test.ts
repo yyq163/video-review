@@ -19,6 +19,20 @@ import {
 } from './http-review-uploads';
 
 const BASE_URL = 'https://review.example';
+const uploadBinding = {
+  responsibleEditorId: 'editor-task5',
+  responsibleEditorNameSnapshot: '剪辑师甲',
+  localProbe: {
+    durationMs: 1_000,
+    width: 1920,
+    height: 1080,
+    bitrateBps: 8_000_000,
+    fpsNum: 25,
+    fpsDen: 1,
+    isVariableFrameRate: false as const,
+    probeVersion: 'mediainfo.js-0.3.7' as const,
+  },
+};
 
 afterEach(() => {
   vi.useRealTimers();
@@ -326,10 +340,28 @@ describe('HTTP review upload idempotency', () => {
       title: item.title,
       episode: '1',
       file,
+      ...uploadBinding,
     }, context('release-v1'))).resolves.toMatchObject({ item: { reviewItemId: item.id } });
 
     expect(releaseCompleted).toHaveBeenCalledOnce();
     expect(releaseCompleted).toHaveBeenCalledWith(file, completed.upload_id);
+    expect(transport.command).toHaveBeenCalledWith(
+      expect.any(String),
+      'CreateReviewItem',
+      expect.objectContaining({
+        responsible_editor_id: uploadBinding.responsibleEditorId,
+        responsible_editor_name_snapshot: uploadBinding.responsibleEditorNameSnapshot,
+        local_probe_claim: {
+          fps_num: 25,
+          fps_den: 1,
+          is_variable_frame_rate: false,
+          probe_version: 'mediainfo.js-0.3.7',
+        },
+      }),
+      expect.anything(),
+      undefined,
+      expect.anything(),
+    );
   });
 
   it('rejects an unsupported extension before creating an upload session', async () => {
@@ -472,6 +504,7 @@ describe('HTTP review upload idempotency', () => {
         versionNote: `${expectedLabel} note`,
         changeSummary: `${expectedLabel} changes`,
         supersedeReason: '',
+        ...uploadBinding,
       };
 
       await expect(uploads.appendVersion(input, context('first'))).rejects.toThrow('append response lost');
@@ -505,6 +538,16 @@ describe('HTTP review upload idempotency', () => {
       expect(firstCall?.[1]).toBe('UploadReviewVersion');
       expect(retryCall?.[1]).toBe('UploadReviewVersion');
       expect(firstCall?.[2]).toEqual(retryCall?.[2]);
+      expect(firstCall?.[2]).toEqual(expect.objectContaining({
+        responsible_editor_id: uploadBinding.responsibleEditorId,
+        responsible_editor_name_snapshot: uploadBinding.responsibleEditorNameSnapshot,
+        local_probe_claim: {
+          fps_num: 25,
+          fps_den: 1,
+          is_variable_frame_rate: false,
+          probe_version: 'mediainfo.js-0.3.7',
+        },
+      }));
       expect(firstCall?.[4]).toBe(item.lock_version);
       expect(retryCall?.[4]).toBe(item.lock_version);
       expect(firstOptions.idempotent).toBe(true);

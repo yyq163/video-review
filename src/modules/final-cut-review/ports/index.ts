@@ -17,6 +17,7 @@ import type {
   UploadProgress,
   ReviewVersion,
   ReviewWorkspace,
+  ResponsibleEditor,
   StoredOriginalFile,
   VersionId,
 } from '../contracts/types';
@@ -57,6 +58,12 @@ export interface ReviewProjectSummaryItem extends ReviewItemWithMetadata {
     versionLabel: string;
     durationMs: number;
     fileSize: number;
+    width: number;
+    height: number;
+    fpsNum: number;
+    fpsDen: number;
+    responsibleEditorId: string | null;
+    responsibleEditorNameSnapshot: string | null;
     playbackStatus: 'pending' | 'ready' | 'failed';
     playbackUrl: string | null;
     thumbnailStatus: 'pending' | 'ready' | 'failed';
@@ -83,6 +90,7 @@ export interface ReviewProjectSummary {
 
 export interface ReviewQueryPort {
   listProjects(options?: QueryOptions): Promise<Project[]>;
+  listResponsibleEditors(options?: QueryOptions): Promise<ResponsibleEditor[]>;
   getProjectSummary(projectRefId: ProjectRefId, options?: QueryOptions): Promise<ReviewProjectSummary>;
   getReviewItem(
     params: { projectRefId: ProjectRefId; reviewItemId: ReviewItemId },
@@ -137,15 +145,38 @@ export interface ReviewCommandPort {
     },
     context: ExecutionContext,
   ): Promise<Project>;
+  lockProjectFrameRate(
+    input: { projectRefId: ProjectRefId; frameRate: ReviewFrameRate },
+    context: ExecutionContext,
+  ): Promise<Project>;
+  createResponsibleEditor(
+    input: { displayName: string },
+    context: ExecutionContext,
+  ): Promise<ResponsibleEditor>;
+  renameResponsibleEditor(
+    input: { responsibleEditorId: string; displayName: string; lockVersion: number },
+    context: ExecutionContext,
+  ): Promise<ResponsibleEditor>;
   archiveProject(input: { projectRefId: ProjectRefId }, context: ExecutionContext): Promise<Project>;
   restoreProject(input: { projectRefId: ProjectRefId }, context: ExecutionContext): Promise<Project>;
   deleteProject(input: { projectRefId: ProjectRefId; confirmed: true }, context: ExecutionContext): Promise<Project>;
+  finalizeProject(
+    input: { projectRefId: ProjectRefId; confirmed: true },
+    context: ExecutionContext,
+  ): Promise<ReviewProjectSummary>;
+  revokeProjectFinalization(
+    input: { projectRefId: ProjectRefId; confirmed: true },
+    context: ExecutionContext,
+  ): Promise<ReviewProjectSummary>;
   createReviewItemWithVersion(
     input: {
       projectRefId: ProjectRefId;
       title: string;
       episode: string;
       file: File;
+      responsibleEditorId?: string;
+      responsibleEditorNameSnapshot?: string;
+      localProbe?: MediaMetadata;
       onProgress?: (progress: UploadProgress) => void;
     },
     context: ExecutionContext,
@@ -184,6 +215,9 @@ export interface ReviewCommandPort {
       projectRefId: ProjectRefId;
       reviewItemId: ReviewItemId;
       file: File;
+      responsibleEditorId?: string;
+      responsibleEditorNameSnapshot?: string;
+      localProbe?: MediaMetadata;
       versionNote?: string;
       changeSummary?: string;
       supersedeReason?: string;
@@ -298,7 +332,7 @@ export interface ReviewCommandPort {
 }
 
 export interface FileStoragePort {
-  storeOriginal(file: File): Promise<StoredOriginalFile>;
+  storeOriginal(file: File, metadata?: MediaMetadata): Promise<StoredOriginalFile>;
   getOriginal(originalFileId: string): Promise<StoredOriginalFile>;
   seedOriginal(record: StoredOriginalFile): StoredOriginalFile;
 }

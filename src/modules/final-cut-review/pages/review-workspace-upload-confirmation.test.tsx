@@ -58,6 +58,18 @@ describe('review workspace append-version confirmation', () => {
       versionNote: '不得持久化的 V3 说明',
       changeSummary: '不得持久化的 V3 payload',
       supersedeReason: '',
+      responsibleEditorId: 'editor_seed',
+      responsibleEditorNameSnapshot: '剪辑师甲',
+      localProbe: {
+        durationMs: 60_500,
+        width: 1920,
+        height: 1080,
+        bitrateBps: 8_000_000,
+        fpsNum: 25,
+        fpsDen: 1,
+        isVariableFrameRate: false,
+        probeVersion: 'mediainfo.js-0.3.7',
+      },
     }, reviewApi.entryPolicy.createContext('edit'))).rejects.toThrow('append response lost after commit');
     expect(isAppendVersionConfirmationRequired(PROJECT_REF_ID, REVIEW_ITEM_ID)).toBe(true);
 

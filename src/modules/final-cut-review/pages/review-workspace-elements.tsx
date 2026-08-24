@@ -18,6 +18,7 @@ export function EpisodeStrip(props: {
   unresolvedCounts: Record<string, number>;
   currentVersionLabels: Record<string, string>;
   currentFileNames: Record<string, string>;
+  currentDurationsMs?: Record<string, number>;
   entryMode: EntryMode;
   isArchived: boolean;
   itemActionPending: boolean;
@@ -97,6 +98,12 @@ export function EpisodeStrip(props: {
           const unresolvedCount = props.unresolvedCounts[item.reviewItemId] ?? 0;
           const currentVersionLabel = props.currentVersionLabels[item.reviewItemId] ?? '-';
           const currentFileName = props.currentFileNames[item.reviewItemId] ?? '-';
+          const durationSeconds = Math.floor(Math.max(0, props.currentDurationsMs?.[item.reviewItemId] ?? 0) / 1000);
+          const durationClass = durationSeconds < 51
+            ? 'is-short'
+            : durationSeconds < 61
+              ? 'is-warning'
+              : 'is-standard';
           const selected = item.reviewItemId === props.currentItemId;
           const storedRevokeState = revokeUiStates[item.reviewItemId];
           const externallyUncertain = props.revocationUncertainIds.has(
@@ -152,6 +159,12 @@ export function EpisodeStrip(props: {
                 </span>
                 <span className="fj-review-episode-copy">
                   <strong>第 {item.episode} 集</strong>
+                  <span
+                    className={`fj-review-episode-duration ${durationClass}`}
+                    data-testid={`episode-duration-${item.reviewItemId}`}
+                  >
+                    {durationSeconds} 秒
+                  </span>
                   <span className="fj-review-episode-count">
                     当前版本·{currentVersionLabel}·未修改{unresolvedCount}
                   </span>

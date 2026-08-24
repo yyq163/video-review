@@ -114,9 +114,12 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
           <CapabilityGate entryMode={props.entryMode} capability="review.version.upload">
             <AppendVersionPanel
               key={controller.nextLabel}
+              mediaMetadata={controller.mediaMetadata}
               nextLabel={controller.nextLabel}
               pending={mutations.appendVersion.isPending}
               progress={controller.uploadProgress}
+              projectFrameRate={data.project.frameRate ?? null}
+              responsibleEditors={controller.responsibleEditors}
               onSubmit={actions.appendVersion}
             />
           </CapabilityGate>
@@ -131,6 +134,7 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
             unresolvedCounts={controller.episodeUnresolvedCounts}
             currentVersionLabels={controller.episodeCurrentVersionLabels}
             currentFileNames={controller.episodeCurrentFileNames}
+            currentDurationsMs={controller.episodeCurrentDurationsMs}
             revocationUncertainIds={controller.revocationUncertainIds}
             onRevokeFinalization={
               controller.canRevokeEpisodeFinalization

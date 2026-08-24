@@ -6,6 +6,7 @@ import { createDemoVideoFile } from '../core/demo-video';
 export const projectSchema = z.object({
   name: z.string().trim().min(1, '项目名称必填').max(255, '项目名称最多 255 个字符'),
   code: z.string().trim().min(1, '项目编号必填').max(128, '项目编号最多 128 个字符'),
+  frameRate: z.enum(['24000/1001', '24/1', '25/1', '30000/1001', '30/1', '50/1', '60000/1001', '60/1']).optional(),
   description: z.string().trim().max(2000, '项目说明最多 2000 个字符'),
 });
 
@@ -23,6 +24,7 @@ export function ProjectForm(props: {
     defaultValues: props.defaultValues ?? {
       name: '',
       code: '',
+      frameRate: '25/1',
       description: '',
     },
   });
@@ -33,6 +35,20 @@ export function ProjectForm(props: {
         <span>项目名称</span>
         <input {...form.register('name')} placeholder="真千金是男的" />
         {form.formState.errors.name && <em>{form.formState.errors.name.message}</em>}
+      </label>
+      <label>
+        <span>项目帧率</span>
+        <select aria-label="项目帧率" {...form.register('frameRate')} disabled={props.codeReadOnly}>
+          {!form.getValues('frameRate') ? <option value="">未锁定</option> : null}
+          <option value="24000/1001">23.976 fps（24000/1001）</option>
+          <option value="24/1">24 fps</option>
+          <option value="25/1">25 fps</option>
+          <option value="30000/1001">29.97 fps（30000/1001）</option>
+          <option value="30/1">30 fps</option>
+          <option value="50/1">50 fps</option>
+          <option value="60000/1001">59.94 fps（60000/1001）</option>
+          <option value="60/1">60 fps</option>
+        </select>
       </label>
       <label>
         <span>{props.codeReadOnly ? '项目编号' : '项目编码'}</span>
@@ -49,6 +65,11 @@ export function ProjectForm(props: {
       </button>
     </form>
   );
+}
+
+export function frameRateFromFormValue(value: ProjectFormValues['frameRate']) {
+  const [fpsNum = '25', fpsDen = '1'] = (value ?? '25/1').split('/');
+  return { fpsNum: Number(fpsNum), fpsDen: Number(fpsDen) };
 }
 
 export const uploadSchema = z.object({

@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import type { EntryMode, Project } from '../contracts/types';
 import { ProjectForm, type ProjectFormValues } from '../components/ProjectForms';
+import { CenteredModal } from '../components/CenteredModal';
 import { CapabilityGate, EmptyState, ErrorView, LoadingBlock, StatusBadge } from '../components/shared';
 import {
   ProjectListControls,
@@ -29,6 +30,7 @@ export function ProjectListContent(props: {
   safePage: number;
   totalPages: number;
   onSubmitProject(values: ProjectFormValues): Promise<void>;
+  onCloseCreate(): void;
   onQueryChange(value: string): void;
   onLifecycleChange(value: LifecycleFilter): void;
   onCompletionChange(value: CompletionFilter): void;
@@ -48,13 +50,19 @@ export function ProjectListContent(props: {
         </div>
         <p>{props.entryMode === 'edit' ? '创建项目、上传版本和下载已定稿单片。' : '审阅项目、处理意见、定稿和打包。'}</p>
       </div>
-      {props.creating && (
-        <section className="fj-review-side-form">
-          <h2>新建项目</h2>
+      <CenteredModal
+        onClose={props.onCloseCreate}
+        open={props.creating}
+        pending={props.createPending}
+        testId="create-project-modal"
+        title="新建项目"
+      >
           <ProjectForm submitLabel="创建项目" pending={props.createPending} onSubmit={props.onSubmitProject} />
+          <button className="fj-review-secondary" disabled={props.createPending} onClick={props.onCloseCreate} type="button">
+            取消
+          </button>
           {props.createError && <div className="fj-review-error">{props.createError}</div>}
-        </section>
-      )}
+      </CenteredModal>
       <ProjectListControls
         query={props.query}
         lifecycleFilter={props.lifecycleFilter}

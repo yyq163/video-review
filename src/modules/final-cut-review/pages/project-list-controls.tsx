@@ -1,5 +1,5 @@
 export type LifecycleFilter = 'all' | 'active' | 'archived';
-export type CompletionFilter = 'all' | 'empty' | 'unfinished' | 'completed';
+export type CompletionFilter = 'all' | 'unfinished' | 'completed';
 export type UpdatedSort = 'updated-desc' | 'updated-asc';
 
 function FilterButtonGroup<TValue extends string>(props: {
@@ -68,7 +68,6 @@ export function ProjectListControls(props: {
         value={props.completionFilter}
         options={[
           { value: 'all', label: '全部' },
-          { value: 'empty', label: '未创建成片' },
           { value: 'unfinished', label: '未完成' },
           { value: 'completed', label: '已完成' },
         ]}

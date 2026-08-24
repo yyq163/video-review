@@ -55,6 +55,8 @@ export function makeVersion(input: {
   status: ReviewVersion['status'];
   uploadedAt: string;
   requestedChangesAt: string | null;
+  responsibleEditorId?: string;
+  responsibleEditorNameSnapshot?: string;
 }): ReviewVersion {
   const media = originalMedia(input.file);
   return {
@@ -74,6 +76,8 @@ export function makeVersion(input: {
     height: media.height,
     fpsNum: media.fpsNum,
     fpsDen: media.fpsDen,
+    responsibleEditorId: input.responsibleEditorId ?? null,
+    responsibleEditorNameSnapshot: input.responsibleEditorNameSnapshot ?? null,
     playbackStatus: 'ready',
     playbackAssetId: `playback_${input.versionId}`,
     playbackUrl: input.file.playbackUrl || `/mock-playback/${input.versionId}`,

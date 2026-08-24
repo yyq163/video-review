@@ -9,6 +9,7 @@ import type {
 import { ReviewDomainError, invariant } from '../core/errors';
 import { createUuid } from '../core/uuid';
 import type { ReviewItemWithMetadata } from '../ports';
+import type { MediaMetadata } from '../ports';
 import { cloneVersion, nowIso, originalMediaFromFile } from './in-memory-review-clones';
 import type { InMemoryReviewStore } from './in-memory-review-store';
 
@@ -30,8 +31,23 @@ export class InMemoryReviewItems {
     title: string;
     episode: string;
     file: StoredOriginalFile;
+    responsibleEditorId?: string;
+    responsibleEditorNameSnapshot?: string;
+    localProbe?: MediaMetadata;
   }): Promise<{ item: ReviewItemWithMetadata; version: ReviewVersion }> => {
-    this.store.assertProjectWritable(input.projectRefId);
+    const project = this.store.assertProjectWritable(input.projectRefId);
+    const editor = input.responsibleEditorId
+      ? this.store.getResponsibleEditor(input.responsibleEditorId)
+      : null;
+    if (input.localProbe) {
+      invariant(project.frameRate, '上传 V1 前必须先锁定项目帧率', 'RESOURCE_STATE_CONFLICT');
+      invariant(
+        project.frameRate.fpsNum === input.localProbe.fpsNum
+          && project.frameRate.fpsDen === input.localProbe.fpsDen,
+        '视频帧率与项目帧率不匹配',
+        'VALIDATION_ERROR',
+      );
+    }
     validateReviewItemTitle(input.title);
     const timestamp = nowIso();
     const reviewItemId = `item_${createUuid()}`;
@@ -54,6 +70,8 @@ export class InMemoryReviewItems {
       file: input.file,
       timestamp,
       status: 'pending_review',
+      responsibleEditorId: editor?.responsibleEditorId ?? null,
+      responsibleEditorNameSnapshot: editor?.displayName ?? null,
     });
     item.currentVersionId = version.versionId;
     this.store.items.set(item.reviewItemId, item);
@@ -176,8 +194,24 @@ export class InMemoryReviewItems {
     versionNote?: string;
     changeSummary?: string;
     supersedeReason?: string;
+    responsibleEditorId?: string;
+    responsibleEditorNameSnapshot?: string;
+    localProbe?: MediaMetadata;
   }): Promise<ReviewVersion> => {
     const item = this.ensureAppendVersionWritable(input);
+    const project = this.store.getProject(input.projectRefId);
+    const editor = input.responsibleEditorId
+      ? this.store.getResponsibleEditor(input.responsibleEditorId)
+      : null;
+    if (input.localProbe) {
+      invariant(project.frameRate, '追加版本前必须先锁定项目帧率', 'RESOURCE_STATE_CONFLICT');
+      invariant(
+        project.frameRate.fpsNum === input.localProbe.fpsNum
+          && project.frameRate.fpsDen === input.localProbe.fpsDen,
+        '视频帧率与项目帧率不匹配',
+        'VALIDATION_ERROR',
+      );
+    }
     const previousVersions = this.store.getVersionsForItem(input.projectRefId, input.reviewItemId);
     const timestamp = nowIso();
     const version = this.buildVersion({
@@ -189,6 +223,8 @@ export class InMemoryReviewItems {
       status: 'pending_review',
       versionNote: input.versionNote,
       changeSummary: input.changeSummary || input.supersedeReason,
+      responsibleEditorId: editor?.responsibleEditorId ?? null,
+      responsibleEditorNameSnapshot: editor?.displayName ?? null,
     });
     this.store.versions.set(version.versionId, version);
     this.store.items.set(item.reviewItemId, {
@@ -241,6 +277,8 @@ export class InMemoryReviewItems {
     status: ReviewVersion['status'];
     versionNote?: string | null;
     changeSummary?: string | null;
+    responsibleEditorId?: string | null;
+    responsibleEditorNameSnapshot?: string | null;
   }): ReviewVersion {
     const versionId = `ver_${createUuid()}`;
     const media = originalMediaFromFile(input.file);
@@ -261,6 +299,8 @@ export class InMemoryReviewItems {
       height: media.height,
       fpsNum: media.fpsNum,
       fpsDen: media.fpsDen,
+      responsibleEditorId: input.responsibleEditorId ?? null,
+      responsibleEditorNameSnapshot: input.responsibleEditorNameSnapshot ?? null,
       playbackStatus: 'ready',
       playbackAssetId: `playback_${versionId}`,
       playbackUrl: input.file.playbackUrl,

@@ -57,6 +57,7 @@ export function ReviewTimeline(props: ReviewTimelineProps) {
         <input
           type="range"
           aria-label="视频时间轴"
+          data-player-timeline-range="true"
           min={0}
           max={durationMs}
           value={props.currentMs}

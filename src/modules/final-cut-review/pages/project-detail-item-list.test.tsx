@@ -42,6 +42,12 @@ function summaryItem(
       versionLabel: version.label,
       durationMs: version.durationMs,
       fileSize: version.size,
+      width: version.width,
+      height: version.height,
+      fpsNum: version.fpsNum,
+      fpsDen: version.fpsDen,
+      responsibleEditorId: version.responsibleEditorId ?? null,
+      responsibleEditorNameSnapshot: version.responsibleEditorNameSnapshot ?? null,
       playbackStatus: 'ready',
       playbackUrl: `/stream/${id}`,
       thumbnailStatus: 'ready',
@@ -146,6 +152,9 @@ describe('ProjectDetailItemList summary rendering', () => {
         id: 'item-current-v4',
         versionNo: 4,
         versionLabel: 'V4',
+        durationMs: 61_040,
+        fpsNum: 25,
+        fpsDen: 1,
         thumbnailStatus: 'ready',
         thumbnailUrl: '/api/v1/final-cut-review/projects/p/items/i/versions/v/thumbnail',
       },
@@ -161,6 +170,7 @@ describe('ProjectDetailItemList summary rendering', () => {
     expect(thumbnail).toHaveAttribute('alt', '第07集 V4 缩略图');
     expect(screen.getByTestId('item-row-version-watermark-item-current')).toHaveTextContent('V4');
     expect(screen.getByTestId('item-row-count-watermark-item-current')).toHaveTextContent('3');
+    expect(screen.getByTestId('item-row-timecode-item-current')).toHaveTextContent('00:01:01:01');
     expect(screen.queryByRole('checkbox', { name: /选择第/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });

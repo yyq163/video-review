@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties, type PointerEventHandler, type RefCallback } from 'react';
+import { useRef, type CSSProperties, type MouseEventHandler, type PointerEventHandler, type RefCallback } from 'react';
 import type { ReviewAnnotationSet, ReviewAnnotationShape, ReviewVersion } from '../contracts/types';
 import type { ContainedVideoRect } from '../core/coordinates';
 import { DraftAnnotationLayer, SavedAnnotationLayer } from './review-player-annotation-layers';
@@ -66,6 +66,7 @@ interface ReviewPlayerStageProps {
   onBeginDraw: PointerEventHandler<HTMLDivElement>;
   onMoveDraw: PointerEventHandler<HTMLDivElement>;
   onEndDraw: PointerEventHandler<HTMLDivElement>;
+  onStageClick: MouseEventHandler<HTMLDivElement>;
   onMediaDimensions(video: HTMLVideoElement): void;
   onLoadedMetadata(video: HTMLVideoElement): void;
   onCanPlay(): void;
@@ -103,6 +104,7 @@ export function ReviewPlayerStage({
   onBeginDraw,
   onMoveDraw,
   onEndDraw,
+  onStageClick,
   onMediaDimensions,
   onLoadedMetadata,
   onCanPlay,
@@ -135,6 +137,7 @@ export function ReviewPlayerStage({
         onPointerMove={onMoveDraw}
         onPointerUp={onEndDraw}
         onPointerCancel={onEndDraw}
+        onClick={onStageClick}
       >
         {playbackReady ? (
           <video

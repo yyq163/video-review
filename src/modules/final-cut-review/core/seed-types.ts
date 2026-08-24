@@ -4,6 +4,7 @@ import type {
   ReviewIssue,
   ReviewItem,
   ReviewVersion,
+  ResponsibleEditor,
   StoredOriginalFile,
 } from '../contracts/types';
 
@@ -13,5 +14,6 @@ export interface SeedData {
   versions: ReviewVersion[];
   issues: ReviewIssue[];
   finalizations: FinalizationRecord[];
+  responsibleEditors: ResponsibleEditor[];
   files: StoredOriginalFile[];
 }

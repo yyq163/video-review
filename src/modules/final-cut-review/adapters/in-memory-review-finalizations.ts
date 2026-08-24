@@ -56,6 +56,25 @@ export class InMemoryReviewFinalizations {
     return cloneFinalization(finalization);
   };
 
+  readonly finalizeProject = async (input: {
+    projectRefId: ProjectRefId;
+    confirmed: true;
+  }): Promise<void> => {
+    invariant(input.confirmed === true, '全部定稿必须二次确认', 'RESOURCE_STATE_CONFLICT');
+    this.store.assertProjectWritable(input.projectRefId);
+    const items = [...this.store.items.values()].filter(
+      (item) => item.projectRefId === input.projectRefId,
+    );
+    for (const item of items) {
+      if (item.status === 'finalized') continue;
+      await this.finalizeCurrentVersion({
+        projectRefId: input.projectRefId,
+        reviewItemId: item.reviewItemId,
+        versionId: item.currentVersionId,
+      });
+    }
+  };
+
   readonly revokeFinalization = async (input: {
     projectRefId: ProjectRefId;
     reviewItemId: ReviewItemId;
@@ -84,6 +103,23 @@ export class InMemoryReviewFinalizations {
       cleanupStatus: 'complete',
       invalidatedPackageIds: [],
     };
+  };
+
+  readonly revokeProjectFinalization = async (input: {
+    projectRefId: ProjectRefId;
+    confirmed: true;
+  }): Promise<void> => {
+    invariant(input.confirmed === true, '撤销全部定稿必须二次确认', 'RESOURCE_STATE_CONFLICT');
+    this.store.assertProjectWritable(input.projectRefId);
+    const finalizedItems = [...this.store.items.values()].filter(
+      (item) => item.projectRefId === input.projectRefId && item.status === 'finalized',
+    );
+    for (const item of finalizedItems) {
+      await this.revokeFinalization({
+        projectRefId: input.projectRefId,
+        reviewItemId: item.reviewItemId,
+      });
+    }
   };
 
   readonly retryFinalizationCleanup = async (input: {

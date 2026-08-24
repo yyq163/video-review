@@ -2,8 +2,18 @@ import { useCallback, useEffect } from 'react';
 import type { ReviewVersion } from '../contracts/types';
 import type { AnnotationEditorTool } from './review-player-types';
 
-function isNativeShortcutTarget(target: EventTarget | null): boolean {
+function isTimelineRangeSpace(target: EventTarget | null, key: string): boolean {
+  return (
+    (key === ' ' || key === 'Spacebar') &&
+    target instanceof HTMLInputElement &&
+    target.type === 'range' &&
+    target.dataset.playerTimelineRange === 'true'
+  );
+}
+
+function isNativeShortcutTarget(target: EventTarget | null, key: string): boolean {
   if (!(target instanceof Element)) return false;
+  if (isTimelineRangeSpace(target, key)) return false;
   if (
     target instanceof HTMLElement &&
     (
@@ -40,7 +50,7 @@ export function useReviewPlayerKeyboard(options: {
   } = options;
   const handleKeyboardShortcut = useCallback(
     (event: KeyboardEvent) => {
-      if (event.defaultPrevented || isNativeShortcutTarget(event.target)) return;
+      if (event.defaultPrevented || isNativeShortcutTarget(event.target, event.key)) return;
       if (event.key === ' ' || event.key === 'Spacebar') {
         event.preventDefault();
         void togglePlay();

@@ -49,6 +49,14 @@ export interface ReviewFrameRate {
   fpsDen: number;
 }
 
+export interface ResponsibleEditor {
+  responsibleEditorId: string;
+  displayName: string;
+  lockVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface NormalizedPoint {
   x: number;
   y: number;
@@ -169,6 +177,8 @@ export interface ReviewVersion {
   height: number;
   fpsNum: number;
   fpsDen: number;
+  responsibleEditorId?: string | null;
+  responsibleEditorNameSnapshot?: string | null;
   playbackStatus: 'pending' | 'ready' | 'failed';
   playbackAssetId: string | null;
   playbackUrl: string;

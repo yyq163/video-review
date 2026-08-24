@@ -7,6 +7,7 @@ import type {
   ReviewItem,
   ReviewItemId,
   ReviewVersion,
+  ResponsibleEditor,
   StoredOriginalFile,
   VersionId,
 } from '../contracts/types';
@@ -29,6 +30,7 @@ export class InMemoryReviewStore {
   readonly versions = new Map<VersionId, ReviewVersion>();
   readonly issues = new Map<IssueId, ReviewIssue>();
   readonly finalizations = new Map<string, FinalizationRecord>();
+  readonly responsibleEditors = new Map<string, ResponsibleEditor>();
 
   constructor(
     seed: Partial<InMemoryReviewRepositorySnapshot>,
@@ -47,6 +49,9 @@ export class InMemoryReviewStore {
     for (const finalization of seed.finalizations ?? []) {
       this.finalizations.set(finalization.finalizationId, cloneFinalization(finalization));
     }
+    for (const editor of seed.responsibleEditors ?? []) {
+      this.responsibleEditors.set(editor.responsibleEditorId, { ...editor });
+    }
   }
 
   readonly snapshot = (): InMemoryReviewRepositorySnapshot => ({
@@ -55,6 +60,7 @@ export class InMemoryReviewStore {
     versions: [...this.versions.values()].map(cloneVersion),
     issues: [...this.issues.values()].map(cloneIssue),
     finalizations: [...this.finalizations.values()].map(cloneFinalization),
+    responsibleEditors: [...this.responsibleEditors.values()].map((editor) => ({ ...editor })),
   });
 
   readonly relinkOriginalFiles = (files: StoredOriginalFile[]): void => {
@@ -74,6 +80,12 @@ export class InMemoryReviewStore {
     const project = this.projects.get(projectRefId);
     if (!project) throw new ReviewDomainError('项目不存在或已越界', 'PROJECT_NOT_FOUND');
     return project;
+  }
+
+  getResponsibleEditor(responsibleEditorId: string): ResponsibleEditor {
+    const editor = this.responsibleEditors.get(responsibleEditorId);
+    if (!editor) throw new ReviewDomainError('责任剪辑师选项不存在', 'RESOURCE_NOT_FOUND');
+    return editor;
   }
 
   assertProjectVisible(project: Project): void {

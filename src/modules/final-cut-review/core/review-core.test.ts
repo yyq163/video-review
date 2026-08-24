@@ -35,6 +35,21 @@ function demoFile(name: string): File {
   return new File([`demo ${name}`], name, { type: 'video/mp4' });
 }
 
+const HTTP_UPLOAD_BINDING = {
+  responsibleEditorId: 'editor_http_test',
+  responsibleEditorNameSnapshot: '剪辑师甲',
+  localProbe: {
+    durationMs: 1_000,
+    width: 1920,
+    height: 1080,
+    bitrateBps: 8_000_000,
+    fpsNum: 25,
+    fpsDen: 1,
+    isVariableFrameRate: false as const,
+    probeVersion: 'mediainfo.js-0.3.7' as const,
+  },
+};
+
 type BinaryUploadResponder = (url: string, init: RequestInit) => Promise<Response>;
 type BinaryUploadXhrListener = (event: Event) => void;
 
@@ -530,7 +545,7 @@ describe('generated HTTP envelope client', () => {
       'uploadFile',
     ).mockResolvedValue({ file_id: 'file_v1_retry' });
     const file = demoFile('retry.mp4');
-    const input = { projectRefId: 'prj_v1_retry', title: 'Retry V1', episode: '28', file };
+    const input = { projectRefId: 'prj_v1_retry', title: 'Retry V1', episode: '28', file, ...HTTP_UPLOAD_BINDING };
 
     await expect(api.createReviewItemWithVersion(input, entryPolicy.createContext('edit'))).rejects.toThrow(
       'command response uncertain after commit',
@@ -629,11 +644,11 @@ describe('generated HTTP envelope client', () => {
     const file = demoFile('fields.mp4');
 
     await api.createReviewItemWithVersion(
-      { projectRefId: 'prj_v1_fields', title: 'Fields 1', episode: '1', file },
+      { projectRefId: 'prj_v1_fields', title: 'Fields 1', episode: '1', file, ...HTTP_UPLOAD_BINDING },
       entryPolicy.createContext('edit'),
     );
     await api.createReviewItemWithVersion(
-      { projectRefId: 'prj_v1_fields', title: 'Fields 2', episode: '2', file },
+      { projectRefId: 'prj_v1_fields', title: 'Fields 2', episode: '2', file, ...HTTP_UPLOAD_BINDING },
       entryPolicy.createContext('edit'),
     );
 
@@ -1589,7 +1604,7 @@ describe('generated HTTP envelope client', () => {
         new Blob([new Uint8Array(Math.max(0, (end ?? largeFileSize) - (start ?? 0)))], { type: 'video/quicktime' }),
     } as unknown as File;
     const result = await runtime.getApi('edit').createReviewItemWithVersion(
-      { projectRefId: 'prj_http', title: 'HTTP clip', episode: '1', file },
+      { projectRefId: 'prj_http', title: 'HTTP clip', episode: '1', file, ...HTTP_UPLOAD_BINDING },
       context,
     );
 
@@ -1777,6 +1792,7 @@ describe('generated HTTP envelope client', () => {
         versionNote: 'HTTP 版本说明',
         changeSummary: 'HTTP 本次修改说明',
         supersedeReason: 'HTTP 主动补版原因',
+        ...HTTP_UPLOAD_BINDING,
       },
       context,
     );
@@ -1891,13 +1907,13 @@ describe('generated HTTP envelope client', () => {
 
     await expect(
       edit.createReviewItemWithVersion(
-        { projectRefId: 'prj_http_archived', title: 'archived', episode: '01', file: demoFile('archived-v1.mp4') },
+        { projectRefId: 'prj_http_archived', title: 'archived', episode: '01', file: demoFile('archived-v1.mp4'), ...HTTP_UPLOAD_BINDING },
         context,
       ),
     ).rejects.toMatchObject({ code: 'PROJECT_ARCHIVED_READONLY' });
     await expect(
       edit.appendVersion(
-        { projectRefId: 'prj_http_archived', reviewItemId: 'item_archived', file: demoFile('archived-v2.mp4') },
+        { projectRefId: 'prj_http_archived', reviewItemId: 'item_archived', file: demoFile('archived-v2.mp4'), ...HTTP_UPLOAD_BINDING },
         context,
       ),
     ).rejects.toMatchObject({ code: 'PROJECT_ARCHIVED_READONLY' });
@@ -1969,6 +1985,7 @@ describe('generated HTTP envelope client', () => {
           reviewItemId: 'item_http_finalized',
           file: demoFile('finalized-v3.mp4'),
           supersedeReason: '定稿后不得补版',
+          ...HTTP_UPLOAD_BINDING,
         },
         context,
       ),

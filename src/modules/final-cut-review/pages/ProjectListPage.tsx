@@ -4,14 +4,12 @@ import type { EntryMode, Project } from '../contracts/types';
 import { entryLinksFor } from '../entry/entry-links';
 import { useProjects, useReviewMutations } from '../entry/use-review-queries';
 import { AppShell, CapabilityGate, IconText, actionError } from '../components/shared';
-import type { ProjectFormValues } from '../components/ProjectForms';
+import { frameRateFromFormValue, type ProjectFormValues } from '../components/ProjectForms';
 import { ProjectListContent } from './project-list-content';
 import type { CompletionFilter, LifecycleFilter, UpdatedSort } from './project-list-controls';
 
 function projectCompletion(project: Project): Exclude<CompletionFilter, 'all'> {
-  return project.completionStatus === 'in_progress'
-    ? 'unfinished'
-    : project.completionStatus;
+  return project.completionStatus === 'completed' ? 'completed' : 'unfinished';
 }
 
 export function ProjectListPage(props: { entryMode: EntryMode }) {
@@ -31,7 +29,12 @@ export function ProjectListPage(props: { entryMode: EntryMode }) {
     setError(null);
     setProjectActionError(null);
     try {
-      const project = await mutations.createProject.mutateAsync(values);
+      const project = await mutations.createProject.mutateAsync({
+        name: values.name,
+        code: values.code,
+        description: values.description,
+        frameRate: frameRateFromFormValue(values.frameRate),
+      });
       setCreating(false);
       navigate(`/${props.entryMode}/projects/${project.projectRefId}`);
     } catch (caught) {
@@ -131,6 +134,7 @@ export function ProjectListPage(props: { entryMode: EntryMode }) {
         safePage={safePage}
         totalPages={totalPages}
         onSubmitProject={submitProject}
+        onCloseCreate={() => setCreating(false)}
         onQueryChange={(value) => {
           setQuery(value);
           resetPage();

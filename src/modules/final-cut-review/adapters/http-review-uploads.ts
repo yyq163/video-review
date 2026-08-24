@@ -4,6 +4,8 @@ import {
   type ReviewItemDeletionResultDTO,
   type ReviewItemsBatchDeletionResultDTO,
   type ReviewVersionDTO,
+  type CreateReviewItemPayload,
+  type UploadReviewVersionPayload,
   type UploadSessionDTO,
 } from '../contracts-generated/backend-contract';
 import type {
@@ -11,7 +13,7 @@ import type {
   UploadProgress,
 } from '../contracts/types';
 import { ReviewDomainError } from '../core/errors';
-import type { ReviewApiPort } from '../ports';
+import type { MediaMetadata, ReviewApiPort } from '../ports';
 import { itemFromDto, versionFromDto } from './http-review-project-mappers';
 import { HttpReviewUploadOperation } from './http-review-upload-operation';
 import { randomId, type HttpReviewTransport } from './http-review-transport';
@@ -24,6 +26,31 @@ const STORAGE_PROBE_KEY = 'fj-final-cut-review:confirmation-storage-probe';
 
 export type V1ListProtectionState = 'clear' | 'required' | 'storage-unavailable';
 export type AppendVersionProtectionState = V1ListProtectionState;
+
+function requireUploadBinding(input: {
+  responsibleEditorId?: string;
+  responsibleEditorNameSnapshot?: string;
+  localProbe?: MediaMetadata;
+}) {
+  if (
+    !input.responsibleEditorId?.trim()
+    || !input.responsibleEditorNameSnapshot?.trim()
+    || !input.localProbe
+  ) {
+    throw new ReviewDomainError('责任剪辑师和媒体预检结果必填', 'VALIDATION_ERROR');
+  }
+  return {
+    responsibleEditorId: input.responsibleEditorId,
+    responsibleEditorNameSnapshot: input.responsibleEditorNameSnapshot,
+    localProbe: input.localProbe,
+    localProbeClaim: {
+      fps_num: input.localProbe.fpsNum,
+      fps_den: input.localProbe.fpsDen,
+      is_variable_frame_rate: input.localProbe.isVariableFrameRate,
+      probe_version: input.localProbe.probeVersion,
+    },
+  };
+}
 
 export class V1UploadResultUncertainError extends Error {
   readonly cause: unknown;
@@ -306,6 +333,7 @@ export class HttpReviewUploads implements UploadApi {
 
   readonly createReviewItemWithVersion: ReviewApiPort['createReviewItemWithVersion'] = async (input, context) => {
     this.transport.assertWriteContext(context, ['edit']);
+    const binding = requireUploadBinding(input);
     await this.transport.projectForWrite(input.projectRefId);
     const signature = JSON.stringify([
       input.projectRefId,
@@ -315,6 +343,9 @@ export class HttpReviewUploads implements UploadApi {
       input.file.size,
       input.file.type,
       input.file.lastModified,
+      input.responsibleEditorId,
+      input.responsibleEditorNameSnapshot,
+      binding.localProbeClaim,
     ]);
     let operation = this.pendingCreateReviewItems.get(input.file);
     if (!operation || operation.signature !== signature) {
@@ -334,14 +365,7 @@ export class HttpReviewUploads implements UploadApi {
       try {
         itemDto = await this.transport.command<
           ReviewItemDTO,
-          {
-            project_ref_id: string;
-            item_code: string;
-            episode_no?: number;
-            title: string;
-            original_file_id: string;
-            version_note?: string;
-          }
+          CreateReviewItemPayload
         >(
           `/api/v1/final-cut-review/edit/projects/${input.projectRefId}/items`,
           'CreateReviewItem',
@@ -351,6 +375,9 @@ export class HttpReviewUploads implements UploadApi {
             episode_no: Number.isFinite(Number(input.episode)) ? Number(input.episode) : undefined,
             title: input.title,
             original_file_id: upload.file_id ?? '',
+            responsible_editor_id: binding.responsibleEditorId,
+            responsible_editor_name_snapshot: binding.responsibleEditorNameSnapshot,
+            local_probe_claim: binding.localProbeClaim,
           },
           context,
           undefined,
@@ -566,6 +593,7 @@ export class HttpReviewUploads implements UploadApi {
 
   readonly appendVersion: ReviewApiPort['appendVersion'] = async (input, context) => {
     this.transport.assertWriteContext(context, ['edit']);
+    const binding = requireUploadBinding(input);
     await this.transport.projectForWrite(input.projectRefId);
     const signature = JSON.stringify([
       input.projectRefId,
@@ -577,6 +605,9 @@ export class HttpReviewUploads implements UploadApi {
       input.file.size,
       input.file.type,
       input.file.lastModified,
+      input.responsibleEditorId,
+      input.responsibleEditorNameSnapshot,
+      binding.localProbeClaim,
     ]);
     let operation = this.pendingAppendVersions.get(input.file);
     if (!operation || operation.signature !== signature) {
@@ -604,14 +635,7 @@ export class HttpReviewUploads implements UploadApi {
       try {
         version = await this.transport.command<
           ReviewVersionDTO,
-          {
-            project_ref_id: string;
-            review_item_id: string;
-            original_file_id: string;
-            version_note?: string;
-            change_summary?: string;
-            supersede_reason?: string;
-          }
+          UploadReviewVersionPayload
         >(
           `/api/v1/final-cut-review/edit/projects/${input.projectRefId}/items/${input.reviewItemId}/versions`,
           'UploadReviewVersion',
@@ -619,6 +643,9 @@ export class HttpReviewUploads implements UploadApi {
             project_ref_id: input.projectRefId,
             review_item_id: input.reviewItemId,
             original_file_id: upload.file_id ?? '',
+            responsible_editor_id: binding.responsibleEditorId,
+            responsible_editor_name_snapshot: binding.responsibleEditorNameSnapshot,
+            local_probe_claim: binding.localProbeClaim,
             version_note: input.versionNote,
             change_summary: input.changeSummary,
             supersede_reason: input.supersedeReason,

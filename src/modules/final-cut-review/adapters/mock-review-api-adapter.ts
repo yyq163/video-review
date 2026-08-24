@@ -18,6 +18,7 @@ import { MockReviewWorkflow } from './mock-review-workflow';
 
 export class MockReviewApiAdapter implements ReviewApiPort {
   readonly listProjects: ReviewApiPort['listProjects'];
+  readonly listResponsibleEditors: ReviewApiPort['listResponsibleEditors'];
   readonly getProjectSummary: ReviewApiPort['getProjectSummary'];
   readonly getReviewItem: ReviewApiPort['getReviewItem'];
   readonly getVersion: ReviewApiPort['getVersion'];
@@ -26,9 +27,14 @@ export class MockReviewApiAdapter implements ReviewApiPort {
   readonly getWorkspace: ReviewApiPort['getWorkspace'];
   readonly createProject: ReviewApiPort['createProject'];
   readonly updateProject: ReviewApiPort['updateProject'];
+  readonly lockProjectFrameRate: ReviewApiPort['lockProjectFrameRate'];
+  readonly createResponsibleEditor: ReviewApiPort['createResponsibleEditor'];
+  readonly renameResponsibleEditor: ReviewApiPort['renameResponsibleEditor'];
   readonly archiveProject: ReviewApiPort['archiveProject'];
   readonly restoreProject: ReviewApiPort['restoreProject'];
   readonly deleteProject: ReviewApiPort['deleteProject'];
+  readonly finalizeProject: ReviewApiPort['finalizeProject'];
+  readonly revokeProjectFinalization: ReviewApiPort['revokeProjectFinalization'];
   readonly createReviewItemWithVersion: ReviewApiPort['createReviewItemWithVersion'];
   readonly updateReviewItem: ReviewApiPort['updateReviewItem'];
   readonly deleteReviewItem: ReviewApiPort['deleteReviewItem'];
@@ -76,6 +82,7 @@ export class MockReviewApiAdapter implements ReviewApiPort {
     const downloads = new MockReviewDownloads(context);
 
     this.listProjects = projects.listProjects;
+    this.listResponsibleEditors = projects.listResponsibleEditors;
     this.getProjectSummary = projects.getProjectSummary;
     this.getReviewItem = projects.getReviewItem;
     this.getVersion = projects.getVersion;
@@ -84,9 +91,14 @@ export class MockReviewApiAdapter implements ReviewApiPort {
     this.getWorkspace = projects.getWorkspace;
     this.createProject = projects.createProject;
     this.updateProject = projects.updateProject;
+    this.lockProjectFrameRate = projects.lockProjectFrameRate;
+    this.createResponsibleEditor = projects.createResponsibleEditor;
+    this.renameResponsibleEditor = projects.renameResponsibleEditor;
     this.archiveProject = projects.archiveProject;
     this.restoreProject = projects.restoreProject;
     this.deleteProject = projects.deleteProject;
+    this.finalizeProject = workflow.finalizeProject;
+    this.revokeProjectFinalization = workflow.revokeProjectFinalization;
     this.createReviewItemWithVersion = uploads.createReviewItemWithVersion;
     this.updateReviewItem = uploads.updateReviewItem;
     this.deleteReviewItem = uploads.deleteReviewItem;

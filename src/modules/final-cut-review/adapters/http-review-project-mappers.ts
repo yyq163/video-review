@@ -4,6 +4,7 @@ import type {
   ProjectDTO,
   ReviewItemDTO,
   ReviewVersionDTO,
+  ResponsibleEditorDTO,
 } from '../contracts-generated/backend-contract';
 import type {
   FinalizationRecord,
@@ -11,7 +12,18 @@ import type {
   Project,
   ReviewItem,
   ReviewVersion,
+  ResponsibleEditor,
 } from '../contracts/types';
+
+export function responsibleEditorFromDto(dto: ResponsibleEditorDTO): ResponsibleEditor {
+  return {
+    responsibleEditorId: dto.id,
+    displayName: dto.display_name,
+    lockVersion: dto.lock_version,
+    createdAt: dto.created_at,
+    updatedAt: dto.updated_at,
+  };
+}
 
 export function projectFromDto(dto: ProjectDTO): Project {
   return {
@@ -88,6 +100,8 @@ export function versionFromDto(dto: ReviewVersionDTO, baseUrl: string, item?: Re
     height: media.height,
     fpsNum: media.fpsNum,
     fpsDen: media.fpsDen,
+    responsibleEditorId: dto.responsible_editor_id,
+    responsibleEditorNameSnapshot: dto.responsible_editor_name_snapshot,
     playbackStatus:
       dto.playback_status === 'processing'
         ? 'pending'

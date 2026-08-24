@@ -24,10 +24,15 @@ export { VersionRail, VersionStrip } from './review-player-version-navigation';
 export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(function ReviewPlayer(props, ref) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const playerCardRef = useRef<HTMLElement | null>(null);
+  const fullscreenControlsHoverRef = useRef(false);
+  const fullscreenControlsTimerRef = useRef<number | null>(null);
   const resetDraftRef = useRef<(() => void) | null>(null);
   const recoveryRequestedUrlRef = useRef<string | null>(null);
   const playbackErrorReportedRef = useRef(false);
   const [mediaElementAttempt, setMediaElementAttempt] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const playback = useReviewPlayerPlayback({
     videoRef,
     version: props.version,
@@ -62,6 +67,48 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
   const setStageNode = useCallback((node: HTMLDivElement | null) => {
     stageRef.current = node;
   }, []);
+  const clearFullscreenControlsTimer = useCallback(() => {
+    if (fullscreenControlsTimerRef.current === null) return;
+    window.clearTimeout(fullscreenControlsTimerRef.current);
+    fullscreenControlsTimerRef.current = null;
+  }, []);
+  const scheduleFullscreenControlsHide = useCallback(() => {
+    clearFullscreenControlsTimer();
+    if (!isFullscreen || fullscreenControlsHoverRef.current) return;
+    fullscreenControlsTimerRef.current = window.setTimeout(() => {
+      fullscreenControlsTimerRef.current = null;
+      if (!fullscreenControlsHoverRef.current) setFullscreenControlsVisible(false);
+    }, 3000);
+  }, [clearFullscreenControlsTimer, isFullscreen]);
+  const revealFullscreenControls = useCallback(() => {
+    if (!isFullscreen) return;
+    setFullscreenControlsVisible(true);
+    scheduleFullscreenControlsHide();
+  }, [isFullscreen, scheduleFullscreenControlsHide]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === playerCardRef.current);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) {
+      clearFullscreenControlsTimer();
+      setFullscreenControlsVisible(true);
+      return;
+    }
+    setFullscreenControlsVisible(true);
+    scheduleFullscreenControlsHide();
+    const handleFullscreenKey = () => revealFullscreenControls();
+    document.addEventListener('keydown', handleFullscreenKey, true);
+    return () => {
+      document.removeEventListener('keydown', handleFullscreenKey, true);
+      clearFullscreenControlsTimer();
+    };
+  }, [clearFullscreenControlsTimer, isFullscreen, revealFullscreenControls, scheduleFullscreenControlsHide]);
   const setTextInputNode = useCallback(
     (node: HTMLInputElement | null) => {
       annotations.textInputRef.current = node;
@@ -177,7 +224,12 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
         data-display-mode={stage.displayMode}
       >
         {showInlineToolbar ? <div className="fj-review-toolbar-inline-dock">{annotationToolbar}</div> : null}
-        <section className="fj-review-player-card">
+        <section
+          className="fj-review-player-card"
+          onClick={revealFullscreenControls}
+          onMouseMove={revealFullscreenControls}
+          ref={playerCardRef}
+        >
           <ReviewPlayerStage
             version={props.version}
             videoRef={setVideoNode}
@@ -201,6 +253,16 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
             onBeginDraw={annotations.beginDraw}
             onMoveDraw={annotations.moveDraw}
             onEndDraw={annotations.endDraw}
+            onStageClick={(event) => {
+              if (
+                event.target instanceof Element &&
+                event.target.closest('button, input, textarea, select, a[href], [contenteditable], [role="button"], [role="slider"]')
+              ) {
+                return;
+              }
+              if (annotations.consumePlaybackClickSuppression()) return;
+              void playback.togglePlay();
+            }}
             onMediaDimensions={(video) => {
               if (video.videoWidth > 0 && video.videoHeight > 0) {
                 playback.setLoadedMediaDimensions((current) => {
@@ -266,17 +328,31 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
             onUpdateTextShape={annotations.updateDraftTextShape}
             onCloseTextEditor={annotations.closeTextEditor}
           />
-          <ReviewTimeline
-            issues={props.issues}
-            selectedIssueId={props.selectedIssueId}
-            currentMs={playback.currentMs}
-            durationMs={playback.durationMs}
-            fpsNum={props.version.fpsNum}
-            fpsDen={props.version.fpsDen}
-            onSeek={playback.seekToMs}
-            onSelect={props.onSelectIssue}
-          />
-          <PlaybackControls
+          <div
+            className="fj-review-fullscreen-controls"
+            data-testid="fullscreen-controls"
+            data-visible={!isFullscreen || fullscreenControlsVisible ? 'true' : 'false'}
+            onMouseEnter={() => {
+              fullscreenControlsHoverRef.current = true;
+              clearFullscreenControlsTimer();
+              setFullscreenControlsVisible(true);
+            }}
+            onMouseLeave={() => {
+              fullscreenControlsHoverRef.current = false;
+              revealFullscreenControls();
+            }}
+          >
+            <ReviewTimeline
+              issues={props.issues}
+              selectedIssueId={props.selectedIssueId}
+              currentMs={playback.currentMs}
+              durationMs={playback.durationMs}
+              fpsNum={props.version.fpsNum}
+              fpsDen={props.version.fpsDen}
+              onSeek={playback.seekToMs}
+              onSelect={props.onSelectIssue}
+            />
+            <PlaybackControls
             version={props.version}
             currentMs={playback.currentMs}
             durationMs={playback.durationMs}
@@ -295,7 +371,7 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
             onTimecodeSubmit={playback.submitTimecode}
             displayMode={stage.displayMode}
             onDisplayMode={stage.setDisplayMode}
-            onFullscreen={() => stageRef.current?.requestFullscreen?.()}
+            onFullscreen={() => playerCardRef.current?.requestFullscreen?.()}
             previousIssueDisabled={selectedIssueIndex <= 0}
             nextIssueDisabled={
               selectedIssueIndex < 0 || selectedIssueIndex >= playback.orderedIssues.length - 1
@@ -310,7 +386,8 @@ export const ReviewPlayer = forwardRef<ReviewPlayerHandle, ReviewPlayerProps>(fu
               }
             }}
             onAutoPause={playback.setAutoPause}
-          />
+            />
+          </div>
         </section>
       </div>
       {props.annotationToolbarHost ? createPortal(annotationToolbar, props.annotationToolbarHost) : null}

@@ -1,4 +1,4 @@
-import type { FileStoragePort } from '../ports';
+import type { FileStoragePort, MediaMetadata } from '../ports';
 import type { StoredOriginalFile } from '../contracts/types';
 import { sha256Hex } from '../core/sha256';
 import { ReviewDomainError } from '../core/errors';
@@ -51,7 +51,7 @@ export class MockFileStorageAdapter implements FileStoragePort {
     return [...this.originals.values()].map((record) => ({ ...record }));
   }
 
-  async storeOriginal(file: File): Promise<StoredOriginalFile> {
+  async storeOriginal(file: File, metadata?: MediaMetadata): Promise<StoredOriginalFile> {
     await this.readyPromise;
     const blob = file;
     const safeName = sanitizeDownloadFileName(file.name || 'untitled.mp4', 'untitled.mp4');
@@ -62,11 +62,11 @@ export class MockFileStorageAdapter implements FileStoragePort {
       mimeType: file.type || 'video/mp4',
       size: file.size,
       sha256,
-      durationMs: 480,
-      width: 1280,
-      height: 720,
-      fpsNum: 25,
-      fpsDen: 1,
+      durationMs: metadata?.durationMs ?? 480,
+      width: metadata?.width ?? 1280,
+      height: metadata?.height ?? 720,
+      fpsNum: metadata?.fpsNum ?? 25,
+      fpsDen: metadata?.fpsDen ?? 1,
       playbackUrl: this.createManagedPlaybackUrl(blob),
       blob,
     };

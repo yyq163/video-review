@@ -83,6 +83,12 @@ describe('HTTP project summary adapter', () => {
             version_label: 'V2',
             duration_ms: 10_000,
             file_size: 20_000,
+            width: 1920,
+            height: 1080,
+            fps_num: 25,
+            fps_den: 1,
+            responsible_editor_id: 'editor-ready',
+            responsible_editor_name_snapshot: '剪辑师甲',
             playback_status: 'ready',
             playback_url: '/api/v1/final-cut-review/projects/project-summary/items/item-ready/versions/version-ready/stream',
             thumbnail_status: 'ready',
@@ -213,6 +219,12 @@ describe('HTTP project summary adapter', () => {
         reason: 'REVIEW_STARTED',
       },
       currentVersion: {
+        width: 1920,
+        height: 1080,
+        fpsNum: 25,
+        fpsDen: 1,
+        responsibleEditorId: 'editor-ready',
+        responsibleEditorNameSnapshot: '剪辑师甲',
         playbackUrl:
           'https://review.example/api/v1/final-cut-review/projects/project-summary/items/item-ready/versions/version-ready/stream',
         thumbnailUrl:
@@ -303,8 +315,8 @@ describe('HTTP project summary adapter', () => {
         version_label: 'V2',
         is_current: true,
         original_media: { ...media, original_file_id: 'original-2' },
-        responsible_editor_id: null,
-        responsible_editor_name_snapshot: null,
+        responsible_editor_id: 'editor-current',
+        responsible_editor_name_snapshot: '剪辑师乙',
         playback_status: 'processing',
         playback_asset_id: null,
         thumbnail_status: 'processing',
@@ -371,6 +383,10 @@ describe('HTTP project summary adapter', () => {
     );
     expect(queries.issueWithMessages).not.toHaveBeenCalled();
     expect(workspace.currentVersion.versionId).toBe('version-1');
+    expect(workspace.versions.find((version) => version.versionId === 'version-2')).toMatchObject({
+      responsibleEditorId: 'editor-current',
+      responsibleEditorNameSnapshot: '剪辑师乙',
+    });
     expect(workspace.currentIssues.map((issue) => issue.versionId)).toEqual(['version-2']);
     expect(workspace.historicalIssues.map((issue) => issue.versionId)).toEqual(['version-1']);
 

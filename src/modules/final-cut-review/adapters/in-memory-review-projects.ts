@@ -15,6 +15,16 @@ const ALLOWED_PROJECT_FRAME_RATES = new Set([
   '60/1',
 ]);
 
+function validateFrameRate(frameRate: { fpsNum: number; fpsDen: number }): void {
+  invariant(
+    Number.isSafeInteger(frameRate.fpsNum)
+      && Number.isSafeInteger(frameRate.fpsDen)
+      && ALLOWED_PROJECT_FRAME_RATES.has(`${frameRate.fpsNum}/${frameRate.fpsDen}`),
+    '项目帧率不在允许集合中',
+    'VALIDATION_ERROR',
+  );
+}
+
 function validateProjectMetadata(input: { name: string; code: string; description: string }): void {
   const name = input.name.trim();
   const code = input.code.trim();
@@ -35,13 +45,7 @@ export class InMemoryReviewProjects {
   }): Promise<Project> => {
     validateProjectMetadata(input);
     const frameRate = input.frameRate ?? { fpsNum: 25, fpsDen: 1 };
-    invariant(
-      Number.isSafeInteger(frameRate.fpsNum)
-        && Number.isSafeInteger(frameRate.fpsDen)
-        && ALLOWED_PROJECT_FRAME_RATES.has(`${frameRate.fpsNum}/${frameRate.fpsDen}`),
-      '项目帧率不在允许集合中',
-      'VALIDATION_ERROR',
-    );
+    validateFrameRate(frameRate);
     const timestamp = nowIso();
     const project: Project = {
       projectRefId: `prj_${createUuid()}`,
@@ -58,6 +62,23 @@ export class InMemoryReviewProjects {
     this.store.projects.set(project.projectRefId, project);
     this.store.emitChange();
     return { ...project };
+  };
+
+  readonly lockProjectFrameRate = async (input: {
+    projectRefId: ProjectRefId;
+    frameRate: { fpsNum: number; fpsDen: number };
+  }): Promise<Project> => {
+    const current = this.store.assertProjectWritable(input.projectRefId);
+    invariant(!current.frameRate, '项目帧率已锁定，不能修改', 'RESOURCE_STATE_CONFLICT');
+    validateFrameRate(input.frameRate);
+    const next = {
+      ...current,
+      frameRate: { ...input.frameRate },
+      updatedAt: nowIso(),
+    };
+    this.store.projects.set(next.projectRefId, next);
+    this.store.emitChange();
+    return { ...next, frameRate: { ...input.frameRate } };
   };
 
   readonly updateProject = async (input: {

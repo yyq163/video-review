@@ -4,6 +4,7 @@ import type { MockReviewContext } from './mock-review-context';
 type ProjectApi = Pick<
   ReviewApiPort,
   | 'listProjects'
+  | 'listResponsibleEditors'
   | 'getProjectSummary'
   | 'getReviewItem'
   | 'getVersion'
@@ -12,6 +13,9 @@ type ProjectApi = Pick<
   | 'getWorkspace'
   | 'createProject'
   | 'updateProject'
+  | 'lockProjectFrameRate'
+  | 'createResponsibleEditor'
+  | 'renameResponsibleEditor'
   | 'archiveProject'
   | 'restoreProject'
   | 'deleteProject'
@@ -24,6 +28,12 @@ export class MockReviewProjects implements ProjectApi {
     await this.context.ready();
     this.context.throwIfAborted(options?.signal);
     return this.context.repository.listProjects();
+  };
+
+  readonly listResponsibleEditors: ReviewApiPort['listResponsibleEditors'] = async (options) => {
+    await this.context.ready();
+    this.context.throwIfAborted(options?.signal);
+    return this.context.repository.listResponsibleEditors();
   };
 
   readonly getProjectSummary: ReviewApiPort['getProjectSummary'] = async (projectRefId, options) => {
@@ -72,6 +82,24 @@ export class MockReviewProjects implements ProjectApi {
     await this.context.ready();
     this.context.assertContext(executionContext, 'review.project.update');
     return this.context.repository.updateProject(input);
+  };
+
+  readonly lockProjectFrameRate: ReviewApiPort['lockProjectFrameRate'] = async (input, executionContext) => {
+    await this.context.ready();
+    this.context.assertContext(executionContext, 'review.project.update');
+    return this.context.repository.lockProjectFrameRate(input);
+  };
+
+  readonly createResponsibleEditor: ReviewApiPort['createResponsibleEditor'] = async (input, executionContext) => {
+    await this.context.ready();
+    this.context.assertContext(executionContext, 'review.project.update');
+    return this.context.repository.createResponsibleEditor(input);
+  };
+
+  readonly renameResponsibleEditor: ReviewApiPort['renameResponsibleEditor'] = async (input, executionContext) => {
+    await this.context.ready();
+    this.context.assertContext(executionContext, 'review.project.update');
+    return this.context.repository.renameResponsibleEditor(input);
   };
 
   readonly archiveProject: ReviewApiPort['archiveProject'] = async (input, executionContext) => {

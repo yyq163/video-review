@@ -8,7 +8,8 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ReviewRuntimeProvider, createReviewRuntime, type ReviewRuntime } from '../entry/runtime';
 import { FinalCutReviewClient } from '../contracts-generated/backend-contract';
-import type { ReviewIssue, ReviewVersion, UploadProgress } from '../contracts/types';
+import type { ResponsibleEditor, ReviewIssue, ReviewVersion, UploadProgress } from '../contracts/types';
+import type { MediaMetadataPort } from '../ports';
 import { createSeedData } from '../core/seed';
 import { playbackTargetFromIssue } from '../core/playback';
 import { IssuePanel } from './IssuePanel';
@@ -73,6 +74,11 @@ function renderProjectDetail(route: string) {
     </QueryClientProvider>,
   );
   return { ...result, runtime, queryClient };
+}
+
+async function openV1UploadModal() {
+  await userEvent.click(screen.getByRole('button', { name: '创建并上传 V1' }));
+  return screen.findByRole('dialog', { name: '创建成片并上传 V1' });
 }
 
 async function renderProjectList(setup?: (runtime: ReviewRuntime) => Promise<void>) {
@@ -170,18 +176,25 @@ function renderEditReviewWorkspace(route = '/edit/projects/prj_seed_final_cut/it
 }
 
 describe('EpisodeStrip project-detail status colors', () => {
-  it('uses the same dark, yellow, and green state classes as project detail rows', () => {
+  it('floors fractional seconds and applies the 50/51/60/61 duration bands', () => {
     const base = createSeedData().items[0];
     const items = [
-      { ...base, reviewItemId: 'episode-reviewing', status: 'in_review' as const },
-      { ...base, reviewItemId: 'episode-changes', status: 'changes_requested' as const },
-      { ...base, reviewItemId: 'episode-finalized', status: 'finalized' as const },
+      { ...base, reviewItemId: 'episode-50' },
+      { ...base, reviewItemId: 'episode-51' },
+      { ...base, reviewItemId: 'episode-60' },
+      { ...base, reviewItemId: 'episode-61' },
     ];
     render(
       <EpisodeStrip
         currentFileNames={{}}
-        currentItemId="episode-changes"
+        currentItemId="episode-51"
         currentVersionLabels={{}}
+        currentDurationsMs={{
+          'episode-50': 50_999,
+          'episode-51': 51_000,
+          'episode-60': 60_999,
+          'episode-61': 61_000,
+        }}
         entryMode="review"
         isArchived={false}
         itemActionPending={false}
@@ -192,17 +205,12 @@ describe('EpisodeStrip project-detail status colors', () => {
       />,
     );
 
-    expect(screen.getByTestId('episode-item-episode-reviewing')).not.toHaveClass(
-      'is-changes-requested',
-      'is-finalized',
-    );
-    expect(screen.getByTestId('episode-item-episode-changes')).toHaveClass(
-      'is-changes-requested',
-      'is-active',
-    );
-    expect(screen.getByTestId('episode-item-episode-finalized')).toHaveClass(
-      'is-finalized',
-    );
+    expect(screen.getByTestId('episode-duration-episode-50')).toHaveTextContent('50 秒');
+    expect(screen.getByTestId('episode-duration-episode-50')).toHaveClass('is-short');
+    expect(screen.getByTestId('episode-duration-episode-51')).toHaveClass('is-warning');
+    expect(screen.getByTestId('episode-duration-episode-60')).toHaveTextContent('60 秒');
+    expect(screen.getByTestId('episode-duration-episode-60')).toHaveClass('is-warning');
+    expect(screen.getByTestId('episode-duration-episode-61')).toHaveClass('is-standard');
   });
 });
 
@@ -222,6 +230,13 @@ describe('DecisionBar component', () => {
     );
 
     expect(screen.queryByTestId('package-project')).not.toBeInTheDocument();
+    expect(screen.getByTestId('decision-fps')).toHaveTextContent('25/1 fps');
+    expect(screen.getByTestId('decision-resolution')).toHaveTextContent('1280 × 720');
+    expect(screen.getByTestId('decision-average-bitrate')).toHaveTextContent('Mbps');
+    expect(screen.getByTestId('decision-duration')).toHaveTextContent('00:00:00');
+    expect(screen.getByTestId('decision-editor')).toHaveTextContent('剪辑师甲');
+    expect(screen.queryByText('当前版本可定稿')).not.toBeInTheDocument();
+    expect(screen.queryByText('V2', { selector: '.fj-review-decision-bar strong' })).not.toBeInTheDocument();
     cleanupRuntime(runtimeResult.runtime);
   });
 
@@ -879,9 +894,10 @@ describe('IssuePanel component', () => {
     expect(css).toContain('--fj-review-text: #f1f5f4;');
     expect(css).toContain('--fj-review-muted: #8c9695;');
     expect(css).toContain('--fj-review-dim: #586160;');
-    expect(css).toContain('--fj-review-workstation-max-width: 1440px;');
-    expect(css).toContain('--fj-review-version-rail-width: 150px;');
-    expect(css).toContain('--fj-review-issue-panel-width: 340px;');
+    expect(css).toContain('--fj-review-workstation-max-width: 2480px;');
+    expect(css).toContain('--fj-review-version-rail-width: 180px;');
+    expect(css).toContain('--fj-review-issue-panel-width: 380px;');
+    expect(css).toMatch(/\.fj-review-root\s*\{[^}]*overflow-x:\s*clip;/s);
     expect(css).toMatch(/\.fj-review-workspace-frame\s*\{[^}]*max-width:\s*var\(--fj-review-workstation-max-width\);/s);
     expect(css).toMatch(/@media \(max-width: 1279px\)[\s\S]*\.fj-review-issue-drawer-region\.is-open\s*\{/);
     expect(css).toMatch(/@media \(max-width: 920px\)[\s\S]*--fj-review-topbar-height:\s*84px;/);
@@ -1343,7 +1359,7 @@ describe('ProjectListPage filtering and paging', () => {
         {
           name: '001模拟测试',
           code: 'FJ-001',
-          description: '用于验证搜索和未创建成片筛选。',
+          description: '用于验证搜索和完成状态筛选。',
         },
         context,
       );
@@ -1360,6 +1376,12 @@ describe('ProjectListPage filtering and paging', () => {
     });
 
     expect(await screen.findByRole('heading', { name: '项目列表' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '新建项目' }));
+    const createDialog = screen.getByRole('dialog', { name: '新建项目' });
+    expect(createDialog).toBeInTheDocument();
+    expect(within(createDialog).getByLabelText('项目帧率')).toHaveValue('25/1');
+    expect(screen.getByRole('heading', { name: '项目列表' })).toBeInTheDocument();
+    await userEvent.click(within(createDialog).getByRole('button', { name: '取消' }));
     expect(getProjectSummary).not.toHaveBeenCalled();
     await screen.findByText('001模拟测试');
     expect(screen.getByText('真千金是男的')).toBeInTheDocument();
@@ -1374,14 +1396,9 @@ describe('ProjectListPage filtering and paging', () => {
     expect(screen.queryByText('001模拟测试')).not.toBeInTheDocument();
 
     await userEvent.click(within(screen.getByRole('radiogroup', { name: '生命周期筛选' })).getByRole('radio', { name: '全部' }));
-    await userEvent.click(within(screen.getByRole('radiogroup', { name: '完成状态筛选' })).getByRole('radio', { name: '未创建成片' }));
-    expect(await screen.findByText('001模拟测试')).toBeInTheDocument();
-    expect(screen.getByText('归档样片')).toBeInTheDocument();
-    expect(screen.queryByText('真千金是男的')).not.toBeInTheDocument();
-
     await userEvent.click(within(screen.getByRole('radiogroup', { name: '完成状态筛选' })).getByRole('radio', { name: '未完成' }));
     expect(await screen.findByText('真千金是男的')).toBeInTheDocument();
-    expect(screen.queryByText('001模拟测试')).not.toBeInTheDocument();
+    expect(screen.getByText('001模拟测试')).toBeInTheDocument();
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
@@ -1466,9 +1483,12 @@ describe('ProjectDetailPage archive workflow', () => {
     const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
 
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
-    expect(screen.getByTestId('create-item-upload')).toBeInTheDocument();
+    expect(screen.queryByTestId('create-item-upload')).not.toBeInTheDocument();
+    const uploadDialog = await openV1UploadModal();
+    expect(within(uploadDialog).getByTestId('create-item-upload')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '归档项目' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '删除项目' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('project-finalization-command')).not.toBeInTheDocument();
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
@@ -1477,6 +1497,7 @@ describe('ProjectDetailPage archive workflow', () => {
     const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
 
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    await openV1UploadModal();
     await userEvent.upload(screen.getByTestId('create-item-file'), new File(['v1'], '王爷02.mp4', { type: 'video/mp4' }));
     const row = screen.getByTestId('upload-row-0');
     const titleInput = within(row).getByLabelText('成片标题');
@@ -1502,6 +1523,7 @@ describe('ProjectDetailPage archive workflow', () => {
   it('removes the successful V1 row and reports a refresh failure without retrying the upload', async () => {
     const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    await openV1UploadModal();
     const editApi = runtimeResult.runtime.getApi('edit');
     const originalGetProjectSummary = editApi.getProjectSummary.bind(editApi);
     let refreshCount = 0;
@@ -1579,6 +1601,18 @@ describe('ProjectDetailPage archive workflow', () => {
         title: '不得持久化的 V1 payload',
         episode: '31',
         file: selectedFile,
+        responsibleEditorId: 'editor-task5',
+        responsibleEditorNameSnapshot: '剪辑师甲',
+        localProbe: {
+          durationMs: 60_500,
+          width: 1920,
+          height: 1080,
+          bitrateBps: 8_000_000,
+          fpsNum: 25,
+          fpsDen: 1,
+          isVariableFrameRate: false,
+          probeVersion: 'mediainfo.js-0.3.7',
+        },
       },
       entryPolicy.createContext('edit'),
     )).rejects.toThrow('response lost after server commit');
@@ -1600,6 +1634,7 @@ describe('ProjectDetailPage archive workflow', () => {
     expect(await screen.findByTestId('v1-list-confirmation-required')).toHaveTextContent(
       '请先确认上一笔 V1 的列表结果',
     );
+    await openV1UploadModal();
     expect(screen.getByTestId('create-item-file')).toBeDisabled();
     expect(screen.getByRole('button', { name: '请先确认列表' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: '请先确认列表' }));
@@ -1617,6 +1652,7 @@ describe('ProjectDetailPage archive workflow', () => {
   it('keeps the project protected when a concurrent success settles before an uncertain V1', async () => {
     const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    await openV1UploadModal();
     const editApi = runtimeResult.runtime.getApi('edit');
     const originalCreate = editApi.createReviewItemWithVersion.bind(editApi);
     type CreateResult = Awaited<ReturnType<typeof originalCreate>>;
@@ -1662,6 +1698,7 @@ describe('ProjectDetailPage archive workflow', () => {
   it('keeps a provisional V1 protected across another success and a page remount', async () => {
     const first = renderProjectDetail('/edit/projects/prj_seed_final_cut');
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    await openV1UploadModal();
     const editApi = first.runtime.getApi('edit');
     const originalCreate = editApi.createReviewItemWithVersion.bind(editApi);
     type CreateResult = Awaited<ReturnType<typeof originalCreate>>;
@@ -1704,6 +1741,7 @@ describe('ProjectDetailPage archive workflow', () => {
   it('does not allow early confirmation while another V1 result is still provisional', async () => {
     const first = renderProjectDetail('/edit/projects/prj_seed_final_cut');
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    await openV1UploadModal();
     const editApi = first.runtime.getApi('edit');
     type CreateResult = Awaited<ReturnType<typeof editApi.createReviewItemWithVersion>>;
     let rejectProvisional!: (reason: unknown) => void;
@@ -1740,6 +1778,7 @@ describe('ProjectDetailPage archive workflow', () => {
     expect(await screen.findByTestId('v1-list-confirmation-required')).toHaveTextContent(
       '请先确认上一笔 V1 的列表结果',
     );
+    await openV1UploadModal();
 
     rejectProvisional(new V1UploadResultUncertainError(new TypeError('version response lost')));
     second.unmount();
@@ -1755,6 +1794,7 @@ describe('ProjectDetailPage archive workflow', () => {
     expect(await screen.findByTestId('v1-list-confirmation-required')).toHaveTextContent(
       '浏览器会话存储不可用',
     );
+    await openV1UploadModal();
     expect(screen.getByTestId('create-item-file')).toBeDisabled();
     expect(screen.getByRole('button', { name: '请先确认列表' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: '我已核对列表，允许新建 V1' })).not.toBeInTheDocument();
@@ -1765,6 +1805,7 @@ describe('ProjectDetailPage archive workflow', () => {
     expect(await screen.findByTestId('v1-list-confirmation-required')).toHaveTextContent(
       '浏览器会话存储不可用',
     );
+    await openV1UploadModal();
     expect(screen.getByTestId('create-item-file')).toBeDisabled();
     second.unmount();
     cleanupRuntime(second.runtime, second.queryClient);
@@ -1776,6 +1817,7 @@ describe('ProjectDetailPage archive workflow', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
+    await openV1UploadModal();
     const existingDelete = screen.getByRole('button', { name: /删除分集 第 28 集/ });
     expect(existingDelete).toBeDisabled();
     expect(existingDelete.parentElement).toHaveAttribute('title');
@@ -1812,25 +1854,34 @@ describe('ProjectDetailPage archive workflow', () => {
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
 
-  it('archives and restores a project through review controls while keeping descendants readable', async () => {
+  it('uses one project command to finalize all and then revoke all in the former archive slot', async () => {
     const runtimeResult = renderProjectDetail('/review/projects/prj_seed_final_cut');
+    const reviewApi = runtimeResult.runtime.getApi('review');
+    const finalizeProject = vi.spyOn(reviewApi, 'finalizeProject');
+    const revokeProjectFinalization = vi.spyOn(reviewApi, 'revokeProjectFinalization');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     expect(await screen.findByRole('heading', { name: /真千金是男的/ })).toBeInTheDocument();
     expect(screen.queryByTestId('create-item-upload')).not.toBeInTheDocument();
     expect(screen.getByTestId('package-project')).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '归档项目' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '恢复项目' })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: '归档项目' }));
-    const readonlyNotice = await screen.findByTestId('archived-readonly-notice');
-    expect(readonlyNotice).toHaveTextContent('项目已归档');
-    expect(readonlyNotice).toHaveTextContent('恢复项目后才能创建成片');
-    expect(screen.queryByTestId('create-item-upload')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '恢复项目' })).toBeInTheDocument();
-    expect(screen.getByTestId('package-project')).toBeDisabled();
-    expect(screen.queryByRole('button', { name: '删除项目' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '全部定稿' }));
+    await waitFor(() => expect(finalizeProject).toHaveBeenCalledOnce());
+    expect(finalizeProject).toHaveBeenCalledWith(
+      { projectRefId: 'prj_seed_final_cut', confirmed: true },
+      expect.objectContaining({ entryMode: 'review' }),
+    );
+    expect(await screen.findByRole('button', { name: '撤销全部定稿' })).toHaveClass('is-warning');
 
-    await userEvent.click(screen.getByRole('button', { name: '恢复项目' }));
-    expect(await screen.findByText('项目已恢复，可继续剪辑管理。')).toBeInTheDocument();
-    expect(screen.queryByTestId('create-item-upload')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '撤销全部定稿' }));
+    await waitFor(() => expect(revokeProjectFinalization).toHaveBeenCalledOnce());
+    expect(revokeProjectFinalization).toHaveBeenCalledWith(
+      { projectRefId: 'prj_seed_final_cut', confirmed: true },
+      expect.objectContaining({ entryMode: 'review' }),
+    );
+    expect(await screen.findByRole('button', { name: '全部定稿' })).toHaveClass('is-success');
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
@@ -1915,12 +1966,37 @@ describe('AppendVersionPanel component', () => {
     expect(episodeFromUploadFileName('狼王别跑_final.mp4')).toBe('');
   });
 
-  it('keeps each selected file bound to its independently editable title and episode', async () => {
+  it('keeps dirty row editors while bulk editor changes and binds each successful media preflight', async () => {
     const onSubmit = vi.fn().mockResolvedValue({ outcome: 'success' });
     const firstFile = new File(['v1'], '狼王别跑01.mp4', { type: 'video/mp4' });
     const secondFile = new File(['v1'], '狼王别跑第02集.mov', { type: 'video/quicktime' });
-    render(<CreateItemUploadPanel onSubmit={onSubmit} />);
+    const editors: ResponsibleEditor[] = [
+      { responsibleEditorId: 'editor-a', displayName: '剪辑师甲', lockVersion: 1, createdAt: '', updatedAt: '' },
+      { responsibleEditorId: 'editor-b', displayName: '剪辑师乙', lockVersion: 1, createdAt: '', updatedAt: '' },
+      { responsibleEditorId: 'editor-c', displayName: '剪辑师丙', lockVersion: 1, createdAt: '', updatedAt: '' },
+    ];
+    const metadata = {
+      durationMs: 60_500,
+      width: 1920,
+      height: 1080,
+      bitrateBps: 8_000_000,
+      fpsNum: 25,
+      fpsDen: 1,
+      isVariableFrameRate: false as const,
+      probeVersion: 'mediainfo.js-0.3.7' as const,
+    };
+    const mediaMetadata = { probe: vi.fn().mockResolvedValue(metadata) } satisfies MediaMetadataPort;
+    render(
+      <CreateItemUploadPanel
+        mediaMetadata={mediaMetadata}
+        onSubmit={onSubmit}
+        projectFrameRate={{ fpsNum: 25, fpsDen: 1 }}
+        responsibleEditors={editors}
+      />,
+    );
 
+    const bulkEditor = screen.getByLabelText('批量责任剪辑师');
+    expectBefore(bulkEditor, screen.getByRole('button', { name: '选择文件' }));
     await userEvent.upload(screen.getByTestId('create-item-file'), [firstFile, secondFile]);
     const firstRow = screen.getByTestId('upload-row-0');
     const secondRow = screen.getByTestId('upload-row-1');
@@ -1928,13 +2004,36 @@ describe('AppendVersionPanel component', () => {
     expect(within(firstRow).getByLabelText('集数')).toHaveValue('01');
     expect(within(secondRow).getByLabelText('成片标题')).toHaveValue('狼王别跑第02集');
     expect(within(secondRow).getByLabelText('集数')).toHaveValue('02');
+    const firstEditor = within(firstRow).getByLabelText('责任剪辑师');
+    const secondEditor = within(secondRow).getByLabelText('责任剪辑师');
+    expectBefore(within(firstRow).getByLabelText('成片标题'), firstEditor);
+    expectBefore(firstEditor, within(firstRow).getByLabelText('集数'));
+    await userEvent.selectOptions(firstEditor, 'editor-b');
+    await userEvent.selectOptions(bulkEditor, 'editor-c');
+    expect(firstEditor).toHaveValue('editor-b');
+    expect(secondEditor).toHaveValue('editor-c');
     await userEvent.clear(within(secondRow).getByLabelText('成片标题'));
     await userEvent.type(within(secondRow).getByLabelText('成片标题'), '手工标题');
+    await waitFor(() => expect(mediaMetadata.probe).toHaveBeenCalledTimes(2));
     await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
-    expect(onSubmit.mock.calls[0]?.[0]).toEqual({ title: '狼王别跑01', episode: '01', file: firstFile });
-    expect(onSubmit.mock.calls[1]?.[0]).toEqual({ title: '手工标题', episode: '02', file: secondFile });
+    expect(onSubmit.mock.calls[0]?.[0]).toEqual({
+      title: '狼王别跑01',
+      episode: '01',
+      file: firstFile,
+      responsibleEditorId: 'editor-b',
+      responsibleEditorNameSnapshot: '剪辑师乙',
+      localProbe: metadata,
+    });
+    expect(onSubmit.mock.calls[1]?.[0]).toEqual({
+      title: '手工标题',
+      episode: '02',
+      file: secondFile,
+      responsibleEditorId: 'editor-c',
+      responsibleEditorNameSnapshot: '剪辑师丙',
+      localProbe: metadata,
+    });
     await waitFor(() => expect(screen.queryByTestId('create-item-upload-rows')).not.toBeInTheDocument());
   });
 
@@ -2003,15 +2102,42 @@ describe('AppendVersionPanel component', () => {
     expect(screen.getByTestId('upload-row-99')).toHaveTextContent('排队中 · 尚未创建上传会话');
   });
 
-  it('blocks the entire batch until every row has required metadata', async () => {
-    const onSubmit = vi.fn();
-    render(<CreateItemUploadPanel onSubmit={onSubmit} />);
+  it('grays a media-preflight rejection while allowing valid rows to continue', async () => {
+    const onSubmit = vi.fn().mockResolvedValue({ outcome: 'success' });
+    const validMetadata = {
+      durationMs: 50_999,
+      width: 1920,
+      height: 1080,
+      bitrateBps: 8_000_000,
+      fpsNum: 25,
+      fpsDen: 1,
+      isVariableFrameRate: false as const,
+      probeVersion: 'mediainfo.js-0.3.7' as const,
+    };
+    const mediaMetadata = {
+      probe: vi.fn()
+        .mockResolvedValueOnce(validMetadata)
+        .mockRejectedValueOnce(new Error('不允许可变帧率视频')),
+    } satisfies MediaMetadataPort;
+    render(
+      <CreateItemUploadPanel
+        mediaMetadata={mediaMetadata}
+        onSubmit={onSubmit}
+        projectFrameRate={{ fpsNum: 25, fpsDen: 1 }}
+        responsibleEditors={[
+          { responsibleEditorId: 'editor-a', displayName: '剪辑师甲', lockVersion: 1, createdAt: '', updatedAt: '' },
+        ]}
+      />,
+    );
     await userEvent.upload(screen.getByTestId('create-item-file'), [
       new File(['a'], '狼王01.mp4', { type: 'video/mp4' }),
-      new File(['b'], '狼王_final.mp4', { type: 'video/mp4' }),
+      new File(['b'], '狼王02.mp4', { type: 'video/mp4' }),
     ]);
-    expect(screen.getByRole('button', { name: '上传 V1' })).toBeDisabled();
-    expect(onSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId('upload-row-1')).toHaveClass('is-media-invalid'));
+    expect(within(screen.getByTestId('upload-row-1')).getByRole('alert')).toHaveTextContent('不允许可变帧率视频');
+    await userEvent.click(screen.getByRole('button', { name: '上传 V1' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ file: expect.objectContaining({ name: '狼王01.mp4' }) }));
   });
 
   it('continues after failed and uncertain rows, reports recovery, and retries only the chosen row', async () => {
@@ -2096,10 +2222,32 @@ describe('AppendVersionPanel component', () => {
 
   it('submits version note and change summary without a request-changes gate', async () => {
     const onSubmit = vi.fn();
-    render(<AppendVersionPanel nextLabel="V2" onSubmit={onSubmit} />);
+    const metadata = {
+      durationMs: 61_000,
+      width: 1920,
+      height: 1080,
+      bitrateBps: 8_000_000,
+      fpsNum: 25,
+      fpsDen: 1,
+      isVariableFrameRate: false as const,
+      probeVersion: 'mediainfo.js-0.3.7' as const,
+    };
+    render(
+      <AppendVersionPanel
+        mediaMetadata={{ probe: vi.fn().mockResolvedValue(metadata) }}
+        nextLabel="V2"
+        onSubmit={onSubmit}
+        projectFrameRate={{ fpsNum: 25, fpsDen: 1 }}
+        responsibleEditors={[
+          { responsibleEditorId: 'editor-a', displayName: '剪辑师甲', lockVersion: 1, createdAt: '', updatedAt: '' },
+          { responsibleEditorId: 'editor-b', displayName: '剪辑师乙', lockVersion: 1, createdAt: '', updatedAt: '' },
+        ]}
+      />,
+    );
     const file = new File(['v2'], 'v2-upload.mp4', { type: 'video/mp4' });
 
     await userEvent.upload(screen.getByTestId('append-version-file'), file);
+    await userEvent.selectOptions(screen.getByLabelText('责任剪辑师'), 'editor-b');
     await userEvent.clear(screen.getByTestId('append-version-note'));
     await userEvent.type(screen.getByTestId('append-version-note'), 'V2 画面补版说明');
     await userEvent.clear(screen.getByTestId('append-version-change-summary'));
@@ -2111,6 +2259,9 @@ describe('AppendVersionPanel component', () => {
         versionNote: 'V2 画面补版说明',
         changeSummary: '修正字幕边距和片尾节奏。',
         file,
+        responsibleEditorId: 'editor-b',
+        responsibleEditorNameSnapshot: '剪辑师乙',
+        localProbe: metadata,
       }),
     );
   });
@@ -2985,6 +3136,8 @@ describe('ReviewWorkspacePage issue playback', () => {
 
 describe('ReviewPlayer component', () => {
   afterEach(() => {
+    Reflect.deleteProperty(document, 'fullscreenElement');
+    Reflect.deleteProperty(document, 'exitFullscreen');
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -4228,7 +4381,7 @@ describe('ReviewPlayer component', () => {
       originalMedia: { ...seed.versions[1].originalMedia, durationMs: 2000 },
     };
     const onCreateIssueShortcut = vi.fn();
-    render(
+    const { container } = render(
       <ReviewPlayer
         version={keyboardVersion}
         issues={seed.issues.filter((issue) => issue.versionId === 'ver_ep28_v2')}
@@ -4257,6 +4410,39 @@ describe('ReviewPlayer component', () => {
 
     fireEvent.keyDown(document, { key: 'ArrowRight', shiftKey: true });
     await waitFor(() => expect(screen.getByTestId('current-frame')).toHaveTextContent('25'));
+
+    const card = container.querySelector('.fj-review-player-card') as HTMLElement;
+    let fullscreenElement: Element | null = null;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => fullscreenElement,
+    });
+    Object.defineProperty(card, 'requestFullscreen', {
+      configurable: true,
+      value: vi.fn(async () => {
+        fullscreenElement = card;
+        fireEvent(document, new Event('fullscreenchange'));
+      }),
+    });
+    Object.defineProperty(document, 'exitFullscreen', {
+      configurable: true,
+      value: vi.fn(async () => { fullscreenElement = null; }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: '全屏' }));
+    for (const [key, label] of [
+      ['1', '画笔'], ['2', '箭头'], ['3', '矩形'], ['4', '圆形'], ['5', '文字'],
+    ] as const) {
+      fireEvent.keyDown(document, { key });
+      expect(screen.getByRole('button', { name: label })).toHaveClass('is-active');
+    }
+    fireEvent.keyDown(document, { key: 'c' });
+    expect(onCreateIssueShortcut).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(document, { key: 'ArrowLeft' });
+    await waitFor(() => expect(screen.getByTestId('current-frame')).toHaveTextContent('24'));
+    fireEvent.keyDown(document, { key: 'ArrowLeft', shiftKey: true });
+    await waitFor(() => expect(screen.getByTestId('current-frame')).toHaveTextContent('0'));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.exitFullscreen).toHaveBeenCalledOnce();
   });
 
   it('resolves issue playback immediately when the video is already at the target timestamp', async () => {

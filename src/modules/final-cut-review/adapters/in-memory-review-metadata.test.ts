@@ -3,6 +3,53 @@ import type { Project, ReviewItem } from '../contracts/types';
 import { InMemoryReviewRepository } from './in-memory-review-repository';
 
 describe('in-memory review metadata persistence', () => {
+  it('persists the responsible-editor directory and locks a legacy project frame rate once', async () => {
+    const timestamp = '2026-07-14T00:00:00.000Z';
+    const project: Project = {
+      projectRefId: 'legacy_project',
+      name: 'Legacy project',
+      code: 'LEGACY-001',
+      description: '',
+      status: 'active',
+      completionStatus: 'empty',
+      deletedAt: null,
+      frameRate: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const repository = new InMemoryReviewRepository({ projects: [project] });
+    const task5Repository = repository as unknown as {
+      listResponsibleEditors(): Promise<Array<{ responsibleEditorId: string; displayName: string; lockVersion: number }>>;
+      createResponsibleEditor(input: { displayName: string }): Promise<{ responsibleEditorId: string; displayName: string; lockVersion: number }>;
+      renameResponsibleEditor(input: { responsibleEditorId: string; displayName: string }): Promise<{ responsibleEditorId: string; displayName: string; lockVersion: number }>;
+      lockProjectFrameRate(input: { projectRefId: string; frameRate: { fpsNum: number; fpsDen: number } }): Promise<Project>;
+    };
+
+    expect(await task5Repository.listResponsibleEditors()).toEqual([]);
+    const created = await task5Repository.createResponsibleEditor({ displayName: ' 剪辑师甲 ' });
+    expect(created).toMatchObject({ displayName: '剪辑师甲', lockVersion: 1 });
+    const renamed = await task5Repository.renameResponsibleEditor({
+      responsibleEditorId: created.responsibleEditorId,
+      displayName: '剪辑师乙',
+    });
+    expect(renamed).toMatchObject({ displayName: '剪辑师乙', lockVersion: 2 });
+
+    const locked = await task5Repository.lockProjectFrameRate({
+      projectRefId: project.projectRefId,
+      frameRate: { fpsNum: 25, fpsDen: 1 },
+    });
+    expect(locked.frameRate).toEqual({ fpsNum: 25, fpsDen: 1 });
+    await expect(task5Repository.lockProjectFrameRate({
+      projectRefId: project.projectRefId,
+      frameRate: { fpsNum: 30, fpsDen: 1 },
+    })).rejects.toThrow('项目帧率已锁定');
+
+    const reloaded = new InMemoryReviewRepository(repository.snapshot()) as unknown as typeof task5Repository;
+    expect(await reloaded.listResponsibleEditors()).toEqual([
+      expect.objectContaining({ displayName: '剪辑师乙', lockVersion: 2 }),
+    ]);
+  });
+
   it('keeps item_code immutable across episode edits and snapshot reloads', async () => {
     const timestamp = '2026-07-14T00:00:00.000Z';
     const project: Project = {

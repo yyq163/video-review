@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { EntryMode, IssueStatus, ReviewAnnotationShape, ReviewIssue, ReviewWorkspace, UploadProgress } from '../contracts/types';
-import { useIssueDetail, useProjectSummary, useReviewMutations } from '../entry/use-review-queries';
+import { useIssueDetail, useProjectSummary, useResponsibleEditors, useReviewMutations } from '../entry/use-review-queries';
+import { useMediaMetadata } from '../entry/runtime';
 import { actionError } from '../components/shared';
 import type { ReviewPlayerHandle } from '../components/ReviewPlayer';
 import { dedupeReviewItemsByEpisode } from '../core/episode-dedupe';
@@ -31,6 +32,8 @@ export function useReviewWorkspaceController(
   const selectedIssueId = searchParams.get('issue') ?? undefined;
   const mutations = useReviewMutations(props.entryMode);
   const projectSummary = useProjectSummary(props.entryMode, props.projectRefId);
+  const responsibleEditors = useResponsibleEditors(props.entryMode);
+  const mediaMetadata = useMediaMetadata();
   const [annotationToolbarHost, setAnnotationToolbarHost] = useState<HTMLDivElement | null>(null);
   const [timeMs, setTimeMs] = useState(0);
   const [draftShapes, setDraftShapes] = useState<ReviewAnnotationShape[]>([]);
@@ -236,6 +239,7 @@ export function useReviewWorkspaceController(
   const episodeCurrentVersionMetadata = useMemo(() => {
     const labels: Record<string, string> = {};
     const fileNames: Record<string, string> = {};
+    const durationsMs: Record<string, number> = {};
     for (const item of episodeItems) {
       const versions =
         item.reviewItemId === data.item.reviewItemId
@@ -254,8 +258,12 @@ export function useReviewWorkspaceController(
         currentVersion?.fileName ||
         summaryItem?.currentVersion.versionLabel ||
         '-';
+      durationsMs[item.reviewItemId] =
+        currentVersion?.durationMs
+        ?? summaryItem?.currentVersion.durationMs
+        ?? 0;
     }
-    return { labels, fileNames };
+    return { labels, fileNames, durationsMs };
   }, [data.item.reviewItemId, data.versions, episodeItems, projectSummary.data?.items]);
   const showToast = useCallback((message: string) => setToast(message), []);
   const showActionError = useCallback((caught: unknown) => showToast(actionError(caught)), [showToast]);
@@ -421,6 +429,9 @@ export function useReviewWorkspaceController(
     episodeUnresolvedCounts,
     episodeCurrentVersionLabels: episodeCurrentVersionMetadata.labels,
     episodeCurrentFileNames: episodeCurrentVersionMetadata.fileNames,
+    episodeCurrentDurationsMs: episodeCurrentVersionMetadata.durationsMs,
+    responsibleEditors: responsibleEditors.data ?? [],
+    mediaMetadata,
     revocationUncertainIds,
     revokeEpisodeFinalization,
     canRevokeEpisodeFinalization: Boolean(projectSummary.data),

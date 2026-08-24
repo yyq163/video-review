@@ -24,6 +24,7 @@ export function buildSeedData(): SeedData {
     status: 'active',
     completionStatus: 'in_progress',
     deletedAt: null,
+    frameRate: { fpsNum: 25, fpsDen: 1 },
     createdAt: seededAt,
     updatedAt: seededAt,
   };
@@ -50,6 +51,8 @@ export function buildSeedData(): SeedData {
       status: 'changes_requested',
       uploadedAt: seededAt,
       requestedChangesAt: '2026-06-18T10:06:00.000Z',
+      responsibleEditorId: 'editor_seed',
+      responsibleEditorNameSnapshot: '剪辑师甲',
     }),
     makeVersion({
       versionId: 'ver_ep28_v2',
@@ -60,6 +63,8 @@ export function buildSeedData(): SeedData {
       status: 'in_review',
       uploadedAt: '2026-06-18T10:16:00.000Z',
       requestedChangesAt: null,
+      responsibleEditorId: 'editor_seed',
+      responsibleEditorNameSnapshot: '剪辑师甲',
     }),
   ];
 
@@ -163,6 +168,13 @@ export function buildSeedData(): SeedData {
     versions,
     issues,
     finalizations: [],
+    responsibleEditors: [{
+      responsibleEditorId: 'editor_seed',
+      displayName: '剪辑师甲',
+      lockVersion: 1,
+      createdAt: seededAt,
+      updatedAt: seededAt,
+    }],
     files: [v1File, v2File],
   };
 }

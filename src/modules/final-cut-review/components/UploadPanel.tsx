@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { UploadCloud, X } from 'lucide-react';
-import type { UploadProgress } from '../contracts/types';
+import type { ResponsibleEditor, ReviewFrameRate, UploadProgress } from '../contracts/types';
+import type { MediaMetadata, MediaMetadataPort } from '../ports';
 import { formatEpisodeDisplayValue, normalizeEpisodeValue } from '../core/episode-dedupe';
 
 const FILE_REQUIRED_MESSAGE = '请选择原片文件。';
@@ -20,6 +21,9 @@ export interface CreateItemUploadInput {
   title: string;
   episode: string;
   file: File;
+  responsibleEditorId?: string;
+  responsibleEditorNameSnapshot?: string;
+  localProbe?: MediaMetadata;
 }
 
 export type CreateItemUploadOutcome =
@@ -34,6 +38,10 @@ interface CreateItemUploadRow extends CreateItemUploadInput {
   failureStage?: UploadProgress['stage'];
   progress?: UploadProgress;
   status: CreateItemUploadRowStatus;
+  responsibleEditorId: string;
+  editorDirty: boolean;
+  mediaState: 'ready' | 'probing' | 'invalid';
+  mediaError?: string;
 }
 
 export function titleFromUploadFileName(fileName: string): string {
@@ -74,12 +82,20 @@ export function CreateItemUploadPanel({
   blockedForListConfirmation,
   setBulkActionsHost,
   existingEpisodes,
+  mediaMetadata,
   onSubmit,
+  onEditResponsibleEditor,
+  projectFrameRate,
+  responsibleEditors,
 }: {
   pending?: boolean;
   blockedForListConfirmation?: boolean;
   setBulkActionsHost?: (node: HTMLSpanElement | null) => void;
   existingEpisodes?: string[];
+  mediaMetadata?: MediaMetadataPort;
+  onEditResponsibleEditor?(): void;
+  projectFrameRate?: ReviewFrameRate | null;
+  responsibleEditors?: ResponsibleEditor[];
   onSubmit(
     input: CreateItemUploadInput,
     onProgress?: (progress: UploadProgress) => void,
@@ -89,12 +105,21 @@ export function CreateItemUploadPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const removedRowIdsRef = useRef(new Set<string>());
   const activeBatchEpisodeKeysRef = useRef(new Set<string>());
+  const mediaProbeAbortRef = useRef<AbortController | null>(null);
+  const [bulkEditorId, setBulkEditorId] = useState(responsibleEditors?.[0]?.responsibleEditorId ?? '');
   const [rows, setRows] = useState<CreateItemUploadRow[]>([]);
   const [uploading, setUploading] = useState(false);
   const [completedEpisodeKeys, setCompletedEpisodeKeys] = useState<Set<string>>(() => new Set());
   const [batchCompleted, setBatchCompleted] = useState(false);
   const [batchError, setBatchError] = useState<string | null>(null);
-  const disabled = Boolean(pending || uploading || blockedForListConfirmation);
+  const editorSelectionRequired = responsibleEditors !== undefined;
+  const editorCatalogUnavailable = editorSelectionRequired && responsibleEditors.length === 0;
+  const disabled = Boolean(pending || uploading || blockedForListConfirmation || editorCatalogUnavailable);
+  const effectiveBulkEditorId = responsibleEditors?.some(
+    (editor) => editor.responsibleEditorId === bulkEditorId,
+  )
+    ? bulkEditorId
+    : responsibleEditors?.[0]?.responsibleEditorId ?? '';
   const blockedEpisodeKeys = new Set([
     ...(existingEpisodes ?? []).map(normalizeEpisodeValue).filter(Boolean),
     ...completedEpisodeKeys,
@@ -108,12 +133,17 @@ export function CreateItemUploadPanel({
       .slice(0, rowIndex)
       .some((candidate) => normalizeEpisodeValue(candidate.episode) === episodeKey);
   };
-  const missingRequired = rows.some((row) => !row.title.trim() || !row.episode.trim());
+  const missingRequired = rows.some((row) =>
+    !row.title.trim()
+    || !row.episode.trim()
+    || (editorSelectionRequired && !row.responsibleEditorId),
+  );
+  const mediaProbePending = rows.some((row) => row.mediaState === 'probing');
   const readyRows = rows.filter(
-    (row) => row.status === 'ready' && !conflictsWithExisting(row),
+    (row) => row.status === 'ready' && row.mediaState === 'ready' && !conflictsWithExisting(row),
   );
   const recoverableRows = rows.filter((row) => row.status === 'failed' || row.status === 'uncertain');
-  const uploadDisabled = disabled || !readyRows.length || missingRequired;
+  const uploadDisabled = disabled || !readyRows.length || missingRequired || mediaProbePending;
   const uploadDisabledReason = uploadDisabled
     ? blockedForListConfirmation
       ? '上一笔 V1 结果不确定，请先核对待审列表'
@@ -122,14 +152,18 @@ export function CreateItemUploadPanel({
         : !rows.length
           ? '请先选择原片文件'
           : missingRequired
-            ? '请补齐每一条成片的标题和集数'
+            ? editorSelectionRequired
+              ? '请补齐每一条成片的标题、责任剪辑师和集数'
+              : '请补齐每一条成片的标题和集数'
+            : mediaProbePending
+              ? '正在预检所选媒体'
             : rows.some((row) => conflictsWithExisting(row))
               ? '集数与已上传成片或当前队列重复，请修改集数'
               : recoverableRows.length
                 ? '当前没有可上传条目，请先处理失败或结果不确定项'
                 : '当前没有可上传的条目'
     : null;
-  const updateRow = (id: string, patch: Partial<Pick<CreateItemUploadRow, 'title' | 'episode'>>) => {
+  const updateRow = (id: string, patch: Partial<Pick<CreateItemUploadRow, 'title' | 'episode' | 'responsibleEditorId' | 'editorDirty'>>) => {
     setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
     setBatchError(null);
   };
@@ -141,7 +175,7 @@ export function CreateItemUploadPanel({
   };
   const runBatch = async (batch: CreateItemUploadRow[]) => {
     const eligibleBatch = batch.filter(
-      (row) => !removedRowIdsRef.current.has(row.id) && !conflictsWithExisting(row),
+      (row) => !removedRowIdsRef.current.has(row.id) && row.mediaState === 'ready' && !conflictsWithExisting(row),
     );
     if (!eligibleBatch.length || uploading) return;
     activeBatchEpisodeKeysRef.current = new Set(blockedEpisodeKeys);
@@ -180,8 +214,22 @@ export function CreateItemUploadPanel({
         let result: CreateItemUploadOutcome;
         let failureStage: UploadProgress['stage'] = 'validating';
         try {
+          const selectedEditor = responsibleEditors?.find(
+            (editor) => editor.responsibleEditorId === row.responsibleEditorId,
+          );
           result = await onSubmit(
-            { title: row.title, episode: row.episode, file: row.file },
+            {
+              title: row.title,
+              episode: row.episode,
+              file: row.file,
+              ...(selectedEditor && row.localProbe
+                ? {
+                    responsibleEditorId: selectedEditor.responsibleEditorId,
+                    responsibleEditorNameSnapshot: selectedEditor.displayName,
+                    localProbe: row.localProbe,
+                  }
+                : {}),
+            },
             (progress) => {
               failureStage = progress.stage;
               setRows((current) => current.map((candidate) =>
@@ -262,6 +310,35 @@ export function CreateItemUploadPanel({
         <strong>创建成片并上传 V1</strong>
         <span>原片校验通过后会安全上传并创建 V1。</span>
       </div>
+      {responsibleEditors !== undefined ? (
+        <div className="fj-review-upload-editor-bar">
+          <label>
+            <span>批量责任剪辑师</span>
+            <select
+              aria-label="批量责任剪辑师"
+              disabled={disabled || responsibleEditors.length === 0}
+              value={effectiveBulkEditorId}
+              onChange={(event) => {
+                const responsibleEditorId = event.target.value;
+                setBulkEditorId(responsibleEditorId);
+                setRows((current) => current.map((row) =>
+                  row.editorDirty ? row : { ...row, responsibleEditorId },
+                ));
+              }}
+            >
+              {responsibleEditors.length === 0 ? <option value="">请先编辑责任剪辑师</option> : null}
+              {responsibleEditors.map((editor) => (
+                <option key={editor.responsibleEditorId} value={editor.responsibleEditorId}>{editor.displayName}</option>
+              ))}
+            </select>
+          </label>
+          {onEditResponsibleEditor ? (
+            <button className="fj-review-secondary" onClick={onEditResponsibleEditor} type="button">
+              编辑责任剪辑师
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="fj-review-upload-actions">
         <span
           className="fj-review-upload-bulk-actions-host"
@@ -279,15 +356,47 @@ export function CreateItemUploadPanel({
           disabled={disabled}
           onChange={(event) => {
             const selected = Array.from(event.currentTarget.files ?? []);
-            setRows(selected.map((file) => ({
+            mediaProbeAbortRef.current?.abort();
+            const abortController = new AbortController();
+            mediaProbeAbortRef.current = abortController;
+            const nextRows: CreateItemUploadRow[] = selected.map((file) => ({
               id: `upload-row-${nextRowId.current++}`,
               file,
               title: titleFromUploadFileName(file.name),
               episode: episodeFromUploadFileName(file.name),
-              status: 'ready',
-            })));
+              status: 'ready' as const,
+              responsibleEditorId: effectiveBulkEditorId,
+              editorDirty: false,
+              mediaState: mediaMetadata ? 'probing' as const : 'ready' as const,
+            }));
+            setRows(nextRows);
             setBatchCompleted(false);
             setBatchError(null);
+            if (mediaMetadata) {
+              for (const row of nextRows) {
+                void mediaMetadata.probe(row.file, {
+                  signal: abortController.signal,
+                  expectedFrameRate: projectFrameRate ?? undefined,
+                }).then((localProbe) => {
+                  setRows((current) => current.map((candidate) =>
+                    candidate.id === row.id
+                      ? { ...candidate, localProbe, mediaState: 'ready', mediaError: undefined }
+                      : candidate,
+                  ));
+                }).catch((error: unknown) => {
+                  if (error instanceof DOMException && error.name === 'AbortError') return;
+                  setRows((current) => current.map((candidate) =>
+                    candidate.id === row.id
+                      ? {
+                          ...candidate,
+                          mediaState: 'invalid',
+                          mediaError: error instanceof Error ? error.message : '媒体预检失败',
+                        }
+                      : candidate,
+                  ));
+                });
+              }
+            }
           }}
         />
         <button
@@ -323,7 +432,7 @@ export function CreateItemUploadPanel({
             const conflictErrorId = `${row.id}-episode-conflict`;
             return (
               <section
-                className={`fj-review-upload-row${episodeConflict ? ' is-conflict' : ''}`}
+                className={`fj-review-upload-row${episodeConflict ? ' is-conflict' : ''}${row.mediaState === 'invalid' ? ' is-media-invalid' : ''}`}
                 data-testid={row.id}
                 key={row.id}
               >
@@ -340,6 +449,25 @@ export function CreateItemUploadPanel({
                     onChange={(event) => updateRow(row.id, { title: event.target.value })}
                   />
                 </label>
+                {responsibleEditors !== undefined ? (
+                  <label>
+                    <span>责任剪辑师</span>
+                    <select
+                      aria-label="责任剪辑师"
+                      disabled={disabled || responsibleEditors.length === 0}
+                      value={row.responsibleEditorId}
+                      onChange={(event) => updateRow(row.id, {
+                        responsibleEditorId: event.target.value,
+                        editorDirty: true,
+                      })}
+                    >
+                      {responsibleEditors.length === 0 ? <option value="">未设置</option> : null}
+                      {responsibleEditors.map((editor) => (
+                        <option key={editor.responsibleEditorId} value={editor.responsibleEditorId}>{editor.displayName}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 <label htmlFor={episodeId}>
                   <span>集数</span>
                   <input
@@ -368,6 +496,8 @@ export function CreateItemUploadPanel({
                   />
                 )}
                 <UploadProgressView progress={row.progress} testId={`${row.id}-progress`} />
+                {row.mediaState === 'probing' ? <span className="fj-review-media-preflight" role="status">媒体预检中</span> : null}
+                {row.mediaError ? <span className="fj-review-form-error fj-review-media-preflight-error" role="alert">{row.mediaError}</span> : null}
                 {episodeConflict ? (
                   <span
                     className="fj-review-form-error"
@@ -429,9 +559,26 @@ export function AppendVersionPanel(props: {
   nextLabel: string;
   pending?: boolean;
   progress?: UploadProgress;
-  onSubmit(input: { file: File; versionNote: string; changeSummary: string }): void | Promise<void>;
+  mediaMetadata?: MediaMetadataPort;
+  projectFrameRate?: ReviewFrameRate | null;
+  responsibleEditors?: ResponsibleEditor[];
+  onSubmit(input: {
+    file: File;
+    versionNote: string;
+    changeSummary: string;
+    responsibleEditorId?: string;
+    responsibleEditorNameSnapshot?: string;
+    localProbe?: MediaMetadata;
+  }): void | Promise<void>;
 }) {
+  const mediaProbeSequenceRef = useRef(0);
   const [file, setFile] = useState<File | null>(null);
+  const [responsibleEditorId, setResponsibleEditorId] = useState(
+    props.responsibleEditors?.[0]?.responsibleEditorId ?? '',
+  );
+  const [localProbe, setLocalProbe] = useState<MediaMetadata | null>(null);
+  const [mediaProbePending, setMediaProbePending] = useState(false);
+  const [mediaProbeError, setMediaProbeError] = useState<string | null>(null);
   const [versionNote, setVersionNote] = useState(`${props.nextLabel} 版本说明`);
   const [changeSummary, setChangeSummary] = useState('按审阅意见完成本轮修改。');
   const [fileError, setFileError] = useState<string | null>(null);
@@ -440,6 +587,11 @@ export function AppendVersionPanel(props: {
     fileError ? APPEND_VERSION_FILE_ERROR_ID : null,
     submissionError ? APPEND_VERSION_SUBMISSION_ERROR_ID : null,
   ].filter(Boolean).join(' ') || undefined;
+  const effectiveResponsibleEditorId = props.responsibleEditors?.some(
+    (editor) => editor.responsibleEditorId === responsibleEditorId,
+  )
+    ? responsibleEditorId
+    : props.responsibleEditors?.[0]?.responsibleEditorId ?? '';
 
   return (
     <form
@@ -451,12 +603,34 @@ export function AppendVersionPanel(props: {
           setFileError(FILE_REQUIRED_MESSAGE);
           return;
         }
+        if (props.responsibleEditors !== undefined && !effectiveResponsibleEditorId) {
+          setSubmissionError('责任剪辑师必填。');
+          return;
+        }
+        if (props.mediaMetadata && (!localProbe || mediaProbePending || mediaProbeError)) {
+          setSubmissionError(mediaProbeError ?? '媒体预检尚未完成。');
+          return;
+        }
+        if (!versionNote.trim() || !changeSummary.trim()) {
+          setSubmissionError('版本说明和本次修改说明必填。');
+          return;
+        }
         setFileError(null);
         setSubmissionError(null);
+        const editor = props.responsibleEditors?.find(
+          (candidate) => candidate.responsibleEditorId === effectiveResponsibleEditorId,
+        );
         void Promise.resolve(props.onSubmit({
           file,
-          versionNote,
-          changeSummary,
+          versionNote: versionNote.trim(),
+          changeSummary: changeSummary.trim(),
+          ...(editor && localProbe
+            ? {
+                responsibleEditorId: editor.responsibleEditorId,
+                responsibleEditorNameSnapshot: editor.displayName,
+                localProbe,
+              }
+            : {}),
         })).catch((error: unknown) => {
           setSubmissionError(error instanceof Error ? error.message : '上传失败，请重试。');
         });
@@ -466,6 +640,22 @@ export function AppendVersionPanel(props: {
         <strong>追加 {props.nextLabel}</strong>
         <span>填写版本元数据后上传新版本。</span>
       </div>
+      {props.responsibleEditors !== undefined ? (
+        <label className="fj-review-inline-upload-editor">
+          <span>责任剪辑师</span>
+          <select
+            aria-label="责任剪辑师"
+            disabled={props.pending || props.responsibleEditors.length === 0}
+            value={effectiveResponsibleEditorId}
+            onChange={(event) => setResponsibleEditorId(event.target.value)}
+          >
+            {props.responsibleEditors.length === 0 ? <option value="">未设置</option> : null}
+            {props.responsibleEditors.map((editor) => (
+              <option key={editor.responsibleEditorId} value={editor.responsibleEditorId}>{editor.displayName}</option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <label className="fj-review-inline-upload-file">
         <span>原始视频文件</span>
         <input
@@ -476,9 +666,28 @@ export function AppendVersionPanel(props: {
           aria-invalid={Boolean(fileError || submissionError)}
           disabled={props.pending}
           onChange={(event) => {
-            setFile(event.currentTarget.files?.[0] ?? null);
+            const nextFile = event.currentTarget.files?.[0] ?? null;
+            const probeSequence = ++mediaProbeSequenceRef.current;
+            setFile(nextFile);
+            setLocalProbe(null);
+            setMediaProbeError(null);
             setFileError(null);
             setSubmissionError(null);
+            if (nextFile && props.mediaMetadata) {
+              setMediaProbePending(true);
+              void props.mediaMetadata.probe(nextFile, {
+                expectedFrameRate: props.projectFrameRate ?? undefined,
+              }).then((metadata) => {
+                if (mediaProbeSequenceRef.current !== probeSequence) return;
+                setLocalProbe(metadata);
+                setMediaProbeError(null);
+              }).catch((error: unknown) => {
+                if (mediaProbeSequenceRef.current !== probeSequence) return;
+                setMediaProbeError(error instanceof Error ? error.message : '媒体预检失败');
+              }).finally(() => {
+                if (mediaProbeSequenceRef.current === probeSequence) setMediaProbePending(false);
+              });
+            }
           }}
         />
       </label>
@@ -501,9 +710,11 @@ export function AppendVersionPanel(props: {
         />
       </label>
       {fileError ? <span className="fj-review-form-error fj-review-inline-upload-file-error" data-testid="append-version-file-error" id={APPEND_VERSION_FILE_ERROR_ID} role="alert">{fileError}</span> : null}
+      {mediaProbePending ? <span className="fj-review-media-preflight" role="status">媒体预检中</span> : null}
+      {mediaProbeError ? <span className="fj-review-form-error" role="alert">{mediaProbeError}</span> : null}
       {submissionError ? <span className="fj-review-form-error" id={APPEND_VERSION_SUBMISSION_ERROR_ID} role="alert">{submissionError}</span> : null}
       <UploadProgressView progress={props.progress} />
-      <button className="fj-review-secondary fj-review-inline-upload-submit" disabled={props.pending} type="submit">
+      <button className="fj-review-secondary fj-review-inline-upload-submit" disabled={props.pending || mediaProbePending} type="submit">
         {props.pending ? '上传中...' : `确认追加 ${props.nextLabel}`}
       </button>
     </form>

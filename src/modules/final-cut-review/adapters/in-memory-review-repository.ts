@@ -1,6 +1,7 @@
 import type { StoredOriginalFile } from '../contracts/types';
 import { createSeedData } from '../core/seed';
 import { InMemoryReviewFinalizations } from './in-memory-review-finalizations';
+import { InMemoryReviewEditors } from './in-memory-review-editors';
 import { InMemoryReviewIssues } from './in-memory-review-issues';
 import { InMemoryReviewItems } from './in-memory-review-items';
 import { InMemoryReviewProjects } from './in-memory-review-projects';
@@ -20,6 +21,7 @@ export class InMemoryReviewRepository {
   readonly snapshot: InMemoryReviewStore['snapshot'];
   readonly relinkOriginalFiles: InMemoryReviewStore['relinkOriginalFiles'];
   readonly listProjects: InMemoryReviewQueries['listProjects'];
+  readonly listResponsibleEditors: InMemoryReviewEditors['listResponsibleEditors'];
   readonly getProjectSummary: InMemoryReviewQueries['getProjectSummary'];
   readonly getReviewItem: InMemoryReviewQueries['getReviewItem'];
   readonly getVersion: InMemoryReviewQueries['getVersion'];
@@ -31,6 +33,9 @@ export class InMemoryReviewRepository {
   readonly getAllProjectItems: InMemoryReviewQueries['getAllProjectItems'];
   readonly createProject: InMemoryReviewProjects['createProject'];
   readonly updateProject: InMemoryReviewProjects['updateProject'];
+  readonly lockProjectFrameRate: InMemoryReviewProjects['lockProjectFrameRate'];
+  readonly createResponsibleEditor: InMemoryReviewEditors['createResponsibleEditor'];
+  readonly renameResponsibleEditor: InMemoryReviewEditors['renameResponsibleEditor'];
   readonly archiveProject: InMemoryReviewProjects['archiveProject'];
   readonly restoreProject: InMemoryReviewProjects['restoreProject'];
   readonly deleteProject: InMemoryReviewProjects['deleteProject'];
@@ -49,7 +54,9 @@ export class InMemoryReviewRepository {
   readonly setIssueStatus: InMemoryReviewIssues['setIssueStatus'];
   readonly deleteIssue: InMemoryReviewIssues['deleteIssue'];
   readonly finalizeCurrentVersion: InMemoryReviewFinalizations['finalizeCurrentVersion'];
+  readonly finalizeProject: InMemoryReviewFinalizations['finalizeProject'];
   readonly revokeFinalization: InMemoryReviewFinalizations['revokeFinalization'];
+  readonly revokeProjectFinalization: InMemoryReviewFinalizations['revokeProjectFinalization'];
   readonly retryFinalizationCleanup: InMemoryReviewFinalizations['retryFinalizationCleanup'];
 
   constructor(
@@ -59,6 +66,7 @@ export class InMemoryReviewRepository {
     const store = new InMemoryReviewStore(seed, options);
     const queries = new InMemoryReviewQueries(store);
     const projects = new InMemoryReviewProjects(store);
+    const editors = new InMemoryReviewEditors(store);
     const items = new InMemoryReviewItems(store);
     const issues = new InMemoryReviewIssues(store);
     const finalizations = new InMemoryReviewFinalizations(store);
@@ -66,6 +74,7 @@ export class InMemoryReviewRepository {
     this.snapshot = store.snapshot;
     this.relinkOriginalFiles = store.relinkOriginalFiles;
     this.listProjects = queries.listProjects;
+    this.listResponsibleEditors = editors.listResponsibleEditors;
     this.getProjectSummary = queries.getProjectSummary;
     this.getReviewItem = queries.getReviewItem;
     this.getVersion = queries.getVersion;
@@ -77,6 +86,9 @@ export class InMemoryReviewRepository {
     this.getAllProjectItems = queries.getAllProjectItems;
     this.createProject = projects.createProject;
     this.updateProject = projects.updateProject;
+    this.lockProjectFrameRate = projects.lockProjectFrameRate;
+    this.createResponsibleEditor = editors.createResponsibleEditor;
+    this.renameResponsibleEditor = editors.renameResponsibleEditor;
     this.archiveProject = projects.archiveProject;
     this.restoreProject = projects.restoreProject;
     this.deleteProject = projects.deleteProject;
@@ -95,7 +107,9 @@ export class InMemoryReviewRepository {
     this.setIssueStatus = issues.setIssueStatus;
     this.deleteIssue = issues.deleteIssue;
     this.finalizeCurrentVersion = finalizations.finalizeCurrentVersion;
+    this.finalizeProject = finalizations.finalizeProject;
     this.revokeFinalization = finalizations.revokeFinalization;
+    this.revokeProjectFinalization = finalizations.revokeProjectFinalization;
     this.retryFinalizationCleanup = finalizations.retryFinalizationCleanup;
   }
 

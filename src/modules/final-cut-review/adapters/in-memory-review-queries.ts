@@ -75,6 +75,12 @@ export class InMemoryReviewQueries {
             versionLabel: currentVersion.label,
             durationMs: currentVersion.durationMs,
             fileSize: currentVersion.size,
+            width: currentVersion.width,
+            height: currentVersion.height,
+            fpsNum: currentVersion.fpsNum,
+            fpsDen: currentVersion.fpsDen,
+            responsibleEditorId: currentVersion.responsibleEditorId ?? null,
+            responsibleEditorNameSnapshot: currentVersion.responsibleEditorNameSnapshot ?? null,
             playbackStatus: currentVersion.playbackStatus,
             playbackUrl:
               currentVersion.playbackStatus === 'ready'

@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import type { EntryMode } from '../contracts/types';
-import type { ReviewApiPort, ReviewPermissionAdapter } from '../ports';
+import type { MediaMetadataPort, ReviewApiPort, ReviewPermissionAdapter } from '../ports';
 import { createSeedData } from '../core/seed';
 import { InMemoryReviewRepository, type InMemoryReviewRepositorySnapshot } from '../adapters/in-memory-review-repository';
 import { MockFileStorageAdapter } from '../adapters/mock-file-storage-adapter';
@@ -15,9 +15,12 @@ import { MockReviewApiAdapter } from '../adapters/mock-review-api-adapter';
 import { HttpReviewApiAdapter } from '../adapters/http-review-api-adapter';
 import { BrowserReviewHostBridge } from '../host/review-host-bridge';
 import { FinalCutReviewClient } from '../contracts-generated/backend-contract';
+import { BrowserMediaMetadataAdapter } from '../adapters/media-metadata';
+import { MockMediaMetadataAdapter } from '../adapters/mock-media-metadata-adapter';
 
 export interface ReviewRuntime {
   getApi(mode: EntryMode): ReviewApiPort;
+  mediaMetadata: MediaMetadataPort;
   permissions: ReviewPermissionAdapter;
   dispose(): void;
 }
@@ -72,6 +75,7 @@ function loadMockSnapshot(): InMemoryReviewRepositorySnapshot | null {
       versions: parsed.versions,
       issues: Array.isArray(parsed.issues) ? parsed.issues : [],
       finalizations: Array.isArray(parsed.finalizations) ? parsed.finalizations : [],
+      responsibleEditors: Array.isArray(parsed.responsibleEditors) ? parsed.responsibleEditors : [],
     };
   } catch {
     return null;
@@ -94,6 +98,9 @@ export function createReviewRuntime(options: ReviewRuntimeOptions = {}): ReviewR
   const apis = new Map<EntryMode, ReviewApiPort>();
   const apiBaseUrl = options.apiBaseUrl?.trim();
   let disposeModeResources = () => {};
+  const mediaMetadata: MediaMetadataPort = apiBaseUrl
+    ? new BrowserMediaMetadataAdapter()
+    : new MockMediaMetadataAdapter();
 
   if (apiBaseUrl) {
     const baseUrl = normalizeBaseUrl(apiBaseUrl);
@@ -156,6 +163,7 @@ export function createReviewRuntime(options: ReviewRuntimeOptions = {}): ReviewR
 
   return {
     permissions,
+    mediaMetadata,
     getApi(mode) {
       const api = apis.get(mode);
       if (!api) throw new Error(`Unknown entry mode ${mode}`);
@@ -179,4 +187,8 @@ export function useReviewRuntime(): ReviewRuntime {
 
 export function useReviewApi(mode: EntryMode): ReviewApiPort {
   return useReviewRuntime().getApi(mode);
+}
+
+export function useMediaMetadata(): MediaMetadataPort {
+  return useReviewRuntime().mediaMetadata;
 }

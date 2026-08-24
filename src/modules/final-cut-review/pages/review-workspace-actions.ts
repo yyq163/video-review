@@ -2,6 +2,7 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { IssueStatus, ReviewAnnotationShape, ReviewIssue, ReviewVersion, ReviewWorkspace, UploadProgress } from '../contracts/types';
 import type { ReviewPlayerHandle } from '../components/ReviewPlayer';
 import type { useReviewMutations } from '../entry/use-review-queries';
+import type { MediaMetadata } from '../ports';
 import {
   clearAppendVersionConfirmationRequired,
   getAppendVersionProtectionState,
@@ -10,12 +11,22 @@ import {
 
 type ReviewMutations = ReturnType<typeof useReviewMutations>;
 type CurrentInput = { projectRefId: string; reviewItemId: string; versionId: string };
-export type AppendVersionInput = { file: File; versionNote: string; changeSummary: string };
+export type AppendVersionInput = {
+  file: File;
+  versionNote: string;
+  changeSummary: string;
+  responsibleEditorId?: string;
+  responsibleEditorNameSnapshot?: string;
+  localProbe?: MediaMetadata;
+};
 
 function isSameAppendVersionInput(current: AppendVersionInput, pending: AppendVersionInput): boolean {
   return current.file === pending.file &&
     current.versionNote === pending.versionNote &&
-    current.changeSummary === pending.changeSummary;
+    current.changeSummary === pending.changeSummary &&
+    current.responsibleEditorId === pending.responsibleEditorId &&
+    current.responsibleEditorNameSnapshot === pending.responsibleEditorNameSnapshot &&
+    current.localProbe === pending.localProbe;
 }
 
 export function useReviewWorkspaceActions(input: {
