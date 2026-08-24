@@ -447,6 +447,8 @@ def _assert_task_1_schema(db_path: Path) -> None:
             "project_ref_id_snapshot",
             "review_item_id_snapshot",
             "operation_identity_hash",
+            "cleanup_claim_id",
+            "cleanup_claim_expires_at",
             "created_at",
             "updated_at",
         } <= intent_columns
@@ -459,6 +461,7 @@ def _assert_task_1_schema(db_path: Path) -> None:
             "expected_inode",
             "expected_ctime_ns",
             "expected_size",
+            "expected_sha256",
             "created_at",
             "updated_at",
         } <= artifact_columns
@@ -651,13 +654,16 @@ def test_0023_constraints_keep_nullable_history_editor_snapshots_and_cleanup_ide
                     INSERT INTO review_deletion_artifacts (
                         id, deletion_intent_id, artifact_kind, relative_logical_target,
                         expected_device, expected_inode, expected_ctime_ns, expected_size,
+                        expected_sha256,
                         status, attempts, created_at, updated_at
                     ) VALUES (
                         'artifact-1', 'intent-1', 'original_media', 'files/file-legacy',
-                        1, 2, 3, 10000, 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        1, 2, 3, 10000, :artifact_sha256,
+                        'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
                     """
-                )
+                ),
+                {"artifact_sha256": "c" * 64},
             )
 
         with pytest.raises((DBAPIError, IntegrityError)):
@@ -788,16 +794,19 @@ def test_0023_constraints_keep_nullable_history_editor_snapshots_and_cleanup_ide
                             INSERT INTO review_deletion_artifacts (
                                 id, deletion_intent_id, artifact_kind, relative_logical_target,
                                 expected_device, expected_inode, expected_ctime_ns, expected_size,
+                                expected_sha256,
                                 status, attempts, created_at, updated_at
                             ) VALUES (
                                 :artifact_id, 'intent-1', 'thumbnail', :relative_logical_target,
-                                1, 2, 3, 10, 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                                1, 2, 3, 10, :artifact_sha256,
+                                'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                             )
                             """
                         ),
                         {
                             "artifact_id": f"artifact-invalid-{index}",
                             "relative_logical_target": invalid_target,
+                            "artifact_sha256": "d" * 64,
                         },
                     )
     finally:

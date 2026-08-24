@@ -756,6 +756,10 @@ def delete_claimed_package_artifact(
     package_id: str,
     cleanup_claim_id: str,
     expected_sha256: str,
+    expected_device: int | None = None,
+    expected_inode: int | None = None,
+    expected_ctime_ns: int | None = None,
+    expected_size: int | None = None,
 ) -> PackageDeleteOutcome:
     if PACKAGE_ID_RE.fullmatch(package_id) is None:
         raise UnsafeFilePathError("package identity is invalid")
@@ -763,6 +767,20 @@ def delete_claimed_package_artifact(
         raise UnsafeFilePathError("package cleanup claim is invalid")
     if SHA256_RE.fullmatch(expected_sha256) is None:
         raise UnsafeFilePathError("package content identity is invalid")
+    persisted_identity = (
+        expected_device,
+        expected_inode,
+        expected_ctime_ns,
+        expected_size,
+    )
+    if any(value is not None for value in persisted_identity):
+        if any(
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 0
+            for value in persisted_identity
+        ):
+            raise UnsafeFilePathError("package captured identity is invalid")
     canonical_name = f"{package_id}.zip"
 
     with pin_managed_root(package_root) as (_resolved_root, root_fd):
@@ -872,6 +890,15 @@ def delete_claimed_package_artifact(
                     _regular_single_link(descriptor_metadata, root_device=root_device)
                     if not _same_identity(descriptor_metadata, _identity(target_metadata)):
                         raise UnsafeFilePathError("package delete target changed while it was pinned")
+                    if expected_device is not None and (
+                        descriptor_metadata.st_dev != expected_device
+                        or descriptor_metadata.st_ino != expected_inode
+                        or descriptor_metadata.st_ctime_ns != expected_ctime_ns
+                        or descriptor_metadata.st_size != expected_size
+                    ):
+                        raise UnsafeFilePathError(
+                            "package delete target no longer matches the captured identity",
+                        )
                     _write_new_manifest(
                         entry_fd,
                         {

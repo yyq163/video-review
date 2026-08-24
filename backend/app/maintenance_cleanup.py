@@ -25,6 +25,8 @@ from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     FinalizationPackageInvalidationModel,
     FinalizationRecordModel,
     MediaDerivativeTaskModel,
+    ReviewDeletionArtifactModel,
+    ReviewDeletionIntentModel,
     ReviewVersionModel,
     UploadSessionModel,
     utcnow,
@@ -35,11 +37,14 @@ from backend.app.package_cleanup_files import (
     legacy_package_delete_journal_exists,
 )
 from backend.app.safe_files import (
+    DELETE_QUARANTINE_BATCH_SIZE,
+    DELETE_QUARANTINE_DIRECTORY,
     PinnedRegularFile,
     UnsafeFilePathError,
     contained_path,
     ensure_private_directory,
     pin_managed_root,
+    pin_regular_file,
     recover_delete_quarantines,
     unlink_regular_file,
 )
@@ -58,6 +63,8 @@ UPLOAD_CLEANUP_RETRY_SECONDS = 300
 DIRECTORY_SCAN_BATCH_SIZE = 100
 PACKAGE_CLEANUP_BATCH_SIZE = 100
 PACKAGE_CLEANUP_RETRY_SECONDS = 300
+REVIEW_DELETION_CLEANUP_BATCH_SIZE = 100
+REVIEW_DELETION_CLEANUP_LEASE_SECONDS = 300
 MAX_UPLOAD_PARTS_PER_SESSION = 256
 APV_H264_PLAYBACK_VARIANT = "apv-h264-v1"
 
@@ -316,6 +323,341 @@ def _cleanup_pending_deletes(
     except (OSError, ValueError):
         return removed, failed + 1
     return removed, failed
+
+
+def _review_deletion_error_code(error: BaseException) -> str:
+    if isinstance(error, PermissionError):
+        return "DELETION_ARTIFACT_PERMISSION_DENIED"
+    if isinstance(error, TimeoutError):
+        return "DELETION_ARTIFACT_TIMEOUT"
+    if isinstance(error, (UnsafeFilePathError, ValueError)):
+        return "DELETION_ARTIFACT_IDENTITY_MISMATCH"
+    return "DELETION_ARTIFACT_IO_RETRY_PENDING"
+
+
+def _claim_review_deletion_intents(
+    session: Session,
+    now: datetime,
+    *,
+    intent_ids: list[str] | None = None,
+    batch_size: int = REVIEW_DELETION_CLEANUP_BATCH_SIZE,
+    lease_seconds: int = REVIEW_DELETION_CLEANUP_LEASE_SECONDS,
+) -> list[tuple[str, str]]:
+    if not 1 <= batch_size <= REVIEW_DELETION_CLEANUP_BATCH_SIZE:
+        raise ValueError("review deletion cleanup batch size is invalid")
+    if lease_seconds < 1:
+        raise ValueError("review deletion cleanup lease is invalid")
+    eligible = or_(
+        ReviewDeletionIntentModel.status.in_(("pending", "failed")),
+        and_(
+            ReviewDeletionIntentModel.status == "cleaning",
+            ReviewDeletionIntentModel.cleanup_claim_expires_at <= now,
+        ),
+    )
+    statement = (
+        select(ReviewDeletionIntentModel)
+        .where(eligible)
+        .order_by(
+            ReviewDeletionIntentModel.updated_at,
+            ReviewDeletionIntentModel.id,
+        )
+        .limit(batch_size)
+        .with_for_update(skip_locked=True)
+    )
+    if intent_ids is not None:
+        if not intent_ids:
+            return []
+        statement = statement.where(ReviewDeletionIntentModel.id.in_(intent_ids))
+    intents = list(session.scalars(statement))
+    claims: list[tuple[str, str]] = []
+    lease_expires_at = now + timedelta(seconds=lease_seconds)
+    for intent in intents:
+        claim_id = f"cleanup_{uuid.uuid4().hex}"
+        intent.status = "cleaning"
+        intent.attempts += 1
+        intent.last_error_code = None
+        intent.cleanup_claim_id = claim_id
+        intent.cleanup_claim_expires_at = lease_expires_at
+        intent.updated_at = now
+        claims.append((intent.id, claim_id))
+    session.commit()
+    return claims
+
+
+def _regular_file_sha256(pinned: PinnedRegularFile) -> str:
+    digest = hashlib.sha256()
+    with pinned.open_readonly() as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _delete_review_deletion_artifact(
+    artifact: ReviewDeletionArtifactModel,
+    *,
+    claim_id: str,
+    settings: Settings,
+) -> bool:
+    relative = Path(artifact.relative_logical_target)
+    if relative.is_absolute() or len(relative.parts) != 2:
+        raise UnsafeFilePathError("review deletion artifact target is invalid")
+    namespace, name = relative.parts
+    if namespace == "files":
+        if FILE_ID_RE.fullmatch(name) is None and DERIVATIVE_FILE_ID_RE.fullmatch(name) is None:
+            raise UnsafeFilePathError("review deletion file identity is invalid")
+        target = contained_path(relative, settings.storage_root)
+        root = settings.storage_root
+        with pin_regular_file(target, root) as pinned:
+            if pinned is None or not pinned.exists:
+                return False
+            if (
+                pinned.device != artifact.expected_device
+                or pinned.inode != artifact.expected_inode
+                or pinned.ctime_ns != artifact.expected_ctime_ns
+                or pinned.size != artifact.expected_size
+            ):
+                raise UnsafeFilePathError(
+                    "review deletion file no longer has the captured identity",
+                )
+            if _regular_file_sha256(pinned) != artifact.expected_sha256:
+                raise UnsafeFilePathError(
+                    "review deletion file content identity changed",
+                )
+            return pinned.unlink(missing_ok=True)
+    if namespace == "packages":
+        match = PACKAGE_FILE_RE.fullmatch(name)
+        if match is None:
+            raise UnsafeFilePathError("review deletion package identity is invalid")
+        package_id = match.group(1)
+        target = contained_path(Path(name), settings.package_root)
+        with pin_regular_file(target, settings.package_root) as pinned:
+            if pinned is not None and pinned.exists:
+                if (
+                    pinned.device != artifact.expected_device
+                    or pinned.inode != artifact.expected_inode
+                    or pinned.ctime_ns != artifact.expected_ctime_ns
+                    or pinned.size != artifact.expected_size
+                ):
+                    raise UnsafeFilePathError(
+                        "review deletion package no longer has the captured identity",
+                    )
+                if _regular_file_sha256(pinned) != artifact.expected_sha256:
+                    raise UnsafeFilePathError(
+                        "review deletion package content identity changed",
+                    )
+        outcome = delete_claimed_package_artifact(
+            settings.package_root,
+            package_id=package_id,
+            cleanup_claim_id=claim_id,
+            expected_sha256=artifact.expected_sha256,
+            expected_device=artifact.expected_device,
+            expected_inode=artifact.expected_inode,
+            expected_ctime_ns=artifact.expected_ctime_ns,
+            expected_size=artifact.expected_size,
+        )
+        return outcome == PackageDeleteOutcome.REMOVED
+    raise UnsafeFilePathError("review deletion artifact namespace is invalid")
+
+
+def _cleanup_claimed_review_deletions(
+    session: Session,
+    claims: list[tuple[str, str]],
+    settings: Settings,
+) -> tuple[int, int]:
+    completed = 0
+    failed = 0
+    for intent_id, claim_id in claims:
+        session.expire_all()
+        intent = session.scalar(
+            select(ReviewDeletionIntentModel)
+            .where(
+                ReviewDeletionIntentModel.id == intent_id,
+                ReviewDeletionIntentModel.status == "cleaning",
+                ReviewDeletionIntentModel.cleanup_claim_id == claim_id,
+            )
+            .with_for_update(skip_locked=True),
+        )
+        if intent is None:
+            session.rollback()
+            continue
+        artifact_ids = list(
+            session.scalars(
+                select(ReviewDeletionArtifactModel.id)
+                .where(
+                    ReviewDeletionArtifactModel.deletion_intent_id == intent_id,
+                    ReviewDeletionArtifactModel.status != "deleted",
+                )
+                .order_by(ReviewDeletionArtifactModel.id),
+            ),
+        )
+        session.commit()
+        had_failure = False
+        for artifact_id in artifact_ids:
+            artifact = session.scalar(
+                select(ReviewDeletionArtifactModel)
+                .join(
+                    ReviewDeletionIntentModel,
+                    ReviewDeletionIntentModel.id
+                    == ReviewDeletionArtifactModel.deletion_intent_id,
+                )
+                .where(
+                    ReviewDeletionArtifactModel.id == artifact_id,
+                    ReviewDeletionArtifactModel.status != "deleted",
+                    ReviewDeletionIntentModel.status == "cleaning",
+                    ReviewDeletionIntentModel.cleanup_claim_id == claim_id,
+                )
+                .with_for_update(),
+            )
+            if artifact is None:
+                session.rollback()
+                continue
+            session.commit()
+            try:
+                _delete_review_deletion_artifact(
+                    artifact,
+                    claim_id=claim_id,
+                    settings=settings,
+                )
+            except (OSError, UnicodeError, ValueError) as error:
+                session.rollback()
+                artifact = session.scalar(
+                    select(ReviewDeletionArtifactModel)
+                    .join(
+                        ReviewDeletionIntentModel,
+                        ReviewDeletionIntentModel.id
+                        == ReviewDeletionArtifactModel.deletion_intent_id,
+                    )
+                    .where(
+                        ReviewDeletionArtifactModel.id == artifact_id,
+                        ReviewDeletionIntentModel.status == "cleaning",
+                        ReviewDeletionIntentModel.cleanup_claim_id == claim_id,
+                    )
+                    .with_for_update(),
+                )
+                if artifact is None:
+                    session.rollback()
+                    continue
+                artifact.status = "failed"
+                artifact.attempts += 1
+                artifact.last_error_code = _review_deletion_error_code(error)
+                artifact.updated_at = utcnow()
+                session.commit()
+                had_failure = True
+                continue
+            session.rollback()
+            artifact = session.scalar(
+                select(ReviewDeletionArtifactModel)
+                .join(
+                    ReviewDeletionIntentModel,
+                    ReviewDeletionIntentModel.id
+                    == ReviewDeletionArtifactModel.deletion_intent_id,
+                )
+                .where(
+                    ReviewDeletionArtifactModel.id == artifact_id,
+                    ReviewDeletionIntentModel.status == "cleaning",
+                    ReviewDeletionIntentModel.cleanup_claim_id == claim_id,
+                )
+                .with_for_update(),
+            )
+            if artifact is None:
+                session.rollback()
+                continue
+            now = utcnow()
+            artifact.status = "deleted"
+            artifact.attempts += 1
+            artifact.last_error_code = None
+            artifact.deleted_at = now
+            artifact.updated_at = now
+            session.commit()
+        intent = session.scalar(
+            select(ReviewDeletionIntentModel)
+            .where(
+                ReviewDeletionIntentModel.id == intent_id,
+                ReviewDeletionIntentModel.status == "cleaning",
+                ReviewDeletionIntentModel.cleanup_claim_id == claim_id,
+            )
+            .with_for_update(),
+        )
+        if intent is None:
+            session.rollback()
+            continue
+        remaining = session.scalar(
+            select(func.count())
+            .select_from(ReviewDeletionArtifactModel)
+            .where(
+                ReviewDeletionArtifactModel.deletion_intent_id == intent_id,
+                ReviewDeletionArtifactModel.status != "deleted",
+            ),
+        ) or 0
+        now = utcnow()
+        intent.cleanup_claim_id = None
+        intent.cleanup_claim_expires_at = None
+        intent.updated_at = now
+        if remaining == 0:
+            intent.status = "complete"
+            intent.completed_at = now
+            intent.last_error_code = None
+            completed += 1
+        else:
+            intent.status = "failed"
+            intent.completed_at = None
+            intent.last_error_code = (
+                "DELETION_ARTIFACT_RETRY_PENDING"
+                if had_failure
+                else "DELETION_ARTIFACT_INCOMPLETE"
+            )
+            failed += 1
+        session.commit()
+    return completed, failed
+
+
+def process_review_deletion_intents(
+    settings: Settings,
+    *,
+    intent_ids: list[str] | None = None,
+) -> tuple[int, int]:
+    for _batch in range(1_000):
+        try:
+            resolved, quarantine_failures = recover_delete_quarantines(
+                settings.storage_root,
+            )
+        except (OSError, ValueError):
+            return 0, 1
+        if quarantine_failures:
+            return 0, quarantine_failures
+        if resolved < DELETE_QUARANTINE_BATCH_SIZE:
+            break
+    else:
+        return 0, 1
+    try:
+        with pin_managed_root(settings.storage_root) as (_root, root_fd):
+            try:
+                quarantine_fd = os.open(
+                    DELETE_QUARANTINE_DIRECTORY,
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=root_fd,
+                )
+            except FileNotFoundError:
+                quarantine_fd = -1
+            if quarantine_fd >= 0:
+                try:
+                    entries = os.scandir(quarantine_fd)
+                    try:
+                        if next(entries, None) is not None:
+                            return 0, 1
+                    finally:
+                        entries.close()
+                finally:
+                    os.close(quarantine_fd)
+    except (OSError, ValueError):
+        return 0, 1
+    with SessionLocal() as session:
+        claims = _claim_review_deletion_intents(
+            session,
+            utcnow(),
+            intent_ids=intent_ids,
+        )
+        return _cleanup_claimed_review_deletions(session, claims, settings)
 
 
 def _claim_terminal_or_stale_uploads(session: Session, stale_before: datetime) -> list[str]:
@@ -856,6 +1198,9 @@ def _cleanup_temporary_files(settings: Settings) -> dict[str, int]:
             settings.storage_root,
             stale_before,
         )
+    completed_review_deletions, failed_review_deletions = (
+        process_review_deletion_intents(settings)
+    )
     return {
         "resolved_delete_quarantines": resolved_delete_quarantines,
         "failed_delete_quarantines": failed_delete_quarantines,
@@ -873,4 +1218,6 @@ def _cleanup_temporary_files(settings: Settings) -> dict[str, int]:
         "failed_packages": 0,
         "removed_pending_deletes": removed_pending_deletes,
         "failed_pending_deletes": failed_pending_deletes,
+        "completed_review_deletions": completed_review_deletions,
+        "failed_review_deletions": failed_review_deletions,
     }

@@ -826,10 +826,7 @@ def test_repair_runtime_upgrade_preserves_legacy_current_version_assets_without_
     from backend.app.modules.final_cut_review.infra.repositories import (
         SqlAlchemyReviewRepository,
     )
-    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
-        FileObjectModel,
-        MediaDerivativeTaskModel,
-    )
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import MediaDerivativeTaskModel
     from backend.app.settings import get_database_settings
 
     root = Path(__file__).resolve().parents[2]
@@ -839,84 +836,119 @@ def test_repair_runtime_upgrade_preserves_legacy_current_version_assets_without_
     alembic_command.upgrade(cfg, "20260714_0019")
 
     engine = create_engine(f"sqlite:///{db_path}")
-    LegacySession = sessionmaker(bind=engine)
     project_id = "prj_legacy_derivative_compat"
     item_id = "item_legacy_derivative_compat"
     version_id = "ver_legacy_derivative_compat"
     playback_id = "file_11111111111111111111111111111111"
     thumbnail_id = "file_22222222222222222222222222222222"
     try:
-        with LegacySession() as session:
-            project = ProjectRefModel(
-                id=project_id,
-                project_code="LEGACY-COMPAT",
-                project_name="Legacy compatibility",
+        from sqlalchemy import MetaData, Table
+
+        legacy_metadata = MetaData()
+        projects = Table("project_refs", legacy_metadata, autoload_with=engine)
+        items = Table("review_items", legacy_metadata, autoload_with=engine)
+        versions = Table("review_versions", legacy_metadata, autoload_with=engine)
+        files = Table("file_objects", legacy_metadata, autoload_with=engine)
+        now = utcnow()
+        with engine.begin() as connection:
+            connection.execute(
+                projects.insert().values(
+                    id=project_id,
+                    project_code="LEGACY-COMPAT",
+                    project_name="Legacy compatibility",
+                    description="",
+                    source="local",
+                    lifecycle_status="active",
+                    lock_version=1,
+                    created_at=now,
+                    updated_at=now,
+                ),
             )
-            item = ReviewItemModel(
-                id=item_id,
-                project_ref_id=project_id,
-                item_code="LEGACY-001",
-                title="Legacy item",
+            connection.execute(
+                files.insert(),
+                [
+                    {
+                        "id": playback_id,
+                        "original_filename": "legacy.mp4",
+                        "mime_type": "video/mp4",
+                        "file_size": 16,
+                        "sha256": "1" * 64,
+                        "storage_path": str(tmp_path / "storage" / "files" / playback_id),
+                        "owner_principal_id": "legacy-owner",
+                        "owner_principal_kind": "system",
+                        "duration_ms": 1000,
+                        "width": 1920,
+                        "height": 1080,
+                        "fps_num": 25,
+                        "fps_den": 1,
+                        "media_probe_version": "legacy-probe-v1",
+                        "created_at": now,
+                    },
+                    {
+                        "id": thumbnail_id,
+                        "original_filename": "legacy.jpg",
+                        "mime_type": "image/jpeg",
+                        "file_size": 8,
+                        "sha256": "2" * 64,
+                        "storage_path": str(tmp_path / "storage" / "files" / thumbnail_id),
+                        "owner_principal_id": "legacy-owner",
+                        "owner_principal_kind": "system",
+                        "duration_ms": 1000,
+                        "width": 640,
+                        "height": 360,
+                        "fps_num": 25,
+                        "fps_den": 1,
+                        "media_probe_version": "legacy-probe-v1",
+                        "created_at": now,
+                    },
+                ],
             )
-            playback = FileObjectModel(
-                id=playback_id,
-                original_filename="legacy.mp4",
-                mime_type="video/mp4",
-                file_size=16,
-                sha256="1" * 64,
-                storage_path=str(tmp_path / "storage" / "files" / playback_id),
-                owner_principal_id="legacy-owner",
-                owner_principal_kind="system",
-                duration_ms=1000,
-                width=1920,
-                height=1080,
-                fps_num=25,
-                fps_den=1,
-                media_probe_version="legacy-probe-v1",
+            connection.execute(
+                items.insert().values(
+                    id=item_id,
+                    project_ref_id=project_id,
+                    item_code="LEGACY-001",
+                    title="Legacy item",
+                    workflow_status="pending_review",
+                    current_version_id=None,
+                    current_version_is_current=True,
+                    active_finalization_id=None,
+                    lock_version=1,
+                    created_at=now,
+                    updated_at=now,
+                ),
             )
-            thumbnail = FileObjectModel(
-                id=thumbnail_id,
-                original_filename="legacy.jpg",
-                mime_type="image/jpeg",
-                file_size=8,
-                sha256="2" * 64,
-                storage_path=str(tmp_path / "storage" / "files" / thumbnail_id),
-                owner_principal_id="legacy-owner",
-                owner_principal_kind="system",
-                duration_ms=1000,
-                width=640,
-                height=360,
-                fps_num=25,
-                fps_den=1,
-                media_probe_version="legacy-probe-v1",
+            connection.execute(
+                versions.insert().values(
+                    id=version_id,
+                    project_ref_id=project_id,
+                    review_item_id=item_id,
+                    previous_version_id=None,
+                    version_no=1,
+                    version_label="V1",
+                    is_current=True,
+                    original_file_id=playback_id,
+                    original_filename="legacy.mp4",
+                    mime_type="video/mp4",
+                    file_size=16,
+                    sha256="1" * 64,
+                    duration_ms=1000,
+                    width=1920,
+                    height=1080,
+                    fps_num=25,
+                    fps_den=1,
+                    media_probe_version="legacy-probe-v1",
+                    playback_asset_id=playback_id,
+                    thumbnail_asset_id=thumbnail_id,
+                    lock_version=1,
+                    created_at=now,
+                ),
             )
-            session.add_all([project, item, playback, thumbnail])
-            session.flush()
-            version = ReviewVersionModel(
-                id=version_id,
-                project_ref_id=project_id,
-                review_item_id=item_id,
-                version_no=1,
-                version_label="V1",
-                is_current=True,
-                original_file_id=playback_id,
-                original_filename="legacy.mp4",
-                mime_type="video/mp4",
-                file_size=16,
-                sha256="1" * 64,
-                duration_ms=1000,
-                width=1920,
-                height=1080,
-                fps_num=25,
-                fps_den=1,
-                media_probe_version="legacy-probe-v1",
-                playback_asset_id=playback_id,
-                thumbnail_asset_id=thumbnail_id,
+            connection.execute(
+                items.update()
+                .where(items.c.id == item_id)
+                .values(current_version_id=version_id),
             )
-            session.add(version)
-            session.flush()
-            item.current_version_id = version_id
-            session.commit()
     finally:
         engine.dispose()
 

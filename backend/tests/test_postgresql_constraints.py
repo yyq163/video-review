@@ -1488,7 +1488,8 @@ def test_postgresql_delete_review_item_detaches_outbox_and_removes_file() -> Non
         session.commit()
         repository.run_post_commit_file_deletions()
 
-        assert deleted["id"] == item.id
+        assert deleted["review_item_id"] == item.id
+        assert deleted["outcome"] == "deleted"
         assert session.get(ReviewItemModel, item.id) is None
         assert session.get(ReviewVersionModel, version.id) is None
         assert session.get(FileObjectModel, file.id) is None
@@ -1502,12 +1503,7 @@ def test_postgresql_delete_review_item_detaches_outbox_and_removes_file() -> Non
                 )
             )
         )
-        assert len(events) == 1
-        assert events[0].review_item_id is None
-        assert events[0].version_id is None
-        assert events[0].issue_id is None
-        assert events[0].finalization_id is None
-        assert events[0].correlation_id == context.request_id
+        assert events == []
     finally:
         session.close()
         engine.dispose()
@@ -2236,9 +2232,10 @@ def test_postgresql_project_delete_and_child_create_serialize() -> None:
     delete_session = SessionLocal()
     delete_project = delete_session.get(ProjectRefModel, project_id)
     assert delete_project is not None
-    SqlAlchemyReviewRepository(delete_session, get_settings()).execute(
-        "SoftDeleteProject",
-        {"project_ref_id": project_id},
+    delete_repository = SqlAlchemyReviewRepository(delete_session, get_settings())
+    delete_repository.execute(
+        "DeleteProject",
+        {"project_ref_id": project_id, "confirmed": True},
         context,
         delete_project.lock_version,
     )
@@ -2271,6 +2268,7 @@ def test_postgresql_project_delete_and_child_create_serialize() -> None:
         blocked_session.rollback()
 
     delete_session.commit()
+    delete_repository.run_post_commit_file_deletions()
     with SessionLocal() as rejected_session:
         with pytest.raises(ReviewError) as review_error_info:
             SqlAlchemyReviewRepository(rejected_session, get_settings()).execute(
@@ -2284,7 +2282,7 @@ def test_postgresql_project_delete_and_child_create_serialize() -> None:
                 context,
                 None,
             )
-        assert review_error_info.value.code == "RESOURCE_STATE_CONFLICT"
+        assert review_error_info.value.code == "RESOURCE_NOT_FOUND"
 
     delete_session.close()
     engine.dispose()

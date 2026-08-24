@@ -195,6 +195,33 @@ def test_package_delete_manifest_writes_are_complete_under_short_writes(
     assert not artifact.exists()
 
 
+def test_package_delete_rejects_a_target_that_no_longer_matches_persisted_identity(
+    tmp_path: Path,
+) -> None:
+    import backend.app.package_cleanup_files as package_files
+
+    root = _private_package_root(tmp_path)
+    package_id = _package_id("1")
+    content = b"persisted-package-identity"
+    artifact = root / f"{package_id}.zip"
+    artifact.write_bytes(content)
+    identity = artifact.stat()
+
+    with pytest.raises(UnsafeFilePathError, match="captured identity"):
+        package_files.delete_claimed_package_artifact(
+            root,
+            package_id=package_id,
+            cleanup_claim_id=_claim_id("1"),
+            expected_sha256=hashlib.sha256(content).hexdigest(),
+            expected_device=identity.st_dev,
+            expected_inode=identity.st_ino + 1,
+            expected_ctime_ns=identity.st_ctime_ns,
+            expected_size=identity.st_size,
+        )
+
+    assert artifact.read_bytes() == content
+
+
 def test_package_delete_manifest_zero_write_fails_before_moving_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

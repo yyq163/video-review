@@ -2247,23 +2247,12 @@ describe('final cut review core invariants', () => {
     ).resolves.toMatchObject({ item: expect.objectContaining({ projectRefId: 'prj_seed_final_cut' }) });
   });
 
-  it('soft-deletes projects from lists without physically deleting descendants', async () => {
+  it('permanently deletes projects and their in-memory business descendants', async () => {
     const { edit, review, repository } = makeHarness();
-    const before = repository.snapshot();
-    const beforeItemCount = before.items.filter(
-      (item) => item.projectRefId === 'prj_seed_final_cut',
-    ).length;
-    const beforeVersionCount = before.versions.filter(
-      (version) => version.projectRefId === 'prj_seed_final_cut',
-    ).length;
-    const beforeIssueCount = before.issues.filter(
-      (issue) => issue.projectRefId === 'prj_seed_final_cut',
-    ).length;
-
     const deleted = await review.deleteProject({ projectRefId: 'prj_seed_final_cut', confirmed: true }, ctx(review));
-    expect(deleted.deletedAt).toEqual(expect.any(String));
+    expect(deleted.projectRefId).toBe('prj_seed_final_cut');
     await expect(review.deleteProject({ projectRefId: 'prj_seed_final_cut', confirmed: true }, ctx(review))).rejects.toMatchObject({
-      code: 'RESOURCE_STATE_CONFLICT',
+      code: 'PROJECT_NOT_FOUND',
     });
 
     await expect(edit.listProjects()).resolves.not.toEqual(
@@ -2272,18 +2261,16 @@ describe('final cut review core invariants', () => {
 
     await expect(edit.getProjectSummary('prj_seed_final_cut')).rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' });
     const snapshot = repository.snapshot();
-    expect(snapshot.items.filter((item) => item.projectRefId === 'prj_seed_final_cut')).toHaveLength(beforeItemCount);
-    expect(snapshot.versions.filter((version) => version.projectRefId === 'prj_seed_final_cut')).toHaveLength(
-      beforeVersionCount,
-    );
-    expect(snapshot.issues.filter((issue) => issue.projectRefId === 'prj_seed_final_cut')).toHaveLength(
-      beforeIssueCount,
-    );
+    expect(snapshot.projects.some((project) => project.projectRefId === 'prj_seed_final_cut')).toBe(false);
+    expect(snapshot.items.filter((item) => item.projectRefId === 'prj_seed_final_cut')).toHaveLength(0);
+    expect(snapshot.versions.filter((version) => version.projectRefId === 'prj_seed_final_cut')).toHaveLength(0);
+    expect(snapshot.issues.filter((issue) => issue.projectRefId === 'prj_seed_final_cut')).toHaveLength(0);
+    expect(snapshot.finalizations.filter((record) => record.projectRefId === 'prj_seed_final_cut')).toHaveLength(0);
     await expect(review.createProjectFinalizedPackage(
       { projectRefId: 'prj_seed_final_cut', unifiedName: '删除定稿' },
       ctx(review),
     )).rejects.toMatchObject({
-      code: 'RESOURCE_STATE_CONFLICT',
+      code: 'PROJECT_NOT_FOUND',
     });
     await expect(
       edit.createReviewItemWithVersion(
@@ -2295,9 +2282,9 @@ describe('final cut review core invariants', () => {
         },
         ctx(edit),
       ),
-    ).rejects.toMatchObject({ code: 'PROJECT_DELETED_READONLY' });
+    ).rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' });
     await expect(review.archiveProject({ projectRefId: 'prj_seed_final_cut' }, ctx(review))).rejects.toMatchObject({
-      code: 'PROJECT_DELETED_READONLY',
+      code: 'PROJECT_NOT_FOUND',
     });
   });
 

@@ -4,7 +4,7 @@ import type { MockReviewContext } from './mock-review-context';
 
 type UploadApi = Pick<
   ReviewApiPort,
-  'createReviewItemWithVersion' | 'updateReviewItem' | 'deleteReviewItem' | 'appendVersion'
+  'createReviewItemWithVersion' | 'updateReviewItem' | 'deleteReviewItem' | 'deleteReviewItemsBatch' | 'appendVersion'
 >;
 
 function reportUploadProgress(
@@ -77,6 +77,12 @@ export class MockReviewUploads implements UploadApi {
     await this.context.ready();
     this.context.assertContext(executionContext, 'review.item.delete');
     return this.context.repository.deleteReviewItem(input);
+  };
+
+  readonly deleteReviewItemsBatch: ReviewApiPort['deleteReviewItemsBatch'] = async (input, executionContext) => {
+    await this.context.ready();
+    this.context.assertContext(executionContext, 'review.item.delete');
+    return this.context.repository.deleteReviewItemsBatch(input);
   };
 
   readonly appendVersion: ReviewApiPort['appendVersion'] = async (input, executionContext) => {

@@ -163,6 +163,22 @@ export interface ReviewCommandPort {
     input: { projectRefId: ProjectRefId; reviewItemId: ReviewItemId; confirmed: true },
     context: ExecutionContext,
   ): Promise<ReviewItem>;
+  deleteReviewItemsBatch(
+    input: {
+      projectRefId: ProjectRefId;
+      reviewItemIds: ReviewItemId[];
+      confirmed: true;
+    },
+    context: ExecutionContext,
+  ): Promise<{
+    projectRefId: ProjectRefId;
+    results: Array<{
+      projectRefId: ProjectRefId;
+      reviewItemId: ReviewItemId;
+      outcome: 'deleted' | 'failed' | 'outcome_unknown';
+      errorCode: string | null;
+    }>;
+  }>;
   appendVersion(
     input: {
       projectRefId: ProjectRefId;

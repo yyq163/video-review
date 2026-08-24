@@ -106,12 +106,13 @@ def _fresh_client(
     alembic_command.upgrade(alembic_cfg, "head")
     models_mod: Any = importlib.import_module("backend.app.modules.final_cut_review.infra.sqlalchemy_models")
     with db_mod.SessionLocal.begin() as seed_session:
-        seed_session.add(
-            models_mod.ResponsibleEditorModel(
-                id="editor_test_default",
-                display_name="Test Editor",
+        if seed_session.get(models_mod.ResponsibleEditorModel, "editor_test_default") is None:
+            seed_session.add(
+                models_mod.ResponsibleEditorModel(
+                    id="editor_test_default",
+                    display_name="Test Editor",
+                )
             )
-        )
     main_mod = importlib.import_module("backend.app.main")
     # main.py intentionally keeps its runtime settings at module scope. Tests
     # reuse that module, so refresh the binding after applying this fixture's

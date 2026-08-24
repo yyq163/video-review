@@ -61,7 +61,6 @@ from backend.app.safe_files import (
 )
 from backend.app.thumbnail_similarity import (
     reconcile_project_thumbnail_groups,
-    thumbnail_variant_file_ids,
 )
 from backend.app.settings import ZIP_MAX_ARCHIVE_NAME_BYTES, Settings, estimate_zip_stored_storage_bytes
 
@@ -88,6 +87,7 @@ from .sqlalchemy_models import (
 
 POST_COMMIT_FILE_DELETIONS_KEY = "final_cut_review_post_commit_file_deletions"
 POST_COMMIT_PACKAGE_DELETIONS_KEY = "final_cut_review_post_commit_package_deletions"
+POST_COMMIT_REVIEW_DELETION_INTENTS_KEY = "final_cut_review_post_commit_deletion_intents"
 AUDIT_EXECUTION_IDENTITY_KEY = "final_cut_review_audit_execution_identity"
 PACKAGE_QUEUE_ADVISORY_LOCK_KEY = 5064946991358883141
 STORAGE_ADMISSION_ADVISORY_LOCK_KEY = int.from_bytes(b"FCRSTOR1", "big")
@@ -493,6 +493,10 @@ class SqlAlchemyReviewRepository:
         pending = self.session.info.setdefault(POST_COMMIT_PACKAGE_DELETIONS_KEY, [])
         return pending
 
+    def _post_commit_review_deletion_intents(self) -> list[str]:
+        pending = self.session.info.setdefault(POST_COMMIT_REVIEW_DELETION_INTENTS_KEY, [])
+        return pending
+
     def run_post_commit_file_deletions(self) -> None:
         pending = list(self.session.info.pop(POST_COMMIT_FILE_DELETIONS_KEY, []))
         for storage_path, tombstone, device, inode, ctime_ns, size in pending:
@@ -552,9 +556,27 @@ class SqlAlchemyReviewRepository:
                     extra={"package_count": len(reclaimed_package_ids)},
                 )
 
+        deletion_intent_ids = list(
+            self.session.info.pop(POST_COMMIT_REVIEW_DELETION_INTENTS_KEY, []),
+        )
+        if deletion_intent_ids:
+            try:
+                from backend.app.maintenance_cleanup import process_review_deletion_intents
+
+                process_review_deletion_intents(
+                    self.settings,
+                    intent_ids=deletion_intent_ids,
+                )
+            except Exception:
+                LOGGER.warning(
+                    "post_commit_review_deletion_cleanup_pending",
+                    extra={"intent_count": len(deletion_intent_ids)},
+                )
+
     def discard_post_commit_file_deletions(self) -> None:
         pending = self.session.info.pop(POST_COMMIT_FILE_DELETIONS_KEY, [])
         self.session.info.pop(POST_COMMIT_PACKAGE_DELETIONS_KEY, None)
+        self.session.info.pop(POST_COMMIT_REVIEW_DELETION_INTENTS_KEY, None)
         for _storage_path, tombstone, _device, _inode, _ctime_ns, _size in pending:
             try:
                 unlink_regular_file(tombstone, self.settings.storage_root)
@@ -568,6 +590,20 @@ class SqlAlchemyReviewRepository:
         package_pending = self.session.info.pop(POST_COMMIT_PACKAGE_DELETIONS_KEY, [])
         if package_pending:
             LOGGER.warning("post_commit_package_delete_outcome_unknown", extra={"pending_count": len(package_pending)})
+        deletion_intents = self.session.info.pop(
+            POST_COMMIT_REVIEW_DELETION_INTENTS_KEY,
+            [],
+        )
+        if deletion_intents:
+            LOGGER.warning(
+                "post_commit_review_deletion_outcome_unknown",
+                extra={"pending_count": len(deletion_intents)},
+            )
+
+    def _queue_post_commit_review_deletion_intent(self, intent_id: str) -> None:
+        pending = self._post_commit_review_deletion_intents()
+        if intent_id not in pending:
+            pending.append(intent_id)
 
     def _queue_post_commit_file_deletion(self, storage_path: Path, file_id: str) -> None:
         tombstone, device, inode, ctime_ns, size = self._write_pending_file_delete(
@@ -729,10 +765,11 @@ class SqlAlchemyReviewRepository:
             "RenameResponsibleEditor": self.rename_responsible_editor,
             "ArchiveProject": self.archive_project,
             "RestoreProject": self.restore_project,
-            "SoftDeleteProject": self.soft_delete_project,
+            "DeleteProject": self.delete_project,
             "CreateReviewItem": self.create_review_item,
             "UpdateReviewItem": self.update_review_item,
             "DeleteReviewItem": self.delete_review_item,
+            "DeleteReviewItemsBatch": self.delete_review_items_batch,
             "UploadReviewVersion": self.upload_review_version,
             "StartReview": self.start_review,
             "CreateReviewIssue": self.create_review_issue,
@@ -1626,15 +1663,33 @@ class SqlAlchemyReviewRepository:
         self._event("review.project.restored", context, project.id, "project", project.id, project.lock_version)
         return self.project_dto(project)
 
-    def soft_delete_project(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
-        project = self._get_project(payload["project_ref_id"], for_update=True)
-        self._assert_project_active(project)
-        self._expect_lock(project, expected_version)
-        project.deleted_at = utcnow()
-        project.lock_version += 1
-        project.updated_at = utcnow()
-        self._event("review.project.deleted", context, project.id, "project", project.id, project.lock_version)
-        return self.project_dto(project)
+    def _durable_deletion_coordinator(self) -> Any:
+        from .deletion import DurableDeletionCoordinator
+
+        execution_identity = self.session.info.get(AUDIT_EXECUTION_IDENTITY_KEY)
+        if not isinstance(execution_identity, str) or len(execution_identity) != 64:
+            raise ReviewError(
+                "RESOURCE_STATE_CONFLICT",
+                "删除命令缺少稳定执行身份",
+            )
+        return DurableDeletionCoordinator(
+            self.session,
+            self.settings,
+            execution_identity=execution_identity,
+            enqueue_post_commit=self._queue_post_commit_review_deletion_intent,
+        )
+
+    def delete_project(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        return self._durable_deletion_coordinator().delete_project(
+            payload,
+            context,
+            expected_version,
+        )
 
     def create_review_item(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
         del expected_version
@@ -1689,104 +1744,23 @@ class SqlAlchemyReviewRepository:
         return self.item_dto(item)
 
     def delete_review_item(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
-        if payload.get("confirmed") is not True:
-            raise ReviewError("VALIDATION_ERROR", "删除分集必须二次确认")
-        project = self._get_project(payload["project_ref_id"], for_update=True)
-        self._assert_project_active(project)
-        item = self._get_item(project.id, payload["review_item_id"], for_update=True)
-        self._expect_lock(item, expected_version)
-        versions = list(
-            self.session.scalars(
-                select(ReviewVersionModel).where(
-                    ReviewVersionModel.project_ref_id == project.id,
-                    ReviewVersionModel.review_item_id == item.id,
-                )
-            )
+        return self._durable_deletion_coordinator().delete_review_item(
+            payload,
+            context,
+            expected_version,
         )
-        issue_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(ReviewIssueModel)
-                .where(
-                    ReviewIssueModel.project_ref_id == project.id,
-                    ReviewIssueModel.review_item_id == item.id,
-                )
-            )
-            or 0
+
+    def delete_review_items_batch(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        return self._durable_deletion_coordinator().delete_review_items_batch(
+            payload,
+            context,
+            expected_version,
         )
-        finalization_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(FinalizationRecordModel)
-                .where(
-                    FinalizationRecordModel.project_ref_id == project.id,
-                    FinalizationRecordModel.review_item_id == item.id,
-                )
-            )
-            or 0
-        )
-        if item.workflow_status != "pending_review" or len(versions) != 1 or issue_count > 0 or finalization_count > 0 or item.active_finalization_id:
-            raise ReviewError("RESOURCE_STATE_CONFLICT", "审核已开始，不能删除分集")
-        derivative_tasks = list(
-            self.session.scalars(
-                select(MediaDerivativeTaskModel)
-                .where(
-                    MediaDerivativeTaskModel.project_ref_id == project.id,
-                    MediaDerivativeTaskModel.review_item_id == item.id,
-                )
-                .with_for_update()
-            )
-        )
-        file_ids = {
-            file_id
-            for version in versions
-            for file_id in (
-                version.original_file_id,
-                version.playback_asset_id,
-                version.thumbnail_asset_id,
-            )
-            if file_id
-        }
-        file_ids.update(task.output_file_id for task in derivative_tasks if task.output_file_id)
-        for task in derivative_tasks:
-            if task.kind == "thumbnail":
-                file_ids.update(thumbnail_variant_file_ids(task.result_details))
-        item.lock_version += 1
-        item.updated_at = utcnow()
-        deleted = self.item_dto(item)
-        self._event("review.item.deleted", context, project.id, "review_item", item.id, item.lock_version)
-        self.session.execute(
-            update(OutboxEventModel)
-            .where(
-                OutboxEventModel.project_ref_id == project.id,
-                OutboxEventModel.review_item_id == item.id,
-            )
-            .values(
-                review_item_id=None,
-                version_id=None,
-                issue_id=None,
-                finalization_id=None,
-            )
-        )
-        item.current_version_id = None
-        self.session.flush()
-        for task in derivative_tasks:
-            self.session.delete(task)
-        self.session.flush()
-        for version in versions:
-            self.session.delete(version)
-        self.session.flush()
-        self.session.delete(item)
-        self.session.flush()
-        reconcile_project_thumbnail_groups(
-            self.session,
-            project.id,
-            discover_legacy_signatures=False,
-        )
-        self.session.flush()
-        for file_id in file_ids:
-            self._delete_file_object_if_unreferenced(file_id)
-        return deleted
 
     def _delete_file_object_if_unreferenced(self, file_id: str) -> None:
         file = self.session.get(FileObjectModel, file_id)

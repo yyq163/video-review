@@ -6,7 +6,8 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import type { EntryMode, IssueId, Project, ProjectRefId, ReviewIssue, ReviewItemId, ReviewVersion, ReviewWorkspace, VersionId } from '../contracts/types';
-import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
+import { DeleteReviewItemResultUncertainError } from '../adapters/http-review-uploads';
+import { ReviewDomainError } from '../core/errors';
 import {
   clearRevokeFinalizationOperation,
   getPendingRevokeFinalizationOperation,
@@ -20,8 +21,6 @@ import type {
   ReviewProjectSummaryItem,
 } from '../ports';
 import { useReviewApi } from './runtime';
-
-const MAX_CONCURRENT_REVIEW_ITEM_DELETES = 5;
 
 export const reviewKeys = {
   projects: ['fj-review', 'projects'] as const,
@@ -623,20 +622,46 @@ export function useReviewMutations(mode: EntryMode) {
         if (projectRefId && inputs.some((input) => input.projectRefId !== projectRefId)) {
           throw new Error('批量删除只能处理同一个项目内的分集。');
         }
-        const results = await settleWithConcurrencyLimit(
-          inputs,
-          MAX_CONCURRENT_REVIEW_ITEM_DELETES,
-          (input) => api.deleteReviewItem(input, context()),
+        if (!projectRefId || inputs.length === 0) {
+          throw new ReviewDomainError('批量删除至少需要一个分集', 'VALIDATION_ERROR');
+        }
+        const batch = await api.deleteReviewItemsBatch(
+          {
+            projectRefId,
+            reviewItemIds: inputs.map((input) => input.reviewItemId),
+            confirmed: true,
+          },
+          context(),
         );
+        const results = batch.results.map((result) => {
+          if (result.outcome === 'deleted') {
+            return { status: 'fulfilled' as const, value: undefined };
+          }
+          if (result.outcome === 'outcome_unknown') {
+            return {
+              status: 'rejected' as const,
+              reason: new DeleteReviewItemResultUncertainError(
+                new Error(result.errorCode ?? 'COMMIT_OUTCOME_UNKNOWN'),
+              ),
+            };
+          }
+          return {
+            status: 'rejected' as const,
+            reason: new ReviewDomainError(
+              '该分集未删除，请按列表状态处理。',
+              result.errorCode ?? 'RESOURCE_STATE_CONFLICT',
+            ),
+          };
+        });
         return { inputs, projectRefId, results };
       },
-      onSuccess: ({ projectRefId, results }) => {
-        for (const result of results) {
-          if (result.status !== 'fulfilled') continue;
-          const item = result.value;
+      onSuccess: ({ inputs, projectRefId, results }) => {
+        results.forEach((result, index) => {
+          if (result.status !== 'fulfilled') return;
+          const item = inputs[index];
           queryClient.removeQueries({ queryKey: reviewKeys.item(item.projectRefId, item.reviewItemId) });
           queryClient.removeQueries({ queryKey: reviewKeys.workspaceItem(item.projectRefId, item.reviewItemId) });
-        }
+        });
         if (projectRefId) refreshInBackground(invalidateProject(projectRefId));
       },
     }),

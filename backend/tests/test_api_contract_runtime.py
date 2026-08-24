@@ -589,31 +589,50 @@ def test_item_and_issue_page_query_counts_do_not_grow_with_page_rows(client: Tes
     assert issue_two_count <= 6
 
 
-def test_soft_delete_project_is_review_command_and_hides_from_project_list(client: TestClient) -> None:
+def test_delete_project_is_idempotent_review_command_and_physically_removes_project(client: TestClient) -> None:
     project = create_project(client, "SDEL")
+    route = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/delete"
+    missing_body = command("DeleteProject", {"project_ref_id": project["project_ref_id"]})
     missing_confirmation = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/soft-delete",
-        json=command("SoftDeleteProject", {"project_ref_id": project["project_ref_id"]}),
-        headers={"If-Match": str(project["lock_version"])},
+        route,
+        json=missing_body,
+        headers={
+            "Idempotency-Key": missing_body["command_id"],
+            "If-Match": str(project["lock_version"]),
+        },
     )
     assert missing_confirmation.status_code == 422
+    false_body = command(
+        "DeleteProject",
+        {"project_ref_id": project["project_ref_id"], "confirmed": False},
+    )
     false_confirmation = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/soft-delete",
-        json=command("SoftDeleteProject", {"project_ref_id": project["project_ref_id"], "confirmed": False}),
-        headers={"If-Match": str(project["lock_version"])},
+        route,
+        json=false_body,
+        headers={
+            "Idempotency-Key": false_body["command_id"],
+            "If-Match": str(project["lock_version"]),
+        },
     )
     assert false_confirmation.status_code == 422
 
-    body = command("SoftDeleteProject", {"project_ref_id": project["project_ref_id"], "confirmed": True})
+    body = command("DeleteProject", {"project_ref_id": project["project_ref_id"], "confirmed": True})
+    headers = {
+        "Idempotency-Key": body["command_id"],
+        "If-Match": str(project["lock_version"]),
+    }
     response = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/soft-delete",
+        route,
         json=body,
-        headers={"If-Match": str(project["lock_version"])},
+        headers=headers,
     )
     assert response.status_code == 200, response.text
     deleted = api_data(response)
-    assert deleted["deleted_at"] is not None
-    assert deleted["lifecycle_status"] == "active"
+    assert deleted == {
+        "project_ref_id": project["project_ref_id"],
+        "outcome": "deleted",
+        "error_code": None,
+    }
 
     listed = api_data(client.get("/api/v1/final-cut-review/projects"))
     assert project["project_ref_id"] not in {row["project_ref_id"] for row in listed}
@@ -622,14 +641,24 @@ def test_soft_delete_project_is_review_command_and_hides_from_project_list(clien
     assert direct.status_code == 404
     assert api_error(direct)["code"] == "RESOURCE_NOT_FOUND"
 
-    duplicate = command("SoftDeleteProject", {"project_ref_id": project["project_ref_id"], "confirmed": True})
-    duplicate_response = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/soft-delete",
-        json=duplicate,
-        headers={"If-Match": str(deleted["lock_version"])},
+    replay = client.post(route, json=body, headers=headers)
+    assert replay.status_code == 200, replay.text
+    assert api_data(replay) == deleted
+
+    different_command = command(
+        "DeleteProject",
+        {"project_ref_id": project["project_ref_id"], "confirmed": True},
     )
-    assert duplicate_response.status_code == 409
-    assert api_error(duplicate_response)["code"] == "RESOURCE_STATE_CONFLICT"
+    absent = client.post(
+        route,
+        json=different_command,
+        headers={
+            "Idempotency-Key": different_command["command_id"],
+            "If-Match": str(project["lock_version"]),
+        },
+    )
+    assert absent.status_code == 404
+    assert api_error(absent)["code"] == "RESOURCE_NOT_FOUND"
 
     package_cmd = command("PrepareFinalizedPackage", {"project_ref_id": project["project_ref_id"]})
     package_response = client.post(
@@ -637,8 +666,8 @@ def test_soft_delete_project_is_review_command_and_hides_from_project_list(clien
         json=package_cmd,
         headers={"Idempotency-Key": package_cmd["command_id"]},
     )
-    assert package_response.status_code == 409
-    assert api_error(package_response)["code"] == "RESOURCE_STATE_CONFLICT"
+    assert package_response.status_code == 404
+    assert api_error(package_response)["code"] == "RESOURCE_NOT_FOUND"
 
 
 def test_delete_review_item_physically_removes_unreviewed_duplicate(client: TestClient) -> None:
@@ -667,7 +696,12 @@ def test_delete_review_item_physically_removes_unreviewed_duplicate(client: Test
     )
     assert response.status_code == 200, response.text
     deleted = api_data(response)
-    assert deleted["id"] == item["id"]
+    assert deleted == {
+        "project_ref_id": project["project_ref_id"],
+        "review_item_id": item["id"],
+        "outcome": "deleted",
+        "error_code": None,
+    }
 
     items = api_data(client.get(f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/items"))
     assert item["id"] not in {row["id"] for row in items}
@@ -690,11 +724,7 @@ def test_delete_review_item_physically_removes_unreviewed_duplicate(client: Test
                 )
             )
         )
-        assert any(event.event_type == "review.item.created" and event.aggregate_id == item["id"] for event in events)
-        assert any(event.event_type == "review.version.uploaded" and event.aggregate_id == item["current_version_id"] for event in events)
-        assert any(event.event_type == "review.item.deleted" and event.aggregate_id == item["id"] for event in events)
-        assert all(event.review_item_id is None for event in events)
-        assert all(event.version_id is None for event in events)
+        assert events == []
     finally:
         session.close()
 
@@ -1554,7 +1584,8 @@ def test_delete_review_item_is_available_from_review_entry(client: TestClient) -
     )
 
     assert response.status_code == 200, response.text
-    assert api_data(response)["id"] == item["id"]
+    assert api_data(response)["review_item_id"] == item["id"]
+    assert api_data(response)["outcome"] == "deleted"
 
 
 def test_review_delete_item_rejects_principal_without_project_scope(client: TestClient) -> None:
@@ -1588,9 +1619,11 @@ def test_review_delete_item_rejects_principal_without_project_scope(client: Test
 
 def test_delete_review_item_requires_and_replays_one_principal_bound_idempotency_key(
     client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
+    from sqlalchemy import func, select
+
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import ReviewDeletionIntentModel
 
     project = create_project(client, code="P_DELETE_IDEMPOTENT")
     first_item = create_item(
@@ -1635,23 +1668,6 @@ def test_delete_review_item_requires_and_replays_one_principal_bound_idempotency
     assert mismatched_key.status_code == 422
     assert api_error(mismatched_key)["code"] == "VALIDATION_ERROR"
 
-    tombstone_writes = 0
-    original_write = SqlAlchemyReviewRepository._write_pending_file_delete
-
-    def count_tombstone_write(
-        repository: SqlAlchemyReviewRepository,
-        storage_path: Path,
-        file_id: str,
-    ) -> tuple[Path, int | None, int | None, int | None, int | None]:
-        nonlocal tombstone_writes
-        tombstone_writes += 1
-        return original_write(repository, storage_path, file_id)
-
-    monkeypatch.setattr(
-        SqlAlchemyReviewRepository,
-        "_write_pending_file_delete",
-        count_tombstone_write,
-    )
     headers = {
         "Idempotency-Key": body["command_id"],
         "If-Match": str(first_item["lock_version"]),
@@ -1661,7 +1677,15 @@ def test_delete_review_item_requires_and_replays_one_principal_bound_idempotency
     assert first.status_code == 200, first.text
     assert replay.status_code == 200, replay.text
     assert api_data(replay) == api_data(first)
-    assert tombstone_writes == 1
+    with SessionLocal() as observer:
+        intents = list(
+            observer.scalars(
+                select(ReviewDeletionIntentModel).where(
+                    ReviewDeletionIntentModel.review_item_id_snapshot == first_item["id"],
+                ),
+            ),
+        )
+        assert len(intents) == 1
 
     different_payload = {
         **body,
@@ -1696,7 +1720,12 @@ def test_delete_review_item_requires_and_replays_one_principal_bound_idempotency
     )
     assert other_principal.status_code == 403
     assert api_error(other_principal)["code"] == "PRINCIPAL_PERMISSION_DENIED"
-    assert tombstone_writes == 1
+    with SessionLocal() as observer:
+        assert observer.scalar(
+            select(func.count())
+            .select_from(ReviewDeletionIntentModel)
+            .where(ReviewDeletionIntentModel.review_item_id_snapshot == first_item["id"]),
+        ) == 1
 
 
 def test_delete_review_item_isolates_files_with_the_same_original_filename(client: TestClient) -> None:
@@ -1857,7 +1886,11 @@ def test_delete_review_item_keeps_file_when_database_transaction_rolls_back(clie
     from backend.app.modules.final_cut_review.application.context import ExecutionContext, PrincipalRef, WriteGuardState
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
     from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
-    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, ReviewItemModel, ReviewVersionModel
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FileObjectModel,
+        ReviewItemModel,
+        ReviewVersionModel,
+    )
     from backend.app.settings import get_settings
 
     session = SessionLocal()
@@ -1871,7 +1904,8 @@ def test_delete_review_item_keeps_file_when_database_transaction_rolls_back(clie
         assert original_storage_path.exists()
 
         repo = SqlAlchemyReviewRepository(session, get_settings())
-        repo.delete_review_item(
+        repo.execute(
+            "DeleteReviewItem",
             {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "confirmed": True},
             ExecutionContext(
                 entry_source="edit",
@@ -1885,6 +1919,7 @@ def test_delete_review_item_keeps_file_when_database_transaction_rolls_back(clie
 
         cleanup_result = cleanup_temporary_files()
         assert cleanup_result["removed_pending_deletes"] == 0
+        assert cleanup_result["completed_review_deletions"] == 0
         assert original_storage_path.exists()
         session.rollback()
         repo.discard_post_commit_file_deletions()
@@ -1901,7 +1936,7 @@ def test_delete_review_item_keeps_file_when_database_transaction_rolls_back(clie
 
 def test_delete_review_item_never_follows_symlinked_blob(client: TestClient) -> None:
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
-    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, ReviewVersionModel
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, ReviewItemModel, ReviewVersionModel
     from backend.app.settings import get_settings
 
     project, item = create_project_item(client)
@@ -1926,11 +1961,13 @@ def test_delete_review_item_never_follows_symlinked_blob(client: TestClient) -> 
         headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 503, response.text
+    assert api_error(response)["code"] == "STORAGE_UNAVAILABLE"
     assert protected.read_bytes() == b"protected-media"
     assert storage_path.is_symlink()
-    pending = list((get_settings().storage_root / "pending-deletes").glob("*.json"))
-    assert len(pending) == 1
+    with SessionLocal() as observer:
+        assert observer.get(ReviewItemModel, item["id"]) is not None
+        assert observer.get(ReviewVersionModel, item["current_version_id"]) is not None
 
 
 def test_delete_review_item_route_rollback_discards_pending_file_delete(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1976,14 +2013,20 @@ def test_delete_review_item_route_rollback_discards_pending_file_delete(client: 
         session.close()
 
 
-def test_delete_review_item_ambiguous_commit_retains_tombstone_for_maintenance(
+def test_delete_review_item_ambiguous_commit_retains_durable_intent_for_maintenance(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.app.maintenance import cleanup_temporary_files
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
-    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, OperationLogModel, ReviewItemModel, ReviewVersionModel
-    from backend.app.settings import get_settings
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FileObjectModel,
+        OperationLogModel,
+        ReviewDeletionArtifactModel,
+        ReviewDeletionIntentModel,
+        ReviewItemModel,
+        ReviewVersionModel,
+    )
     from sqlalchemy import select
     from sqlalchemy.orm import Session as OrmSession
 
@@ -2026,8 +2069,6 @@ def test_delete_review_item_ambiguous_commit_retains_tombstone_for_maintenance(
     assert response.status_code == 500
     assert raised is True
     assert storage_path.is_file()
-    pending_root = get_settings().storage_root / "pending-deletes"
-    assert len(list(pending_root.glob("*.json"))) == 1
     with SessionLocal() as observer:
         assert observer.get(ReviewItemModel, item["id"]) is None
         assert observer.get(ReviewVersionModel, item["current_version_id"]) is None
@@ -2036,12 +2077,24 @@ def test_delete_review_item_ambiguous_commit_retains_tombstone_for_maintenance(
         assert len(audits) == 1
         assert audits[0].result == "ok"
         assert audits[0].failure_stage is None
+        intent = observer.scalar(
+            select(ReviewDeletionIntentModel).where(
+                ReviewDeletionIntentModel.review_item_id_snapshot == item["id"],
+            ),
+        )
+        assert intent is not None and intent.status == "pending"
+        artifact = observer.scalar(
+            select(ReviewDeletionArtifactModel).where(
+                ReviewDeletionArtifactModel.deletion_intent_id == intent.id,
+            ),
+        )
+        assert artifact is not None and artifact.status == "pending"
 
     result = cleanup_temporary_files()
 
-    assert result["removed_pending_deletes"] == 1
+    assert result["completed_review_deletions"] == 1
+    assert result["failed_review_deletions"] == 0
     assert not storage_path.exists()
-    assert list(pending_root.glob("*.json")) == []
 
 
 def test_command_commit_failure_records_one_uncertain_audit(
@@ -2169,10 +2222,17 @@ def test_uncertain_audit_uses_command_identity_and_is_concurrency_safe(
 
 def test_delete_review_item_retries_post_commit_file_delete(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     project, item = create_project_item(client)
+    from sqlalchemy import select
+
     from backend.app.maintenance import cleanup_temporary_files
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
-    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, ReviewItemModel, ReviewVersionModel
-    from backend.app.settings import get_settings
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FileObjectModel,
+        ReviewDeletionArtifactModel,
+        ReviewDeletionIntentModel,
+        ReviewItemModel,
+        ReviewVersionModel,
+    )
 
     session = SessionLocal()
     try:
@@ -2202,16 +2262,26 @@ def test_delete_review_item_retries_post_commit_file_delete(client: TestClient, 
     )
     assert response.status_code == 200, response.text
     assert original_storage_path.exists()
-    pending_root = get_settings().storage_root / "pending-deletes"
-    pending_files = list(pending_root.glob("*.json"))
-    assert len(pending_files) == 1
+    with SessionLocal() as observer:
+        intent = observer.scalar(
+            select(ReviewDeletionIntentModel).where(
+                ReviewDeletionIntentModel.review_item_id_snapshot == item["id"],
+            ),
+        )
+        assert intent is not None and intent.status == "failed"
+        artifact = observer.scalar(
+            select(ReviewDeletionArtifactModel).where(
+                ReviewDeletionArtifactModel.deletion_intent_id == intent.id,
+            ),
+        )
+        assert artifact is not None and artifact.status == "failed"
 
     monkeypatch.setattr(os, "rename", original_rename)
     result = cleanup_temporary_files()
 
-    assert result["removed_pending_deletes"] == 1
+    assert result["completed_review_deletions"] == 1
+    assert result["failed_review_deletions"] == 0
     assert not original_storage_path.exists()
-    assert list(pending_root.glob("*.json")) == []
     session = SessionLocal()
     try:
         assert session.get(ReviewItemModel, item["id"]) is None
@@ -2221,12 +2291,23 @@ def test_delete_review_item_retries_post_commit_file_delete(client: TestClient, 
         session.close()
 
 
-def test_delete_review_item_tombstone_failure_prevents_database_delete(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_delete_review_item_physical_failure_keeps_database_delete_and_durable_retry(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     project, item = create_project_item(client)
+    from sqlalchemy import select
+
+    from backend.app.maintenance import cleanup_temporary_files
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
-    from backend.app.modules.final_cut_review.infra.repositories import SqlAlchemyReviewRepository
-    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import FileObjectModel, ReviewItemModel, ReviewVersionModel
-    from backend.app.settings import get_settings
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FileObjectModel,
+        ReviewDeletionArtifactModel,
+        ReviewDeletionIntentModel,
+        ReviewItemModel,
+        ReviewVersionModel,
+    )
+    from backend.app.safe_files import PinnedRegularFile
 
     session = SessionLocal()
     try:
@@ -2240,29 +2321,51 @@ def test_delete_review_item_tombstone_failure_prevents_database_delete(client: T
     finally:
         session.close()
 
-    def fail_tombstone(self: SqlAlchemyReviewRepository, storage_path: Path, file_id: str) -> Path:
-        del self, storage_path, file_id
-        raise OSError("forced tombstone failure")
+    original_unlink = PinnedRegularFile.unlink
 
-    monkeypatch.setattr(SqlAlchemyReviewRepository, "_write_pending_file_delete", fail_tombstone)
+    def fail_physical_delete(
+        _pinned: PinnedRegularFile,
+        *,
+        missing_ok: bool = True,
+    ) -> bool:
+        del missing_ok
+        raise OSError("forced durable cleanup failure")
+
+    monkeypatch.setattr(PinnedRegularFile, "unlink", fail_physical_delete)
     body = command("DeleteReviewItem", {"project_ref_id": project["project_ref_id"], "review_item_id": item["id"], "confirmed": True})
-    with pytest.raises(OSError, match="forced tombstone failure"):
-        client.post(
-            f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
-            json=body,
-            headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
-        )
+    response = client.post(
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}/items/{item['id']}/delete",
+        json=body,
+        headers={"Idempotency-Key": body["command_id"], "If-Match": str(item["lock_version"])},
+    )
+    assert response.status_code == 200, response.text
 
     session = SessionLocal()
     try:
-        assert session.get(ReviewItemModel, item["id"]) is not None
-        assert session.get(ReviewVersionModel, item["current_version_id"]) is not None
-        assert session.get(FileObjectModel, original_file_id) is not None
+        assert session.get(ReviewItemModel, item["id"]) is None
+        assert session.get(ReviewVersionModel, item["current_version_id"]) is None
+        assert session.get(FileObjectModel, original_file_id) is None
         assert original_storage_path.exists()
-        pending_root = get_settings().storage_root / "pending-deletes"
-        assert not pending_root.exists() or list(pending_root.glob("*.json")) == []
+        intent = session.scalar(
+            select(ReviewDeletionIntentModel).where(
+                ReviewDeletionIntentModel.review_item_id_snapshot == item["id"],
+            ),
+        )
+        assert intent is not None and intent.status == "failed"
+        artifact = session.scalar(
+            select(ReviewDeletionArtifactModel).where(
+                ReviewDeletionArtifactModel.deletion_intent_id == intent.id,
+            ),
+        )
+        assert artifact is not None and artifact.status == "failed"
     finally:
         session.close()
+
+    monkeypatch.setattr(PinnedRegularFile, "unlink", original_unlink)
+    cleanup = cleanup_temporary_files()
+    assert cleanup["completed_review_deletions"] == 1
+    assert cleanup["failed_review_deletions"] == 0
+    assert not original_storage_path.exists()
 
 
 def test_delete_review_item_requires_current_lock(client: TestClient) -> None:
@@ -2822,12 +2925,12 @@ def test_upload_complete_uses_probe_metadata_and_accepts_server_computed_sha256_
         file = session.get(FileObjectModel, data["file_id"])
         assert file is not None
         assert file.sha256 == hashlib.sha256(blob).hexdigest()
-        assert file.duration_ms == 10_000
+        assert file.duration_ms == 160
         assert file.width == 1920
         assert file.height == 1080
         assert file.fps_num == 25
         assert file.fps_den == 1
-        assert file.media_probe_version == "ffprobe-json-v1"
+        assert file.media_probe_version == "ffprobe-packet-cfr-v2"
 
 
 def test_browser_cors_and_csrf_boundaries_are_explicit(client: TestClient) -> None:
@@ -5977,11 +6080,14 @@ def test_archived_project_cannot_prepare_package_and_repeated_archive_restore_co
     assert duplicate_archive_response.status_code == 409
     assert api_error(duplicate_archive_response)["code"] == "RESOURCE_STATE_CONFLICT"
 
-    delete_archived = command("SoftDeleteProject", {"project_ref_id": project["project_ref_id"], "confirmed": True})
+    delete_archived = command("DeleteProject", {"project_ref_id": project["project_ref_id"], "confirmed": True})
     delete_archived_response = client.post(
-        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/soft-delete",
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/delete",
         json=delete_archived,
-        headers={"If-Match": str(archived_data["lock_version"])},
+        headers={
+            "Idempotency-Key": delete_archived["command_id"],
+            "If-Match": str(archived_data["lock_version"]),
+        },
     )
     assert delete_archived_response.status_code == 409
     assert api_error(delete_archived_response)["code"] == "RESOURCE_STATE_CONFLICT"

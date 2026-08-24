@@ -1,4 +1,10 @@
-import type { ProjectDTO, ReviewItemDTO, ReviewVersionDTO } from '../contracts-generated/backend-contract';
+import {
+  FinalCutReviewHttpError,
+  type ProjectDTO,
+  type ProjectDeletionResultDTO,
+  type ReviewItemDTO,
+  type ReviewVersionDTO,
+} from '../contracts-generated/backend-contract';
 import type { ReviewApiPort, ReviewProjectSummary, ReviewProjectSummaryItem } from '../ports';
 import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
 import {
@@ -7,9 +13,96 @@ import {
   versionFromDto,
 } from './http-review-project-mappers';
 import type { HttpReviewQueries } from './http-review-queries';
-import type { HttpReviewTransport } from './http-review-transport';
+import { randomId, type HttpReviewTransport } from './http-review-transport';
 
 const MAX_CONCURRENT_VERSION_ISSUE_QUERIES = 4;
+const DELETE_PROJECT_OPERATION_KEY_PREFIX = 'fj-final-cut-review:delete-project-operation:';
+
+interface PendingDeleteProjectOperation {
+  commandId: string;
+  lockVersion: number;
+}
+
+export class DeleteProjectResultUncertainError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super('项目删除结果不确定，必须先刷新项目列表核对，不能直接重试。');
+    this.name = 'DeleteProjectResultUncertainError';
+    this.cause = cause;
+  }
+}
+
+export class DeleteProjectProtectionUnavailableError extends Error {
+  constructor() {
+    super('当前浏览器无法持久保存项目删除幂等身份，已阻止删除。');
+    this.name = 'DeleteProjectProtectionUnavailableError';
+  }
+}
+
+function projectDeleteStorage(): Storage | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function projectDeleteKey(projectRefId: string): string {
+  return `${DELETE_PROJECT_OPERATION_KEY_PREFIX}${encodeURIComponent(projectRefId)}`;
+}
+
+function readProjectDeleteOperation(
+  projectRefId: string,
+): { state: 'available'; operation?: PendingDeleteProjectOperation } | { state: 'unavailable' } {
+  const storage = projectDeleteStorage();
+  if (!storage) return { state: 'unavailable' };
+  try {
+    const raw = storage.getItem(projectDeleteKey(projectRefId));
+    if (!raw) return { state: 'available' };
+    const parsed = JSON.parse(raw) as Partial<PendingDeleteProjectOperation>;
+    if (
+      typeof parsed.commandId !== 'string'
+      || !parsed.commandId.startsWith('DeleteProject_')
+      || typeof parsed.lockVersion !== 'number'
+      || !Number.isSafeInteger(parsed.lockVersion)
+      || parsed.lockVersion < 1
+    ) {
+      return { state: 'unavailable' };
+    }
+    return {
+      state: 'available',
+      operation: { commandId: parsed.commandId, lockVersion: parsed.lockVersion },
+    };
+  } catch {
+    return { state: 'unavailable' };
+  }
+}
+
+function writeProjectDeleteOperation(
+  projectRefId: string,
+  operation: PendingDeleteProjectOperation,
+): boolean {
+  const storage = projectDeleteStorage();
+  if (!storage) return false;
+  try {
+    const key = projectDeleteKey(projectRefId);
+    const value = JSON.stringify(operation);
+    storage.setItem(key, value);
+    return storage.getItem(key) === value;
+  } catch {
+    return false;
+  }
+}
+
+function clearProjectDeleteOperation(projectRefId: string): void {
+  try {
+    projectDeleteStorage()?.removeItem(projectDeleteKey(projectRefId));
+  } catch {
+    // A completed operation must not be replaced with a storage cleanup error.
+  }
+}
 
 type ProjectApi = Pick<
   ReviewApiPort,
@@ -400,13 +493,58 @@ export class HttpReviewProjects implements ProjectApi {
   readonly deleteProject: ReviewApiPort['deleteProject'] = async (input, context) => {
     this.transport.assertWriteContext(context, ['review']);
     const current = await this.transport.client.getProject(input.projectRefId, this.transport.queryInit());
-    const project = await this.transport.command<ProjectDTO, { project_ref_id: string; confirmed: true }>(
-      `/api/v1/final-cut-review/review/projects/${input.projectRefId}/soft-delete`,
-      'SoftDeleteProject',
-      { project_ref_id: input.projectRefId, confirmed: input.confirmed },
-      context,
-      current.lock_version,
-    );
-    return projectFromDto(project);
+    const stored = readProjectDeleteOperation(input.projectRefId);
+    if (stored.state === 'unavailable') {
+      throw new DeleteProjectProtectionUnavailableError();
+    }
+    const operation = stored.operation ?? {
+      commandId: randomId('DeleteProject'),
+      lockVersion: current.lock_version,
+    };
+    if (!writeProjectDeleteOperation(input.projectRefId, operation)) {
+      throw new DeleteProjectProtectionUnavailableError();
+    }
+    try {
+      const result = await this.transport.command<
+        ProjectDeletionResultDTO,
+        { project_ref_id: string; confirmed: true }
+      >(
+        `/api/v1/final-cut-review/review/projects/${input.projectRefId}/delete`,
+        'DeleteProject',
+        { project_ref_id: input.projectRefId, confirmed: input.confirmed },
+        context,
+        operation.lockVersion,
+        { idempotent: true, commandId: operation.commandId },
+      );
+      if (result.project_ref_id !== input.projectRefId || result.outcome !== 'deleted') {
+        throw new DeleteProjectResultUncertainError(
+          new Error('项目删除命令返回了无法核对的对象结果'),
+        );
+      }
+      clearProjectDeleteOperation(input.projectRefId);
+      return projectFromDto(current);
+    } catch (error) {
+      if (
+        error instanceof FinalCutReviewHttpError
+        && error.httpStatus < 500
+        && error.code !== 'IDEMPOTENCY_CONFLICT'
+      ) {
+        clearProjectDeleteOperation(input.projectRefId);
+        throw error;
+      }
+      try {
+        await this.transport.client.getProject(input.projectRefId, this.transport.queryInit());
+      } catch (reconciliationError) {
+        if (
+          reconciliationError instanceof FinalCutReviewHttpError
+          && reconciliationError.httpStatus === 404
+        ) {
+          clearProjectDeleteOperation(input.projectRefId);
+          return projectFromDto(current);
+        }
+        throw new DeleteProjectResultUncertainError(error);
+      }
+      throw new DeleteProjectResultUncertainError(error);
+    }
   };
 }

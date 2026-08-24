@@ -42,11 +42,13 @@ COMMAND_ROUTE_TYPES = {
     "edit_rename_responsible_editor": "RenameResponsibleEditor",
     "review_archive_project": "ArchiveProject",
     "review_restore_project": "RestoreProject",
-    "review_soft_delete_project": "SoftDeleteProject",
+    "review_delete_project": "DeleteProject",
     "edit_create_item": "CreateReviewItem",
     "edit_update_item": "UpdateReviewItem",
     "edit_delete_item": "DeleteReviewItem",
     "review_delete_item": "DeleteReviewItem",
+    "edit_delete_items_batch": "DeleteReviewItemsBatch",
+    "review_delete_items_batch": "DeleteReviewItemsBatch",
     "edit_upload_version": "UploadReviewVersion",
     "edit_resolve_issue": "ResolveReviewIssue",
     "review_start": "StartReview",
@@ -139,7 +141,7 @@ LOCK_REQUIRED_COMMANDS = {
     "RenameResponsibleEditor",
     "ArchiveProject",
     "RestoreProject",
-    "SoftDeleteProject",
+    "DeleteProject",
     "UpdateReviewItem",
     "DeleteReviewItem",
     "UploadReviewVersion",
@@ -540,14 +542,23 @@ def review_restore_project(
     return _execute("review", "RestoreProject", envelope, {"project_ref_id": project_ref_id}, deps, None, if_match)
 
 
-@router.post("/review/projects/{project_ref_id}/soft-delete")
-def review_soft_delete_project(
+@router.post("/review/projects/{project_ref_id}/delete")
+def review_delete_project(
     project_ref_id: str,
     envelope: CommandEnvelope,
     deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
 ) -> dict[str, Any]:
-    return _execute("review", "SoftDeleteProject", envelope, {"project_ref_id": project_ref_id}, deps, None, if_match)
+    return _execute(
+        "review",
+        "DeleteProject",
+        envelope,
+        {"project_ref_id": project_ref_id},
+        deps,
+        idempotency_key,
+        if_match,
+    )
 
 
 @router.post("/edit/projects/{project_ref_id}/items")
@@ -597,6 +608,42 @@ def review_delete_item(
 ) -> dict[str, Any]:
     return _execute(
         "review", "DeleteReviewItem", envelope, {"project_ref_id": project_ref_id, "review_item_id": review_item_id}, deps, idempotency_key, if_match
+    )
+
+
+@router.post("/edit/projects/{project_ref_id}/items/delete-batch")
+def edit_delete_items_batch(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    return _execute(
+        "edit",
+        "DeleteReviewItemsBatch",
+        envelope,
+        {"project_ref_id": project_ref_id},
+        deps,
+        idempotency_key,
+        None,
+    )
+
+
+@router.post("/review/projects/{project_ref_id}/items/delete-batch")
+def review_delete_items_batch(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "DeleteReviewItemsBatch",
+        envelope,
+        {"project_ref_id": project_ref_id},
+        deps,
+        idempotency_key,
+        None,
     )
 
 

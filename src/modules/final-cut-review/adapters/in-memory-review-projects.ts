@@ -106,10 +106,30 @@ export class InMemoryReviewProjects {
     const current = this.store.getProject(input.projectRefId);
     invariant(!current.deletedAt, '项目已删除', 'RESOURCE_STATE_CONFLICT');
     invariant(current.status === 'active', '归档项目只读，请先恢复项目', 'RESOURCE_STATE_CONFLICT');
-    const next: Project = { ...current, deletedAt: nowIso(), updatedAt: nowIso() };
-    this.store.projects.set(next.projectRefId, next);
+    const projectItems = [...this.store.items.values()].filter(
+      (item) => item.projectRefId === input.projectRefId,
+    );
+    invariant(
+      projectItems.every((item) => item.status !== 'finalized' && !item.activeFinalizationId),
+      '项目仍有已定稿分集，必须先显式撤销定稿',
+      'RESOURCE_STATE_CONFLICT',
+    );
+    const itemIds = new Set(projectItems.map((item) => item.reviewItemId));
+    for (const [issueId, issue] of this.store.issues) {
+      if (issue.projectRefId === input.projectRefId) this.store.issues.delete(issueId);
+    }
+    for (const [versionId, version] of this.store.versions) {
+      if (version.projectRefId === input.projectRefId) this.store.versions.delete(versionId);
+    }
+    for (const [finalizationId, finalization] of this.store.finalizations) {
+      if (finalization.projectRefId === input.projectRefId) {
+        this.store.finalizations.delete(finalizationId);
+      }
+    }
+    for (const itemId of itemIds) this.store.items.delete(itemId);
+    this.store.projects.delete(input.projectRefId);
     this.store.emitChange();
-    return { ...next };
+    return { ...current };
   };
 
   readonly ensureProjectWritable = (projectRefId: ProjectRefId): void => {

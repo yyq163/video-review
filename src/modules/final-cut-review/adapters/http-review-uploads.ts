@@ -1,6 +1,8 @@
 import {
   FinalCutReviewHttpError,
   type ReviewItemDTO,
+  type ReviewItemDeletionResultDTO,
+  type ReviewItemsBatchDeletionResultDTO,
   type ReviewVersionDTO,
   type UploadSessionDTO,
 } from '../contracts-generated/backend-contract';
@@ -17,6 +19,7 @@ import { randomId, type HttpReviewTransport } from './http-review-transport';
 const V1_LIST_CONFIRMATION_KEY_PREFIX = 'fj-final-cut-review:v1-list-confirmation:';
 const APPEND_VERSION_CONFIRMATION_KEY_PREFIX = 'fj-final-cut-review:append-version-confirmation:';
 const DELETE_REVIEW_ITEM_OPERATION_KEY_PREFIX = 'fj-final-cut-review:delete-operation:';
+const DELETE_REVIEW_ITEMS_BATCH_OPERATION_KEY_PREFIX = 'fj-final-cut-review:delete-batch-operation:';
 const STORAGE_PROBE_KEY = 'fj-final-cut-review:confirmation-storage-probe';
 
 export type V1ListProtectionState = 'clear' | 'required' | 'storage-unavailable';
@@ -151,6 +154,11 @@ interface PendingDeleteReviewItemOperation {
   lockVersion: number;
 }
 
+interface PendingDeleteReviewItemsBatchOperation {
+  commandId: string;
+  signature: string;
+}
+
 function deleteReviewItemOperationKey(projectRefId: string, reviewItemId: string): string {
   return `${DELETE_REVIEW_ITEM_OPERATION_KEY_PREFIX}${encodeURIComponent(projectRefId)}:${encodeURIComponent(reviewItemId)}`;
 }
@@ -214,9 +222,63 @@ function clearDeleteReviewItemOperation(projectRefId: string, reviewItemId: stri
   }
 }
 
+function deleteReviewItemsBatchOperationKey(projectRefId: string): string {
+  return `${DELETE_REVIEW_ITEMS_BATCH_OPERATION_KEY_PREFIX}${encodeURIComponent(projectRefId)}`;
+}
+
+function readDeleteReviewItemsBatchOperation(
+  projectRefId: string,
+): { state: 'available'; operation?: PendingDeleteReviewItemsBatchOperation } | { state: 'unavailable' } {
+  const storage = sessionStorageOrNull();
+  if (!storage) return { state: 'unavailable' };
+  try {
+    const value = storage.getItem(deleteReviewItemsBatchOperationKey(projectRefId));
+    if (!value) return { state: 'available' };
+    const parsed = JSON.parse(value) as Partial<PendingDeleteReviewItemsBatchOperation>;
+    if (
+      typeof parsed.commandId !== 'string'
+      || !parsed.commandId.startsWith('DeleteReviewItemsBatch_')
+      || typeof parsed.signature !== 'string'
+      || !parsed.signature
+    ) {
+      return { state: 'unavailable' };
+    }
+    return {
+      state: 'available',
+      operation: { commandId: parsed.commandId, signature: parsed.signature },
+    };
+  } catch {
+    return { state: 'unavailable' };
+  }
+}
+
+function writeDeleteReviewItemsBatchOperation(
+  projectRefId: string,
+  operation: PendingDeleteReviewItemsBatchOperation,
+): boolean {
+  const storage = sessionStorageOrNull();
+  if (!storage) return false;
+  try {
+    const key = deleteReviewItemsBatchOperationKey(projectRefId);
+    const serialized = JSON.stringify(operation);
+    storage.setItem(key, serialized);
+    return storage.getItem(key) === serialized;
+  } catch {
+    return false;
+  }
+}
+
+function clearDeleteReviewItemsBatchOperation(projectRefId: string): void {
+  try {
+    sessionStorageOrNull()?.removeItem(deleteReviewItemsBatchOperationKey(projectRefId));
+  } catch {
+    // A completed operation must not be replaced with a storage cleanup error.
+  }
+}
+
 type UploadApi = Pick<
   ReviewApiPort,
-  'createReviewItemWithVersion' | 'deleteReviewItem' | 'appendVersion'
+  'createReviewItemWithVersion' | 'deleteReviewItem' | 'deleteReviewItemsBatch' | 'appendVersion'
 >;
 
 export class HttpReviewUploads implements UploadApi {
@@ -357,7 +419,7 @@ export class HttpReviewUploads implements UploadApi {
     };
     try {
       const deleted = await this.transport.command<
-        ReviewItemDTO,
+        ReviewItemDeletionResultDTO,
         { project_ref_id: string; review_item_id: string; confirmed: true }
       >(
         `/api/v1/final-cut-review/${context.entryMode}/projects/${input.projectRefId}/items/${input.reviewItemId}/delete`,
@@ -367,8 +429,17 @@ export class HttpReviewUploads implements UploadApi {
         operation.lockVersion,
         { idempotent: true, commandId: operation.commandId },
       );
+      if (
+        deleted.project_ref_id !== input.projectRefId
+        || deleted.review_item_id !== input.reviewItemId
+        || deleted.outcome !== 'deleted'
+      ) {
+        throw new DeleteReviewItemResultUncertainError(
+          new Error('删除命令返回了无法核对的对象结果'),
+        );
+      }
       clearOperation();
-      return itemFromDto(deleted);
+      return itemFromDto(item);
     } catch (error) {
       if (
         error instanceof FinalCutReviewHttpError &&
@@ -396,6 +467,100 @@ export class HttpReviewUploads implements UploadApi {
         throw new DeleteReviewItemResultUncertainError(error);
       }
       throw new DeleteReviewItemResultUncertainError(error);
+    }
+  };
+
+  readonly deleteReviewItemsBatch: ReviewApiPort['deleteReviewItemsBatch'] = async (input, context) => {
+    this.transport.assertWriteContext(context, ['edit', 'review']);
+    if (input.confirmed !== true || input.reviewItemIds.length === 0) {
+      throw new ReviewDomainError('批量删除分集必须二次确认且至少包含一个对象', 'RESOURCE_STATE_CONFLICT');
+    }
+    await this.transport.projectForWrite(input.projectRefId);
+    const signature = JSON.stringify(input.reviewItemIds);
+    const stored = readDeleteReviewItemsBatchOperation(input.projectRefId);
+    if (stored.state === 'unavailable') {
+      throw new DeleteReviewItemProtectionUnavailableError();
+    }
+    if (stored.operation && stored.operation.signature !== signature) {
+      throw new DeleteReviewItemProtectionUnavailableError();
+    }
+    const operation = stored.operation ?? {
+      commandId: randomId('DeleteReviewItemsBatch'),
+      signature,
+    };
+    if (!writeDeleteReviewItemsBatchOperation(input.projectRefId, operation)) {
+      throw new DeleteReviewItemProtectionUnavailableError();
+    }
+    const clearOperation = () => clearDeleteReviewItemsBatchOperation(input.projectRefId);
+    try {
+      const result = await this.transport.command<
+        ReviewItemsBatchDeletionResultDTO,
+        { project_ref_id: string; review_item_ids: string[]; confirmed: true }
+      >(
+        `/api/v1/final-cut-review/${context.entryMode}/projects/${input.projectRefId}/items/delete-batch`,
+        'DeleteReviewItemsBatch',
+        {
+          project_ref_id: input.projectRefId,
+          review_item_ids: input.reviewItemIds,
+          confirmed: input.confirmed,
+        },
+        context,
+        undefined,
+        { idempotent: true, commandId: operation.commandId },
+      );
+      if (
+        result.project_ref_id !== input.projectRefId
+        || result.results.length !== input.reviewItemIds.length
+        || result.results.some(
+          (entry, index) =>
+            entry.project_ref_id !== input.projectRefId
+            || entry.review_item_id !== input.reviewItemIds[index],
+        )
+      ) {
+        throw new DeleteReviewItemResultUncertainError(
+          new Error('批量删除命令返回了无法核对的对象结果'),
+        );
+      }
+      clearOperation();
+      return {
+        projectRefId: result.project_ref_id,
+        results: result.results.map((entry) => ({
+          projectRefId: entry.project_ref_id,
+          reviewItemId: entry.review_item_id,
+          outcome: entry.outcome,
+          errorCode: entry.error_code ?? null,
+        })),
+      };
+    } catch (error) {
+      if (
+        error instanceof FinalCutReviewHttpError
+        && error.httpStatus < 500
+        && error.code !== 'IDEMPOTENCY_CONFLICT'
+      ) {
+        clearOperation();
+        throw error;
+      }
+      let remaining: ReviewItemDTO[];
+      try {
+        remaining = await this.transport.requestList<ReviewItemDTO[]>(
+          `/api/v1/final-cut-review/projects/${input.projectRefId}/items`,
+        );
+      } catch {
+        throw new DeleteReviewItemResultUncertainError(error);
+      }
+      const remainingIds = new Set(remaining.map((item) => item.id));
+      const results = input.reviewItemIds.map((reviewItemId) => ({
+        projectRefId: input.projectRefId,
+        reviewItemId,
+        outcome: remainingIds.has(reviewItemId)
+          ? 'outcome_unknown' as const
+          : 'deleted' as const,
+        errorCode: remainingIds.has(reviewItemId) ? 'COMMIT_OUTCOME_UNKNOWN' : null,
+      }));
+      if (results.every((entry) => entry.outcome === 'deleted')) {
+        clearOperation();
+      }
+      return { projectRefId: input.projectRefId, results };
     }
   };
 

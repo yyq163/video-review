@@ -32,6 +32,7 @@ export class MockReviewApiAdapter implements ReviewApiPort {
   readonly createReviewItemWithVersion: ReviewApiPort['createReviewItemWithVersion'];
   readonly updateReviewItem: ReviewApiPort['updateReviewItem'];
   readonly deleteReviewItem: ReviewApiPort['deleteReviewItem'];
+  readonly deleteReviewItemsBatch: ReviewApiPort['deleteReviewItemsBatch'];
   readonly appendVersion: ReviewApiPort['appendVersion'];
   readonly startReview: ReviewApiPort['startReview'];
   readonly createIssue: ReviewApiPort['createIssue'];
@@ -89,6 +90,7 @@ export class MockReviewApiAdapter implements ReviewApiPort {
     this.createReviewItemWithVersion = uploads.createReviewItemWithVersion;
     this.updateReviewItem = uploads.updateReviewItem;
     this.deleteReviewItem = uploads.deleteReviewItem;
+    this.deleteReviewItemsBatch = uploads.deleteReviewItemsBatch;
     this.appendVersion = uploads.appendVersion;
     this.startReview = workflow.startReview;
     this.createIssue = issues.createIssue;

@@ -104,6 +104,101 @@ def _restore_previous_sqlite_review_version_freeze() -> None:
         _previous()._install_trigger_policy(allow_replacement=True)  # type: ignore[attr-defined]
 
 
+def _install_durable_business_delete_exceptions() -> None:
+    dialect = op.get_bind().dialect.name
+    tables = ("issue_revisions", "annotation_sets")
+    if dialect == "sqlite":
+        for table in tables:
+            trigger = f"trg_{table}_no_delete"
+            op.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+            op.execute(
+                f"""
+                CREATE TRIGGER {trigger}
+                BEFORE DELETE ON {table}
+                WHEN NOT EXISTS (
+                  SELECT 1
+                  FROM review_deletion_intents intent
+                  WHERE intent.status = 'pending'
+                    AND intent.project_ref_id_snapshot = OLD.project_ref_id
+                    AND (
+                      intent.subject_type = 'project'
+                      OR (
+                        intent.subject_type = 'review_item'
+                        AND intent.review_item_id_snapshot = OLD.review_item_id
+                      )
+                    )
+                )
+                BEGIN
+                  SELECT RAISE(ABORT, '{table} are immutable');
+                END
+                """
+            )
+        return
+    if dialect != "postgresql":
+        return
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION fcr_allow_durable_business_delete()
+        RETURNS trigger AS $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM review_deletion_intents intent
+            WHERE intent.status = 'pending'
+              AND intent.project_ref_id_snapshot = OLD.project_ref_id
+              AND (
+                intent.subject_type = 'project'
+                OR (
+                  intent.subject_type = 'review_item'
+                  AND intent.review_item_id_snapshot = OLD.review_item_id
+                )
+              )
+          ) THEN
+            RETURN OLD;
+          END IF;
+          RAISE EXCEPTION '% are immutable', TG_TABLE_NAME;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    for table in tables:
+        trigger = f"trg_{table}_no_delete"
+        op.execute(f"DROP TRIGGER IF EXISTS {trigger} ON {table}")
+        op.execute(
+            f"CREATE TRIGGER {trigger} BEFORE DELETE ON {table} "
+            "FOR EACH ROW EXECUTE FUNCTION fcr_allow_durable_business_delete()"
+        )
+
+
+def _restore_immutable_business_delete_triggers() -> None:
+    dialect = op.get_bind().dialect.name
+    tables = ("issue_revisions", "annotation_sets")
+    if dialect == "sqlite":
+        for table in tables:
+            trigger = f"trg_{table}_no_delete"
+            op.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+            op.execute(
+                f"""
+                CREATE TRIGGER {trigger}
+                BEFORE DELETE ON {table}
+                BEGIN
+                  SELECT RAISE(ABORT, '{table} are immutable');
+                END
+                """
+            )
+        return
+    if dialect != "postgresql":
+        return
+    for table in tables:
+        trigger = f"trg_{table}_no_delete"
+        op.execute(f"DROP TRIGGER IF EXISTS {trigger} ON {table}")
+        op.execute(
+            f"CREATE TRIGGER {trigger} BEFORE DELETE ON {table} "
+            f"FOR EACH ROW EXECUTE FUNCTION fcr_raise('{table} are immutable')"
+        )
+    op.execute("DROP FUNCTION IF EXISTS fcr_allow_durable_business_delete()")
+
+
 def upgrade() -> None:
     dialect = op.get_bind().dialect.name
     op.add_column("project_refs", sa.Column("fps_num", sa.Integer(), nullable=True))
@@ -173,6 +268,8 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False),
         sa.Column("last_error_code", sa.String(length=64), nullable=True),
+        sa.Column("cleanup_claim_id", sa.String(length=64), nullable=True),
+        sa.Column("cleanup_claim_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -214,6 +311,11 @@ def upgrade() -> None:
             "OR (status != 'complete' AND completed_at IS NULL)",
             name="ck_review_deletion_intents_completed_at",
         ),
+        sa.CheckConstraint(
+            "(status = 'cleaning' AND cleanup_claim_id IS NOT NULL AND cleanup_claim_expires_at IS NOT NULL) "
+            "OR (status != 'cleaning' AND cleanup_claim_id IS NULL AND cleanup_claim_expires_at IS NULL)",
+            name="ck_review_deletion_intents_cleanup_claim",
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "operation_identity_hash",
@@ -237,6 +339,7 @@ def upgrade() -> None:
         sa.Column("expected_inode", sa.BigInteger(), nullable=False),
         sa.Column("expected_ctime_ns", sa.BigInteger(), nullable=False),
         sa.Column("expected_size", sa.BigInteger(), nullable=False),
+        sa.Column("expected_sha256", sa.String(length=64), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False),
         sa.Column("last_error_code", sa.String(length=64), nullable=True),
@@ -277,6 +380,10 @@ def upgrade() -> None:
             "AND expected_ctime_ns >= 0 AND expected_size > 0",
             name="ck_review_deletion_artifacts_strong_identity",
         ),
+        sa.CheckConstraint(
+            "length(expected_sha256) = 64",
+            name="ck_review_deletion_artifacts_sha256",
+        ),
         sa.ForeignKeyConstraint(
             ["deletion_intent_id"],
             ["review_deletion_intents.id"],
@@ -302,9 +409,11 @@ def upgrade() -> None:
         ["deletion_intent_id"],
         unique=False,
     )
+    _install_durable_business_delete_exceptions()
 
 
 def downgrade() -> None:
+    _restore_immutable_business_delete_triggers()
     op.drop_index("ix_review_deletion_artifacts_intent", table_name="review_deletion_artifacts")
     op.drop_index("ix_review_deletion_artifacts_cleanup", table_name="review_deletion_artifacts")
     op.drop_table("review_deletion_artifacts")

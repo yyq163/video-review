@@ -577,6 +577,7 @@ paths:
       x-command-type: DeleteProject
       parameters:
         - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true

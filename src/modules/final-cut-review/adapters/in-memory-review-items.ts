@@ -6,7 +6,7 @@ import type {
   StoredOriginalFile,
   VersionId,
 } from '../contracts/types';
-import { invariant } from '../core/errors';
+import { ReviewDomainError, invariant } from '../core/errors';
 import { createUuid } from '../core/uuid';
 import type { ReviewItemWithMetadata } from '../ports';
 import { cloneVersion, nowIso, originalMediaFromFile } from './in-memory-review-clones';
@@ -103,19 +103,70 @@ export class InMemoryReviewItems {
     const finalizations = [...this.store.finalizations.values()].filter(
       (finalization) => finalization.reviewItemId === input.reviewItemId,
     );
-    invariant(item.status === 'pending_review', '审核已开始，不能删除分集', 'REVIEW_ITEM_DELETE_LOCKED');
+    const explicitlyRevoked = finalizations.length > 0
+      && finalizations.every((finalization) => finalization.status === 'revoked');
+    invariant(
+      item.status === 'pending_review' || (item.status === 'in_review' && explicitlyRevoked),
+      '审核已开始，不能删除分集',
+      'REVIEW_ITEM_DELETE_LOCKED',
+    );
     invariant(versions.length === 1, '已有多版本记录，不能删除分集', 'REVIEW_ITEM_DELETE_LOCKED');
     invariant(issues.length === 0, '已有审核意见，不能删除分集', 'REVIEW_ITEM_DELETE_LOCKED');
+    invariant(!item.activeFinalizationId, '当前分集仍处于定稿状态', 'REVIEW_ITEM_DELETE_LOCKED');
     invariant(
-      !item.activeFinalizationId && finalizations.length === 0,
-      '已有定稿记录，不能删除分集',
+      finalizations.length === 0 || explicitlyRevoked,
+      '已有未撤销的定稿记录',
       'REVIEW_ITEM_DELETE_LOCKED',
     );
 
     this.store.versions.delete(versions[0].versionId);
+    for (const finalization of finalizations) {
+      this.store.finalizations.delete(finalization.finalizationId);
+    }
     this.store.items.delete(item.reviewItemId);
     this.store.emitChange();
     return { ...item };
+  };
+
+  readonly deleteReviewItemsBatch = async (input: {
+    projectRefId: ProjectRefId;
+    reviewItemIds: ReviewItemId[];
+    confirmed: true;
+  }): Promise<{
+    projectRefId: ProjectRefId;
+    results: Array<{
+      projectRefId: ProjectRefId;
+      reviewItemId: ReviewItemId;
+      outcome: 'deleted' | 'failed';
+      errorCode: string | null;
+    }>;
+  }> => {
+    invariant(input.confirmed === true, '批量删除分集必须二次确认', 'RESOURCE_STATE_CONFLICT');
+    this.store.assertProjectWritable(input.projectRefId);
+    const results = [];
+    for (const reviewItemId of input.reviewItemIds) {
+      try {
+        await this.deleteReviewItem({
+          projectRefId: input.projectRefId,
+          reviewItemId,
+          confirmed: true,
+        });
+        results.push({
+          projectRefId: input.projectRefId,
+          reviewItemId,
+          outcome: 'deleted' as const,
+          errorCode: null,
+        });
+      } catch (error) {
+        results.push({
+          projectRefId: input.projectRefId,
+          reviewItemId,
+          outcome: 'failed' as const,
+          errorCode: error instanceof ReviewDomainError ? error.code : 'INTERNAL_SERVER_ERROR',
+        });
+      }
+    }
+    return { projectRefId: input.projectRefId, results };
   };
 
   readonly appendVersion = async (input: {

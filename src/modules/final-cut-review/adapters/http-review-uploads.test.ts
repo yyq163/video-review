@@ -31,7 +31,12 @@ afterEach(() => {
 describe('HTTP review upload idempotency', () => {
   it('forwards the explicit delete confirmation in the command payload', async () => {
     const item = reviewItem(1);
-    const command = vi.fn().mockResolvedValue(item);
+    const command = vi.fn().mockResolvedValue({
+      project_ref_id: item.project_ref_id,
+      review_item_id: item.id,
+      outcome: 'deleted',
+      error_code: null,
+    });
     const transport = {
       assertWriteContext: vi.fn(),
       projectForWrite: vi.fn().mockResolvedValue(undefined),
@@ -66,7 +71,12 @@ describe('HTTP review upload idempotency', () => {
 
   it('uses the review delete route and permits the review write context', async () => {
     const item = reviewItem(1);
-    const command = vi.fn().mockResolvedValue(item);
+    const command = vi.fn().mockResolvedValue({
+      project_ref_id: item.project_ref_id,
+      review_item_id: item.id,
+      outcome: 'deleted',
+      error_code: null,
+    });
     const assertWriteContext = vi.fn();
     const transport = {
       assertWriteContext,

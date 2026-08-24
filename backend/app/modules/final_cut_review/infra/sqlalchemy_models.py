@@ -346,6 +346,11 @@ class ReviewDeletionIntentModel(Base):
             "(status = 'complete' AND completed_at IS NOT NULL) OR (status != 'complete' AND completed_at IS NULL)",
             name="ck_review_deletion_intents_completed_at",
         ),
+        CheckConstraint(
+            "(status = 'cleaning' AND cleanup_claim_id IS NOT NULL AND cleanup_claim_expires_at IS NOT NULL) "
+            "OR (status != 'cleaning' AND cleanup_claim_id IS NULL AND cleanup_claim_expires_at IS NULL)",
+            name="ck_review_deletion_intents_cleanup_claim",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -357,6 +362,8 @@ class ReviewDeletionIntentModel(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error_code: Mapped[str | None] = mapped_column(String(64))
+    cleanup_claim_id: Mapped[str | None] = mapped_column(String(64))
+    cleanup_claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -416,6 +423,10 @@ class ReviewDeletionArtifactModel(Base):
             "expected_device >= 0 AND expected_inode >= 0 AND expected_ctime_ns >= 0 AND expected_size > 0",
             name="ck_review_deletion_artifacts_strong_identity",
         ),
+        CheckConstraint(
+            "length(expected_sha256) = 64",
+            name="ck_review_deletion_artifacts_sha256",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -426,6 +437,7 @@ class ReviewDeletionArtifactModel(Base):
     expected_inode: Mapped[int] = mapped_column(BigInteger, nullable=False)
     expected_ctime_ns: Mapped[int] = mapped_column(BigInteger, nullable=False)
     expected_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error_code: Mapped[str | None] = mapped_column(String(64))
