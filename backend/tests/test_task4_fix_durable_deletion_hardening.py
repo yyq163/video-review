@@ -422,6 +422,319 @@ def test_0024_sqlite_committed_and_c043_stamped_shapes_converge_exactly(
     assert committed_inventory["foreign_key_violations"] == ()
 
 
+@pytest.mark.parametrize(
+    "failure_window",
+    (
+        "after_artifact_detach",
+        "during_intent_parent_rebuild",
+        "after_final_artifact_normalization",
+    ),
+)
+def test_0024_sqlite_c043_retry_recovers_known_batch_failure_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_window: str,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    canonical_path = tmp_path / f"task4-retry-canonical-{failure_window}.db"
+    failed_path = tmp_path / f"task4-retry-failed-{failure_window}.db"
+    allowed_temporary_tables = {
+        "_alembic_tmp_review_deletion_artifacts",
+        "_alembic_tmp_review_deletion_intents",
+        "_alembic_tmp_issue_revisions",
+        "_alembic_tmp_annotation_sets",
+    }
+
+    def prepare_c043_start(db_path: Path) -> object:
+        _set_migration_env(db_path, tmp_path, monkeypatch)
+        config = _alembic_config(root)
+        alembic_command.upgrade(config, "20260824_0023")
+        engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            _install_c043_0023_sqlite_shape(engine)
+        finally:
+            engine.dispose()
+        return config
+
+    canonical_config = prepare_c043_start(canonical_path)
+    alembic_command.upgrade(canonical_config, "20260824_0024")
+    canonical_engine = create_engine(f"sqlite:///{canonical_path}")
+    try:
+        canonical_inventory = _sqlite_task4_schema_inventory(canonical_engine)
+    finally:
+        canonical_engine.dispose()
+
+    failed_config = prepare_c043_start(failed_path)
+    artifact_rename_count = 0
+    injected = False
+
+    class InjectedMigrationFailure(RuntimeError):
+        pass
+
+    def inject_after_real_ddl(
+        connection: Any,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        nonlocal artifact_rename_count, injected
+        if injected:
+            return
+        database = connection.engine.url.database
+        if database is None or Path(database).resolve() != failed_path.resolve():
+            return
+        normalized = _normalize_sqlite_sql(statement)
+        artifact_rename = (
+            "alter table _alembic_tmp_review_deletion_artifacts "
+            "rename to review_deletion_artifacts"
+        )
+        if artifact_rename in normalized:
+            artifact_rename_count += 1
+        should_inject = (
+            failure_window == "after_artifact_detach"
+            and artifact_rename_count == 1
+        ) or (
+            failure_window == "during_intent_parent_rebuild"
+            and normalized.startswith("drop table review_deletion_intents")
+        ) or (
+            failure_window == "after_final_artifact_normalization"
+            and artifact_rename_count == 2
+        )
+        if should_inject:
+            injected = True
+            raise InjectedMigrationFailure(failure_window)
+
+    event.listen(Engine, "after_cursor_execute", inject_after_real_ddl)
+    try:
+        with pytest.raises(InjectedMigrationFailure, match=failure_window):
+            alembic_command.upgrade(failed_config, "20260824_0024")
+    finally:
+        event.remove(Engine, "after_cursor_execute", inject_after_real_ddl)
+    assert injected is True
+
+    failed_engine = create_engine(f"sqlite:///{failed_path}")
+    try:
+        inspector = inspect(failed_engine)
+        table_names = set(inspector.get_table_names())
+        temporary_tables = {
+            table_name
+            for table_name in table_names
+            if table_name.startswith("_alembic_tmp_")
+        }
+        assert temporary_tables <= allowed_temporary_tables
+        with failed_engine.connect() as connection:
+            assert connection.scalar(
+                text("SELECT version_num FROM alembic_version"),
+            ) == "20260824_0023"
+            for table_name, row_id in (
+                ("review_deletion_intents", "delete_c043_legacy"),
+                ("review_deletion_artifacts", "artifact_c043_legacy"),
+            ):
+                candidates = {
+                    table_name,
+                    f"_alembic_tmp_{table_name}",
+                } & table_names
+                assert candidates
+                assert sum(
+                    int(
+                        connection.scalar(
+                            text(
+                                f'SELECT count(*) FROM "{candidate}" '
+                                "WHERE id = :row_id",
+                            ),
+                            {"row_id": row_id},
+                        )
+                        or 0
+                    )
+                    for candidate in candidates
+                ) >= 1
+    finally:
+        failed_engine.dispose()
+
+    _set_migration_env(failed_path, tmp_path, monkeypatch)
+    alembic_command.upgrade(failed_config, "20260824_0024")
+    recovered_engine = create_engine(f"sqlite:///{failed_path}")
+    try:
+        assert _sqlite_task4_schema_inventory(
+            recovered_engine,
+        ) == canonical_inventory
+        recovered_inspector = inspect(recovered_engine)
+        assert not {
+            table_name
+            for table_name in recovered_inspector.get_table_names()
+            if table_name.startswith("_alembic_tmp_")
+        }
+        with recovered_engine.connect() as connection:
+            assert connection.scalar(
+                text("SELECT version_num FROM alembic_version"),
+            ) == "20260824_0024"
+            assert tuple(
+                connection.execute(
+                    text(
+                        "SELECT status, cleanup_claim_id, "
+                        "cleanup_claim_expires_at FROM "
+                        "review_deletion_intents "
+                        "WHERE id = 'delete_c043_legacy'",
+                    ),
+                ).one(),
+            ) == ("pending", None, None)
+            assert tuple(
+                connection.execute(
+                    text(
+                        "SELECT status, expected_sha256, "
+                        "relative_logical_target FROM "
+                        "review_deletion_artifacts "
+                        "WHERE id = 'artifact_c043_legacy'",
+                    ),
+                ).one(),
+            ) == (
+                "pending",
+                hashlib.sha256(b"c043 legacy artifact").hexdigest(),
+                "files/file-c043-legacy",
+            )
+    finally:
+        recovered_engine.dispose()
+
+
+def test_0024_sqlite_unknown_alembic_temporary_table_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "task4-unknown-alembic-temp.db"
+    _set_migration_env(db_path, tmp_path, monkeypatch)
+    config = _alembic_config(root)
+    alembic_command.upgrade(config, "20260824_0023")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        _install_c043_0023_sqlite_shape(engine)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE _alembic_tmp_unrelated ("
+                    "id TEXT PRIMARY KEY, payload TEXT NOT NULL)",
+                ),
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO _alembic_tmp_unrelated (id, payload) "
+                    "VALUES ('sentinel', 'must-survive')",
+                ),
+            )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match="unknown Alembic temporary table"):
+        alembic_command.upgrade(config, "20260824_0024")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            assert connection.scalar(
+                text("SELECT version_num FROM alembic_version"),
+            ) == "20260824_0023"
+            assert connection.scalar(
+                text(
+                    "SELECT payload FROM _alembic_tmp_unrelated "
+                    "WHERE id = 'sentinel'",
+                ),
+            ) == "must-survive"
+    finally:
+        engine.dispose()
+
+
+def test_0024_sqlite_known_temp_preflight_failure_changes_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "task4-known-temp-preflight.db"
+    _set_migration_env(db_path, tmp_path, monkeypatch)
+    config = _alembic_config(root)
+    alembic_command.upgrade(config, "20260824_0023")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        _install_c043_0023_sqlite_shape(engine)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE _alembic_tmp_review_deletion_intents "
+                    "AS SELECT * FROM review_deletion_intents",
+                ),
+            )
+            connection.execute(
+                text(
+                    "CREATE TABLE _alembic_tmp_review_deletion_artifacts "
+                    "AS SELECT * FROM review_deletion_artifacts",
+                ),
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO _alembic_tmp_review_deletion_artifacts "
+                    "SELECT * FROM review_deletion_artifacts",
+                ),
+            )
+            connection.execute(
+                text(
+                    "UPDATE _alembic_tmp_review_deletion_artifacts "
+                    "SET id = 'artifact_temp_only' "
+                    "WHERE rowid = (SELECT max(rowid) FROM "
+                    "_alembic_tmp_review_deletion_artifacts)",
+                ),
+            )
+    finally:
+        engine.dispose()
+
+    def snapshot() -> tuple[object, ...]:
+        snapshot_engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            with snapshot_engine.connect() as connection:
+                schema = tuple(
+                    tuple(row)
+                    for row in connection.execute(
+                        text(
+                            "SELECT type, name, tbl_name, sql "
+                            "FROM sqlite_master "
+                            "WHERE name NOT LIKE 'sqlite_%' "
+                            "ORDER BY type, name",
+                        ),
+                    )
+                )
+                rows = tuple(
+                    (
+                        table_name,
+                        tuple(
+                            tuple(row)
+                            for row in connection.execute(
+                                text(
+                                    f'SELECT * FROM "{table_name}" '
+                                    "ORDER BY id",
+                                ),
+                            )
+                        ),
+                    )
+                    for table_name in (
+                        "review_deletion_intents",
+                        "review_deletion_artifacts",
+                        "_alembic_tmp_review_deletion_intents",
+                        "_alembic_tmp_review_deletion_artifacts",
+                    )
+                )
+                revision = connection.scalar(
+                    text("SELECT version_num FROM alembic_version"),
+                )
+            return schema, rows, revision
+        finally:
+            snapshot_engine.dispose()
+
+    before = snapshot()
+    with pytest.raises(RuntimeError, match="rows absent from its source"):
+        alembic_command.upgrade(config, "20260824_0024")
+    assert snapshot() == before
+
+
 def test_0024_reconciles_c043_0023_sqlite_shape_without_losing_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

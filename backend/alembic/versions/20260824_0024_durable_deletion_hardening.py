@@ -35,10 +35,162 @@ INTENT_CLAIM_CHECK = "ck_review_deletion_intents_cleanup_claim"
 ARTIFACT_SHA_CHECK = "ck_review_deletion_artifacts_sha256"
 ARTIFACT_NAMESPACE_CHECK = "ck_review_deletion_artifacts_kind_namespace"
 ARTIFACT_INTENT_FOREIGN_KEY = "fk_review_deletion_artifacts_intent"
+SQLITE_BATCH_RECOVERY_COLUMNS = {
+    "review_deletion_intents": {
+        "id",
+        "command_type",
+        "operation_identity_hash",
+        "subject_type",
+        "project_ref_id_snapshot",
+        "review_item_id_snapshot",
+        "status",
+        "attempts",
+        "last_error_code",
+        "completed_at",
+        "created_at",
+        "updated_at",
+    },
+    "review_deletion_artifacts": {
+        "id",
+        "deletion_intent_id",
+        "artifact_kind",
+        "relative_logical_target",
+        "expected_device",
+        "expected_inode",
+        "expected_ctime_ns",
+        "expected_size",
+        "status",
+        "attempts",
+        "last_error_code",
+        "quarantined_at",
+        "deleted_at",
+        "created_at",
+        "updated_at",
+    },
+    "issue_revisions": {
+        "id",
+        "issue_id",
+        "project_ref_id",
+        "review_item_id",
+        "version_id",
+        "revision_no",
+        "content",
+        "annotation_set_id",
+        "created_at",
+    },
+    "annotation_sets": {
+        "id",
+        "issue_id",
+        "project_ref_id",
+        "review_item_id",
+        "version_id",
+        "timestamp_ms",
+        "frame_number",
+        "canvas_width",
+        "canvas_height",
+        "video_width",
+        "video_height",
+        "shapes",
+        "created_at",
+    },
+}
 
 
 def _recreate_mode() -> str:
     return "always" if op.get_bind().dialect.name == "sqlite" else "auto"
+
+
+def _drop_sqlite_rebuild_triggers() -> None:
+    for trigger_name in (
+        "trg_issue_revisions_no_delete",
+        "trg_annotation_sets_no_delete",
+        "trg_review_issues_current_revision_identity",
+        "trg_review_deletion_intents_cleanup_claim_insert",
+        "trg_review_deletion_intents_cleanup_claim_update",
+        "trg_review_deletion_artifacts_sha_insert",
+    ):
+        op.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+
+
+def _recover_sqlite_batch_residue() -> None:
+    if op.get_bind().dialect.name != "sqlite":
+        return
+    bind = op.get_bind()
+    table_names = set(sa.inspect(bind).get_table_names())
+    known_temporary_tables = {
+        f"_alembic_tmp_{table_name}"
+        for table_name in SQLITE_BATCH_RECOVERY_COLUMNS
+    }
+    found_temporary_tables = {
+        table_name
+        for table_name in table_names
+        if table_name.startswith("_alembic_tmp_")
+    }
+    unknown_temporary_tables = (
+        found_temporary_tables - known_temporary_tables
+    )
+    if unknown_temporary_tables:
+        raise RuntimeError(
+            "unknown Alembic temporary table blocks deletion migration retry: "
+            + ",".join(sorted(unknown_temporary_tables)),
+        )
+    if not found_temporary_tables:
+        return
+    recovery_actions: list[tuple[str, str, str]] = []
+    for table_name, required_columns in SQLITE_BATCH_RECOVERY_COLUMNS.items():
+        temporary_table = f"_alembic_tmp_{table_name}"
+        if temporary_table not in found_temporary_tables:
+            continue
+        temporary_columns = {
+            column["name"]
+            for column in sa.inspect(bind).get_columns(temporary_table)
+        }
+        if not required_columns <= temporary_columns:
+            raise RuntimeError(
+                f"Alembic temporary table {temporary_table} has an unsafe shape",
+            )
+        if table_name in table_names:
+            source_columns = {
+                column["name"]
+                for column in sa.inspect(bind).get_columns(table_name)
+            }
+            if not required_columns <= source_columns:
+                raise RuntimeError(
+                    f"migration source table {table_name} has an unsafe shape",
+                )
+            temp_only_rows = bind.scalar(
+                sa.text(
+                    f'SELECT count(*) FROM "{temporary_table}" AS temp '
+                    f'LEFT JOIN "{table_name}" AS source ON source.id = temp.id '
+                    "WHERE source.id IS NULL",
+                ),
+            )
+            if int(temp_only_rows or 0) != 0:
+                raise RuntimeError(
+                    f"Alembic temporary table {temporary_table} contains "
+                    "rows absent from its source",
+                )
+            recovery_actions.append(("drop", temporary_table, table_name))
+        else:
+            recovery_actions.append(("rename", temporary_table, table_name))
+    _drop_sqlite_rebuild_triggers()
+    for action, temporary_table, table_name in recovery_actions:
+        if action == "drop":
+            op.execute(f'DROP TABLE "{temporary_table}"')
+        else:
+            op.execute(
+                f'ALTER TABLE "{temporary_table}" RENAME TO "{table_name}"',
+            )
+    remaining_temporary_tables = {
+        table_name
+        for table_name in sa.inspect(bind).get_table_names()
+        if table_name.startswith("_alembic_tmp_")
+    }
+    if remaining_temporary_tables:
+        raise RuntimeError(
+            "Alembic temporary table recovery did not converge: "
+            + ",".join(sorted(remaining_temporary_tables)),
+        )
 
 
 def _replace_issue_child_foreign_keys(ondelete: str) -> None:
@@ -306,6 +458,7 @@ def _drop_sqlite_legacy_intent_claim_check(
 
 
 def upgrade() -> None:
+    _recover_sqlite_batch_residue()
     intent_columns = {
         column["name"]
         for column in sa.inspect(op.get_bind()).get_columns(
@@ -332,7 +485,7 @@ def upgrade() -> None:
             "review_deletion_intents",
         )
     }
-    restore_artifact_intent_foreign_key = (
+    detached_legacy_artifact_intent_foreign_key = (
         _drop_sqlite_legacy_intent_claim_check(intent_checks)
     )
     if (
@@ -359,6 +512,34 @@ def upgrade() -> None:
             "review_deletion_artifacts",
         )
     }
+    artifact_intent_foreign_key = next(
+        (
+            foreign_key
+            for foreign_key in artifact_inspector.get_foreign_keys(
+                "review_deletion_artifacts",
+            )
+            if foreign_key.get("name") == ARTIFACT_INTENT_FOREIGN_KEY
+        ),
+        None,
+    )
+    artifact_intent_ondelete = (
+        str(
+            (artifact_intent_foreign_key.get("options") or {}).get(
+                "ondelete",
+                "",
+            ),
+        ).upper()
+        if artifact_intent_foreign_key is not None
+        else ""
+    )
+    normalize_sqlite_artifact_intent_foreign_key = (
+        op.get_bind().dialect.name == "sqlite"
+        and (
+            detached_legacy_artifact_intent_foreign_key
+            or artifact_intent_foreign_key is None
+            or artifact_intent_ondelete != "RESTRICT"
+        )
+    )
     with op.batch_alter_table(
         "review_deletion_artifacts",
         recreate=_recreate_mode(),
@@ -377,6 +558,14 @@ def upgrade() -> None:
             batch_op.drop_constraint(ARTIFACT_SHA_CHECK, type_="check")
         if ARTIFACT_NAMESPACE_CHECK in artifact_checks:
             batch_op.drop_constraint(ARTIFACT_NAMESPACE_CHECK, type_="check")
+        if (
+            normalize_sqlite_artifact_intent_foreign_key
+            and artifact_intent_foreign_key is not None
+        ):
+            batch_op.drop_constraint(
+                ARTIFACT_INTENT_FOREIGN_KEY,
+                type_="foreignkey",
+            )
         batch_op.create_check_constraint(
             ARTIFACT_SHA_CHECK,
             "expected_sha256 IS NULL OR length(expected_sha256) = 64",
@@ -389,7 +578,7 @@ def upgrade() -> None:
             "('original_media','playback_derivative','thumbnail') "
             "AND relative_logical_target LIKE 'files/%')",
         )
-        if restore_artifact_intent_foreign_key:
+        if normalize_sqlite_artifact_intent_foreign_key:
             batch_op.create_foreign_key(
                 ARTIFACT_INTENT_FOREIGN_KEY,
                 "review_deletion_intents",
