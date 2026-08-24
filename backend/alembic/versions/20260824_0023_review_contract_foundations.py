@@ -168,7 +168,8 @@ def upgrade() -> None:
         sa.Column("command_type", sa.String(length=64), nullable=False),
         sa.Column("operation_identity_hash", sa.String(length=64), nullable=False),
         sa.Column("subject_type", sa.String(length=32), nullable=False),
-        sa.Column("subject_snapshot", sa.JSON(), nullable=False),
+        sa.Column("project_ref_id_snapshot", sa.String(length=64), nullable=False),
+        sa.Column("review_item_id_snapshot", sa.String(length=64), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False),
         sa.Column("last_error_code", sa.String(length=64), nullable=True),
@@ -182,6 +183,22 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "subject_type in ('project','review_item')",
             name="ck_review_deletion_intents_subject_type",
+        ),
+        sa.CheckConstraint(
+            "(command_type = 'DeleteProject' AND subject_type = 'project') "
+            "OR (command_type IN ('DeleteReviewItem','DeleteReviewItemsBatch') "
+            "AND subject_type = 'review_item')",
+            name="ck_review_deletion_intents_command_subject",
+        ),
+        sa.CheckConstraint(
+            "length(trim(project_ref_id_snapshot)) BETWEEN 1 AND 64",
+            name="ck_review_deletion_intents_project_snapshot",
+        ),
+        sa.CheckConstraint(
+            "(subject_type = 'project' AND review_item_id_snapshot IS NULL) "
+            "OR (subject_type = 'review_item' AND review_item_id_snapshot IS NOT NULL "
+            "AND length(trim(review_item_id_snapshot)) BETWEEN 1 AND 64)",
+            name="ck_review_deletion_intents_subject_snapshot_shape",
         ),
         sa.CheckConstraint(
             "status in ('pending','cleaning','failed','complete')",
@@ -238,10 +255,21 @@ def upgrade() -> None:
         sa.CheckConstraint("attempts >= 0", name="ck_review_deletion_artifacts_attempts"),
         sa.CheckConstraint(
             "length(relative_logical_target) > 0 "
+            "AND relative_logical_target = trim(relative_logical_target) "
+            "AND relative_logical_target LIKE '%/%' "
             "AND substr(relative_logical_target, 1, 1) != '/' "
+            "AND relative_logical_target NOT LIKE '%/' "
+            "AND relative_logical_target NOT LIKE '%//%' "
             "AND relative_logical_target != '..' "
+            "AND relative_logical_target != '.' "
+            "AND relative_logical_target NOT LIKE './%' "
             "AND relative_logical_target NOT LIKE '../%' "
-            "AND relative_logical_target NOT LIKE '%/../%'",
+            "AND relative_logical_target NOT LIKE '%/./%' "
+            "AND relative_logical_target NOT LIKE '%/../%' "
+            "AND relative_logical_target NOT LIKE '%/.' "
+            "AND relative_logical_target NOT LIKE '%/..' "
+            "AND relative_logical_target NOT LIKE '%:%' "
+            "AND replace(relative_logical_target, '\\', '') = relative_logical_target",
             name="ck_review_deletion_artifacts_relative_target",
         ),
         sa.CheckConstraint(

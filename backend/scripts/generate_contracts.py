@@ -391,6 +391,32 @@ MODULE_MANIFEST: dict[str, Any] = {manifest!r}
 COMMAND_PAYLOAD_SCHEMAS: dict[str, dict[str, Any]] = {command_payload_schemas!r}
 COMMAND_SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {command_schema_definitions!r}
 DOMAIN_EVENT_PAYLOAD_SCHEMAS: dict[str, dict[str, Any]] = {event_payload_schemas!r}
+ALLOWED_FRAME_RATE_PAIRS: tuple[tuple[int, int], ...] = (
+    (24_000, 1_001),
+    (24, 1),
+    (25, 1),
+    (30_000, 1_001),
+    (30, 1),
+    (50, 1),
+    (60_000, 1_001),
+    (60, 1),
+)
+
+
+def _validate_frame_rate_pair(fps_num: int | None, fps_den: int | None, *, nullable: bool) -> None:
+    if fps_num is None or fps_den is None:
+        if nullable and fps_num is None and fps_den is None:
+            return
+        raise ValueError("fps_num and fps_den must be null together")
+    if (fps_num, fps_den) not in ALLOWED_FRAME_RATE_PAIRS:
+        raise ValueError("unsupported frame rate pair")
+
+
+def _validate_nullable_editor_snapshot_pair(editor_id: str | None, name_snapshot: str | None) -> None:
+    if editor_id is None and name_snapshot is None:
+        return
+    if not editor_id or not editor_id.strip() or not name_snapshot or not name_snapshot.strip():
+        raise ValueError("responsible editor id and name snapshot must be non-blank together")
 
 
 def _resolve_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -583,6 +609,11 @@ class OriginalMediaSnapshotDTO(ContractModel):
     fps_den: int
     media_probe_version: str
 
+    @model_validator(mode="after")
+    def validate_frame_rate_pair(self) -> "OriginalMediaSnapshotDTO":
+        _validate_frame_rate_pair(self.fps_num, self.fps_den, nullable=False)
+        return self
+
 
 class ProjectDTO(ContractModel):
     project_ref_id: str
@@ -599,6 +630,11 @@ class ProjectDTO(ContractModel):
     lock_version: int
     created_at: str
     updated_at: str
+
+    @model_validator(mode="after")
+    def validate_frame_rate_pair(self) -> "ProjectDTO":
+        _validate_frame_rate_pair(self.fps_num, self.fps_den, nullable=True)
+        return self
 
 
 class ReviewVersionDTO(ContractModel):
@@ -620,6 +656,14 @@ class ReviewVersionDTO(ContractModel):
     change_summary: str | None = None
     lock_version: int
     created_at: str
+
+    @model_validator(mode="after")
+    def validate_editor_snapshot_pair(self) -> "ReviewVersionDTO":
+        _validate_nullable_editor_snapshot_pair(
+            self.responsible_editor_id,
+            self.responsible_editor_name_snapshot,
+        )
+        return self
 
 
 class ResponsibleEditorDTO(ContractModel):
@@ -767,6 +811,15 @@ class ProjectSummaryCurrentVersionDTO(ContractModel):
     playback_url: str | None = None
     thumbnail_status: Literal["pending", "ready", "failed"]
     thumbnail_url: str | None = None
+
+    @model_validator(mode="after")
+    def validate_snapshot_pairs(self) -> "ProjectSummaryCurrentVersionDTO":
+        _validate_frame_rate_pair(self.fps_num, self.fps_den, nullable=False)
+        _validate_nullable_editor_snapshot_pair(
+            self.responsible_editor_id,
+            self.responsible_editor_name_snapshot,
+        )
+        return self
 
 
 class ProjectSummaryFinalizationDTO(ContractModel):

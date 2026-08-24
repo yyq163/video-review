@@ -231,6 +231,130 @@ def test_generated_response_models_carry_project_and_current_version_display_sna
     assert (current.width, current.height, current.fps_num, current.fps_den) == (1920, 1080, 25, 1)
 
 
+@pytest.mark.parametrize(
+    ("fps_num", "fps_den"),
+    [(None, 1), (25, None), (24_000, 1), (0, 1)],
+)
+def test_generated_project_response_rejects_partial_or_unsupported_frame_rate(
+    fps_num: int | None,
+    fps_den: int | None,
+) -> None:
+    with pytest.raises(ValidationError):
+        generated.ProjectDTO(
+            project_ref_id="project-invalid-fps",
+            project_code="P-INVALID",
+            project_name="Invalid fps",
+            description="",
+            source="local",
+            lifecycle_status="active",
+            completion_status="empty",
+            deleted_at=None,
+            fps_num=fps_num,
+            fps_den=fps_den,
+            lock_version=1,
+            created_at="2026-08-24T00:00:00Z",
+            updated_at="2026-08-24T00:00:00Z",
+        )
+
+
+def test_generated_media_and_summary_responses_reject_unsupported_frame_rate() -> None:
+    invalid_media = {
+        "original_file_id": "file-invalid-fps",
+        "original_filename": "invalid.mov",
+        "mime_type": "video/quicktime",
+        "file_size": 10_000,
+        "sha256": "a" * 64,
+        "duration_ms": 60_500,
+        "width": 1920,
+        "height": 1080,
+        "fps_num": 24_000,
+        "fps_den": 1,
+        "media_probe_version": "ffprobe-v1",
+    }
+    with pytest.raises(ValidationError):
+        generated.OriginalMediaSnapshotDTO.model_validate(invalid_media)
+
+    invalid_summary = {
+        "id": "version-invalid-fps",
+        "version_no": 1,
+        "version_label": "V1",
+        "duration_ms": 60_500,
+        "file_size": 10_000,
+        "width": 1920,
+        "height": 1080,
+        "fps_num": 24_000,
+        "fps_den": 1,
+        "responsible_editor_id": None,
+        "responsible_editor_name_snapshot": None,
+        "playback_status": "ready",
+        "playback_url": "/playback",
+        "thumbnail_status": "ready",
+        "thumbnail_url": "/thumbnail",
+    }
+    with pytest.raises(ValidationError):
+        generated.ProjectSummaryCurrentVersionDTO.model_validate(invalid_summary)
+
+
+@pytest.mark.parametrize(
+    ("responsible_editor_id", "responsible_editor_name_snapshot"),
+    [(None, "Editor One"), ("editor-1", None), ("", "Editor One"), ("editor-1", " ")],
+)
+def test_generated_version_and_summary_responses_reject_partial_or_blank_editor_snapshot(
+    responsible_editor_id: str | None,
+    responsible_editor_name_snapshot: str | None,
+) -> None:
+    media = generated.OriginalMediaSnapshotDTO(
+        original_file_id="file-editor-pair",
+        original_filename="editor-pair.mov",
+        mime_type="video/quicktime",
+        file_size=10_000,
+        sha256="a" * 64,
+        duration_ms=60_500,
+        width=1920,
+        height=1080,
+        fps_num=25,
+        fps_den=1,
+        media_probe_version="ffprobe-v1",
+    )
+    version_payload = {
+        "id": "version-editor-pair",
+        "project_ref_id": "project-editor-pair",
+        "review_item_id": "item-editor-pair",
+        "version_no": 1,
+        "version_label": "V1",
+        "is_current": True,
+        "original_media": media,
+        "responsible_editor_id": responsible_editor_id,
+        "responsible_editor_name_snapshot": responsible_editor_name_snapshot,
+        "playback_status": "ready",
+        "thumbnail_status": "ready",
+        "lock_version": 1,
+        "created_at": "2026-08-24T00:00:00Z",
+    }
+    with pytest.raises(ValidationError):
+        generated.ReviewVersionDTO.model_validate(version_payload)
+
+    summary_payload = {
+        "id": "version-editor-pair",
+        "version_no": 1,
+        "version_label": "V1",
+        "duration_ms": 60_500,
+        "file_size": 10_000,
+        "width": 1920,
+        "height": 1080,
+        "fps_num": 25,
+        "fps_den": 1,
+        "responsible_editor_id": responsible_editor_id,
+        "responsible_editor_name_snapshot": responsible_editor_name_snapshot,
+        "playback_status": "ready",
+        "playback_url": "/playback",
+        "thumbnail_status": "ready",
+        "thumbnail_url": "/thumbnail",
+    }
+    with pytest.raises(ValidationError):
+        generated.ProjectSummaryCurrentVersionDTO.model_validate(summary_payload)
+
+
 def test_openapi_routes_bind_task_1_commands_queries_and_result_shapes() -> None:
     root = Path(__file__).resolve().parents[2]
     openapi = yaml.safe_load((root / "contracts/final-cut-review/v1/openapi.yaml").read_text(encoding="utf-8"))
@@ -258,6 +382,34 @@ def test_openapi_routes_bind_task_1_commands_queries_and_result_shapes() -> None
         (root / "contracts/final-cut-review/v1/queries/queries.yaml").read_text(encoding="utf-8")
     )["queries"]
     assert "list_responsible_editors" in queries
+
+
+def test_openapi_response_schemas_enforce_allowed_frame_rates_and_nullable_editor_pair() -> None:
+    root = Path(__file__).resolve().parents[2]
+    openapi = yaml.safe_load((root / "contracts/final-cut-review/v1/openapi.yaml").read_text(encoding="utf-8"))
+    schemas = openapi["components"]["schemas"]
+    allowed_pair_schema = schemas["AllowedFrameRatePair"]
+    actual_pairs = {
+        (
+            branch["properties"]["fps_num"]["const"],
+            branch["properties"]["fps_den"]["const"],
+        )
+        for branch in allowed_pair_schema["oneOf"]
+    }
+    assert actual_pairs == set(ALLOWED_FRAME_RATES)
+    assert schemas["OriginalMediaSnapshotDTO"]["allOf"] == [
+        {"$ref": "#/components/schemas/AllowedFrameRatePair"}
+    ]
+    assert schemas["ProjectSummaryCurrentVersionDTO"]["allOf"] == [
+        {"$ref": "#/components/schemas/AllowedFrameRatePair"},
+        {"$ref": "#/components/schemas/NullableResponsibleEditorSnapshotPair"},
+    ]
+    assert schemas["ReviewVersionDTO"]["allOf"] == [
+        {"$ref": "#/components/schemas/NullableResponsibleEditorSnapshotPair"}
+    ]
+    assert schemas["ProjectDTO"]["allOf"][0]["oneOf"][1] == {
+        "$ref": "#/components/schemas/AllowedFrameRatePair"
+    }
 
 
 def _alembic_config(root: Path) -> Config:
@@ -291,11 +443,14 @@ def _assert_task_1_schema(db_path: Path) -> None:
         assert {
             "status",
             "attempts",
-            "subject_snapshot",
+            "subject_type",
+            "project_ref_id_snapshot",
+            "review_item_id_snapshot",
             "operation_identity_hash",
             "created_at",
             "updated_at",
         } <= intent_columns
+        assert "subject_snapshot" not in intent_columns
         assert {
             "status",
             "attempts",
@@ -478,15 +633,17 @@ def test_0023_constraints_keep_nullable_history_editor_snapshots_and_cleanup_ide
                 text(
                     """
                     INSERT INTO review_deletion_intents (
-                        id, command_type, operation_identity_hash, subject_type, subject_snapshot,
+                        id, command_type, operation_identity_hash, subject_type,
+                        project_ref_id_snapshot, review_item_id_snapshot,
                         status, attempts, created_at, updated_at
                     ) VALUES (
-                        'intent-1', 'DeleteReviewItem', :identity_hash, 'review_item', :subject_snapshot,
+                        'intent-1', 'DeleteReviewItem', :identity_hash, 'review_item',
+                        'project-legacy', 'item-legacy',
                         'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
                     """
                 ),
-                {"identity_hash": "b" * 64, "subject_snapshot": '{"review_item_id":"item-legacy"}'},
+                {"identity_hash": "b" * 64},
             )
             connection.execute(
                 text(
@@ -502,6 +659,85 @@ def test_0023_constraints_keep_nullable_history_editor_snapshots_and_cleanup_ide
                     """
                 )
             )
+
+        with pytest.raises((DBAPIError, IntegrityError)):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO review_deletion_intents (
+                            id, command_type, operation_identity_hash, subject_type,
+                            project_ref_id_snapshot, review_item_id_snapshot,
+                            status, attempts, created_at, updated_at
+                        ) VALUES (
+                            'intent-invalid-project-shape', 'DeleteProject', :identity_hash, 'project',
+                            'project-legacy', 'item-legacy',
+                            'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {"identity_hash": "c" * 64},
+                )
+
+        with pytest.raises((DBAPIError, IntegrityError)):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO review_deletion_intents (
+                            id, command_type, operation_identity_hash, subject_type,
+                            project_ref_id_snapshot, review_item_id_snapshot,
+                            status, attempts, created_at, updated_at
+                        ) VALUES (
+                            'intent-invalid-item-shape', 'DeleteReviewItem', :identity_hash, 'review_item',
+                            'project-legacy', NULL,
+                            'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {"identity_hash": "d" * 64},
+                )
+
+        with pytest.raises((DBAPIError, IntegrityError)):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO review_deletion_intents (
+                            id, command_type, operation_identity_hash, subject_type,
+                            project_ref_id_snapshot, review_item_id_snapshot,
+                            status, attempts, created_at, updated_at
+                        ) VALUES (
+                            'intent-command-subject-mismatch', 'DeleteProject', :identity_hash, 'review_item',
+                            'project-legacy', 'item-legacy',
+                            'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {"identity_hash": "f" * 64},
+                )
+
+        with pytest.raises((DBAPIError, IntegrityError)):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO review_deletion_intents (
+                            id, command_type, operation_identity_hash, subject_type,
+                            project_ref_id_snapshot, review_item_id_snapshot, subject_snapshot,
+                            status, attempts, created_at, updated_at
+                        ) VALUES (
+                            'intent-arbitrary-json', 'DeleteReviewItem', :identity_hash, 'review_item',
+                            'project-legacy', 'item-legacy', :subject_snapshot,
+                            'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {
+                        "identity_hash": "e" * 64,
+                        "subject_snapshot": '{"filename":"secret.mov","token":"secret"}',
+                    },
+                )
 
         with pytest.raises((DBAPIError, IntegrityError)):
             with engine.begin() as connection:
@@ -526,21 +762,43 @@ def test_0023_constraints_keep_nullable_history_editor_snapshots_and_cleanup_ide
                     )
                 )
 
-        with pytest.raises((DBAPIError, IntegrityError)):
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        """
-                        INSERT INTO review_deletion_artifacts (
-                            id, deletion_intent_id, artifact_kind, relative_logical_target,
-                            expected_device, expected_inode, expected_ctime_ns, expected_size,
-                            status, attempts, created_at, updated_at
-                        ) VALUES (
-                            'artifact-escape', 'intent-1', 'thumbnail', '../outside',
-                            1, 2, 3, 10, 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                        )
-                        """
+        invalid_targets = (
+            "files/..",
+            "files/.",
+            "",
+            "/files/outside",
+            "files",
+            "files/",
+            "./files/outside",
+            "../outside",
+            "files/./outside",
+            "files/../outside",
+            "files//outside",
+            " files/outside",
+            "files/outside ",
+            "C:/files/outside",
+            "files\\outside",
+        )
+        for index, invalid_target in enumerate(invalid_targets):
+            with pytest.raises((DBAPIError, IntegrityError)):
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO review_deletion_artifacts (
+                                id, deletion_intent_id, artifact_kind, relative_logical_target,
+                                expected_device, expected_inode, expected_ctime_ns, expected_size,
+                                status, attempts, created_at, updated_at
+                            ) VALUES (
+                                :artifact_id, 'intent-1', 'thumbnail', :relative_logical_target,
+                                1, 2, 3, 10, 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                            )
+                            """
+                        ),
+                        {
+                            "artifact_id": f"artifact-invalid-{index}",
+                            "relative_logical_target": invalid_target,
+                        },
                     )
-                )
     finally:
         engine.dispose()

@@ -1354,6 +1354,8 @@ function reviewVersion(versionNo: number, file: File): ReviewVersionDTO {
       fps_den: 1,
       media_probe_version: 'test',
     },
+    responsible_editor_id: null,
+    responsible_editor_name_snapshot: null,
     playback_status: 'ready',
     playback_asset_id: `file_${label.toLowerCase()}`,
     thumbnail_status: 'failed',

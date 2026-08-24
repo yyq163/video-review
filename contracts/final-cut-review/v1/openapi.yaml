@@ -2245,10 +2245,34 @@ components:
         file_id:
           type: string
 
+    AllowedFrameRatePair:
+      type: object
+      required: [fps_num, fps_den]
+      oneOf:
+        - properties: {fps_num: {type: integer, const: 24000}, fps_den: {type: integer, const: 1001}}
+        - properties: {fps_num: {type: integer, const: 24}, fps_den: {type: integer, const: 1}}
+        - properties: {fps_num: {type: integer, const: 25}, fps_den: {type: integer, const: 1}}
+        - properties: {fps_num: {type: integer, const: 30000}, fps_den: {type: integer, const: 1001}}
+        - properties: {fps_num: {type: integer, const: 30}, fps_den: {type: integer, const: 1}}
+        - properties: {fps_num: {type: integer, const: 50}, fps_den: {type: integer, const: 1}}
+        - properties: {fps_num: {type: integer, const: 60000}, fps_den: {type: integer, const: 1001}}
+        - properties: {fps_num: {type: integer, const: 60}, fps_den: {type: integer, const: 1}}
+    NullableResponsibleEditorSnapshotPair:
+      type: object
+      required: [responsible_editor_id, responsible_editor_name_snapshot]
+      oneOf:
+        - properties:
+            responsible_editor_id: {type: "null"}
+            responsible_editor_name_snapshot: {type: "null"}
+        - properties:
+            responsible_editor_id: {type: string, minLength: 1, pattern: '.*\S.*'}
+            responsible_editor_name_snapshot: {type: string, minLength: 1, maxLength: 255, pattern: '.*\S.*'}
     OriginalMediaSnapshotDTO:
       type: object
       required: [original_file_id, original_filename, mime_type, file_size, sha256, duration_ms, width, height, fps_num, fps_den, media_probe_version]
       additionalProperties: false
+      allOf:
+        - $ref: "#/components/schemas/AllowedFrameRatePair"
       properties:
         original_file_id: {type: string}
         original_filename: {type: string}
@@ -2265,6 +2289,12 @@ components:
       type: object
       required: [project_ref_id, project_code, project_name, description, source, lifecycle_status, completion_status, deleted_at, fps_num, fps_den, lock_version, created_at, updated_at]
       additionalProperties: false
+      allOf:
+        - oneOf:
+            - properties:
+                fps_num: {type: "null"}
+                fps_den: {type: "null"}
+            - $ref: "#/components/schemas/AllowedFrameRatePair"
       properties:
         project_ref_id: {type: string}
         project_code: {type: string}
@@ -2293,6 +2323,8 @@ components:
       type: object
       required: [id, project_ref_id, review_item_id, version_no, version_label, is_current, original_media, responsible_editor_id, responsible_editor_name_snapshot, playback_status, thumbnail_status, lock_version, created_at]
       additionalProperties: false
+      allOf:
+        - $ref: "#/components/schemas/NullableResponsibleEditorSnapshotPair"
       properties:
         id: {type: string, minLength: 1, maxLength: 128}
         project_ref_id: {type: string}
@@ -2551,6 +2583,9 @@ components:
       type: object
       required: [id, version_no, version_label, duration_ms, file_size, width, height, fps_num, fps_den, responsible_editor_id, responsible_editor_name_snapshot, playback_status, playback_url, thumbnail_status, thumbnail_url]
       additionalProperties: false
+      allOf:
+        - $ref: "#/components/schemas/AllowedFrameRatePair"
+        - $ref: "#/components/schemas/NullableResponsibleEditorSnapshotPair"
       properties:
         id: {type: string}
         version_no: {type: integer, minimum: 1}

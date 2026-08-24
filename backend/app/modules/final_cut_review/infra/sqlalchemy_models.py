@@ -318,6 +318,22 @@ class ReviewDeletionIntentModel(Base):
             name="ck_review_deletion_intents_subject_type",
         ),
         CheckConstraint(
+            "(command_type = 'DeleteProject' AND subject_type = 'project') "
+            "OR (command_type IN ('DeleteReviewItem','DeleteReviewItemsBatch') "
+            "AND subject_type = 'review_item')",
+            name="ck_review_deletion_intents_command_subject",
+        ),
+        CheckConstraint(
+            "length(trim(project_ref_id_snapshot)) BETWEEN 1 AND 64",
+            name="ck_review_deletion_intents_project_snapshot",
+        ),
+        CheckConstraint(
+            "(subject_type = 'project' AND review_item_id_snapshot IS NULL) "
+            "OR (subject_type = 'review_item' AND review_item_id_snapshot IS NOT NULL "
+            "AND length(trim(review_item_id_snapshot)) BETWEEN 1 AND 64)",
+            name="ck_review_deletion_intents_subject_snapshot_shape",
+        ),
+        CheckConstraint(
             "status in ('pending','cleaning','failed','complete')",
             name="ck_review_deletion_intents_status",
         ),
@@ -336,7 +352,8 @@ class ReviewDeletionIntentModel(Base):
     command_type: Mapped[str] = mapped_column(String(64), nullable=False)
     operation_identity_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    subject_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    project_ref_id_snapshot: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_item_id_snapshot: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error_code: Mapped[str | None] = mapped_column(String(64))
@@ -378,10 +395,21 @@ class ReviewDeletionArtifactModel(Base):
         CheckConstraint("attempts >= 0", name="ck_review_deletion_artifacts_attempts"),
         CheckConstraint(
             "length(relative_logical_target) > 0 "
+            "AND relative_logical_target = trim(relative_logical_target) "
+            "AND relative_logical_target LIKE '%/%' "
             "AND substr(relative_logical_target, 1, 1) != '/' "
+            "AND relative_logical_target NOT LIKE '%/' "
+            "AND relative_logical_target NOT LIKE '%//%' "
             "AND relative_logical_target != '..' "
+            "AND relative_logical_target != '.' "
+            "AND relative_logical_target NOT LIKE './%' "
             "AND relative_logical_target NOT LIKE '../%' "
-            "AND relative_logical_target NOT LIKE '%/../%'",
+            "AND relative_logical_target NOT LIKE '%/./%' "
+            "AND relative_logical_target NOT LIKE '%/../%' "
+            "AND relative_logical_target NOT LIKE '%/.' "
+            "AND relative_logical_target NOT LIKE '%/..' "
+            "AND relative_logical_target NOT LIKE '%:%' "
+            "AND replace(relative_logical_target, '\\', '') = relative_logical_target",
             name="ck_review_deletion_artifacts_relative_target",
         ),
         CheckConstraint(

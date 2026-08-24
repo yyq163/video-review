@@ -20,6 +20,32 @@ MODULE_MANIFEST: dict[str, Any] = {'manifest_version': 1, 'module_id': 'final-cu
 COMMAND_PAYLOAD_SCHEMAS: dict[str, dict[str, Any]] = {'FinalizeVersion': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'version_id', 'confirmed'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'version_id': {'type': 'string', 'minLength': 1}, 'confirmed': {'type': 'boolean', 'const': True}}}, 'RevokeFinalization': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'confirmed'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'confirmed': {'type': 'boolean', 'const': True}}}, 'FinalizeProject': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'confirmed'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'confirmed': {'type': 'boolean', 'const': True}}}, 'RevokeProjectFinalization': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'confirmed'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'confirmed': {'type': 'boolean', 'const': True}}}, 'RetryFinalizationCleanup': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'confirmed'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'confirmed': {'type': 'boolean', 'const': True}}}, 'StartReview': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}}}, 'CreateReviewIssue': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'version_id', 'content', 'timestamp_ms', 'frame_number'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'version_id': {'type': 'string', 'minLength': 1}, 'content': {'type': 'string', 'minLength': 1, 'maxLength': 4000}, 'timestamp_ms': {'type': 'integer', 'minimum': 0}, 'frame_number': {'type': 'integer', 'minimum': 0}, 'annotation': {'$ref': '#/definitions/review_annotation_set_input'}}}, 'UpdateReviewIssue': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'version_id', 'issue_id'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'version_id': {'type': 'string', 'minLength': 1}, 'issue_id': {'type': 'string', 'minLength': 1}, 'content': {'type': 'string', 'minLength': 1, 'maxLength': 4000}, 'annotation': {'$ref': '#/definitions/review_annotation_set_input'}}}, 'AddReviewMessage': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'version_id', 'issue_id', 'content'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'version_id': {'type': 'string', 'minLength': 1}, 'issue_id': {'type': 'string', 'minLength': 1}, 'content': {'type': 'string', 'minLength': 1, 'maxLength': 4000}}}, 'ResolveReviewIssue': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'version_id', 'issue_id'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'version_id': {'type': 'string', 'minLength': 1}, 'issue_id': {'type': 'string', 'minLength': 1}}}, 'ReopenReviewIssue': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'version_id', 'issue_id'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'version_id': {'type': 'string', 'minLength': 1}, 'issue_id': {'type': 'string', 'minLength': 1}}}, 'SoftDeleteReviewIssue': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'version_id', 'issue_id'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'version_id': {'type': 'string', 'minLength': 1}, 'issue_id': {'type': 'string', 'minLength': 1}}}, 'PrepareFinalizedPackage': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'unified_name'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'unified_name': {'type': 'string', 'minLength': 1}}}, 'CreateProject': {'type': 'object', 'additionalProperties': False, 'required': ['project_code', 'project_name', 'fps_num', 'fps_den'], 'properties': {'project_code': {'type': 'string', 'minLength': 1, 'maxLength': 128}, 'project_name': {'type': 'string', 'minLength': 1, 'maxLength': 255}, 'description': {'type': 'string', 'maxLength': 2000}, 'external_project_id': {'type': 'string', 'minLength': 1, 'maxLength': 128}, 'fps_num': {'type': 'integer', 'minimum': 1}, 'fps_den': {'type': 'integer', 'minimum': 1}}, 'x-allowed-rational-frame-rates': [[24000, 1001], [24, 1], [25, 1], [30000, 1001], [30, 1], [50, 1], [60000, 1001], [60, 1]]}, 'UpdateProject': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'project_name', 'description'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'project_name': {'type': 'string', 'minLength': 1, 'maxLength': 255}, 'description': {'type': 'string', 'maxLength': 2000}}}, 'LockProjectFrameRate': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'fps_num', 'fps_den'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'fps_num': {'type': 'integer', 'minimum': 1}, 'fps_den': {'type': 'integer', 'minimum': 1}}, 'x-allowed-rational-frame-rates': [[24000, 1001], [24, 1], [25, 1], [30000, 1001], [30, 1], [50, 1], [60000, 1001], [60, 1]]}, 'ArchiveProject': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}}}, 'RestoreProject': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}}}, 'DeleteProject': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'confirmed'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'confirmed': {'type': 'boolean', 'const': True}}}, 'CreateResponsibleEditor': {'type': 'object', 'additionalProperties': False, 'required': ['display_name'], 'properties': {'display_name': {'type': 'string', 'minLength': 1, 'maxLength': 255}}}, 'RenameResponsibleEditor': {'type': 'object', 'additionalProperties': False, 'required': ['responsible_editor_id', 'display_name'], 'properties': {'responsible_editor_id': {'type': 'string', 'minLength': 1}, 'display_name': {'type': 'string', 'minLength': 1, 'maxLength': 255}}}, 'CreateReviewItem': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'item_code', 'title', 'original_file_id', 'responsible_editor_id', 'responsible_editor_name_snapshot', 'local_probe_claim'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'item_code': {'type': 'string', 'minLength': 1, 'maxLength': 128}, 'episode_no': {'type': 'integer', 'minimum': 1}, 'title': {'type': 'string', 'minLength': 1, 'maxLength': 512}, 'original_file_id': {'type': 'string', 'minLength': 1}, 'responsible_editor_id': {'type': 'string', 'minLength': 1}, 'responsible_editor_name_snapshot': {'type': 'string', 'minLength': 1, 'maxLength': 255}, 'local_probe_claim': {'$ref': '#/definitions/local_media_probe_claim'}, 'version_note': {'type': 'string'}}}, 'UpdateReviewItem': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'episode_no': {'type': 'integer', 'minimum': 1}, 'title': {'type': 'string', 'minLength': 1, 'maxLength': 512}}}, 'DeleteReviewItem': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'confirmed'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'confirmed': {'type': 'boolean', 'const': True}}}, 'DeleteReviewItemsBatch': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_ids', 'confirmed'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_ids': {'type': 'array', 'minItems': 1, 'items': {'type': 'string', 'minLength': 1}}, 'confirmed': {'type': 'boolean', 'const': True}}}, 'UploadReviewVersion': {'type': 'object', 'additionalProperties': False, 'required': ['project_ref_id', 'review_item_id', 'original_file_id', 'responsible_editor_id', 'responsible_editor_name_snapshot', 'local_probe_claim'], 'properties': {'project_ref_id': {'type': 'string', 'minLength': 1}, 'review_item_id': {'type': 'string', 'minLength': 1}, 'original_file_id': {'type': 'string', 'minLength': 1}, 'responsible_editor_id': {'type': 'string', 'minLength': 1}, 'responsible_editor_name_snapshot': {'type': 'string', 'minLength': 1, 'maxLength': 255}, 'local_probe_claim': {'$ref': '#/definitions/local_media_probe_claim'}, 'version_note': {'type': 'string'}, 'change_summary': {'type': 'string'}, 'supersede_reason': {'type': 'string'}}}}
 COMMAND_SCHEMA_DEFINITIONS: dict[str, dict[str, Any]] = {'review_annotation_set_input': {'type': 'object', 'additionalProperties': False, 'required': ['canvas_width', 'canvas_height', 'video_width', 'video_height', 'shapes'], 'properties': {'canvas_width': {'type': 'integer', 'minimum': 1}, 'canvas_height': {'type': 'integer', 'minimum': 1}, 'video_width': {'type': 'integer', 'minimum': 1}, 'video_height': {'type': 'integer', 'minimum': 1}, 'shapes': {'type': 'array', 'maxItems': 128, 'items': {'type': 'object', 'additionalProperties': False, 'required': ['id', 'tool_type', 'color', 'line_width', 'z_index'], 'properties': {'id': {'type': 'string', 'minLength': 1, 'maxLength': 128}, 'tool_type': {'type': 'string', 'enum': ['pen', 'arrow', 'rect', 'circle', 'text']}, 'anchor_points': {'type': 'array', 'maxItems': 2048, 'items': {'type': 'object', 'additionalProperties': False, 'required': ['x', 'y'], 'properties': {'x': {'type': 'number', 'minimum': 0, 'maximum': 1}, 'y': {'type': 'number', 'minimum': 0, 'maximum': 1}}}}, 'path_data': {'type': 'string', 'maxLength': 20000}, 'text_content': {'type': 'string', 'maxLength': 1000}, 'color': {'type': 'string', 'pattern': '^#[0-9A-Fa-f]{6}$'}, 'line_width': {'type': 'integer', 'minimum': 1, 'maximum': 64}, 'font_size': {'type': 'integer', 'minimum': 12, 'maximum': 96}, 'z_index': {'type': 'integer', 'minimum': 0, 'maximum': 10000}}}}}}, 'local_media_probe_claim': {'type': 'object', 'additionalProperties': False, 'required': ['fps_num', 'fps_den', 'is_variable_frame_rate', 'probe_version'], 'properties': {'fps_num': {'type': 'integer', 'minimum': 1}, 'fps_den': {'type': 'integer', 'minimum': 1}, 'is_variable_frame_rate': {'type': 'boolean', 'const': False}, 'probe_version': {'type': 'string', 'minLength': 1, 'maxLength': 64}}, 'x-allowed-rational-frame-rates': [[24000, 1001], [24, 1], [25, 1], [30000, 1001], [30, 1], [50, 1], [60000, 1001], [60, 1]]}}
 DOMAIN_EVENT_PAYLOAD_SCHEMAS: dict[str, dict[str, Any]] = {'review.project.created': {'type': 'object', 'additionalProperties': False, 'required': ['project_code'], 'properties': {'project_code': {'type': 'string', 'minLength': 1}}}, 'review.project.updated': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.project.archived': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.project.restored': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.project.deleted': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.item.created': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.item.updated': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.item.deleted': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.version.uploaded': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.session.started': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.issue.created': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.issue.updated': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.issue.message_added': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.issue.resolved': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.issue.reopened': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.issue.deleted': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.version.finalized': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.finalization.revoked': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.finalized_original.download_requested': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.package.requested': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.package.ready': {'type': 'object', 'additionalProperties': False, 'properties': {}}, 'review.package.failed': {'type': 'object', 'additionalProperties': False, 'required': ['error_code'], 'properties': {'error_code': {'type': 'string', 'minLength': 1}}}}
+ALLOWED_FRAME_RATE_PAIRS: tuple[tuple[int, int], ...] = (
+    (24_000, 1_001),
+    (24, 1),
+    (25, 1),
+    (30_000, 1_001),
+    (30, 1),
+    (50, 1),
+    (60_000, 1_001),
+    (60, 1),
+)
+
+
+def _validate_frame_rate_pair(fps_num: int | None, fps_den: int | None, *, nullable: bool) -> None:
+    if fps_num is None or fps_den is None:
+        if nullable and fps_num is None and fps_den is None:
+            return
+        raise ValueError("fps_num and fps_den must be null together")
+    if (fps_num, fps_den) not in ALLOWED_FRAME_RATE_PAIRS:
+        raise ValueError("unsupported frame rate pair")
+
+
+def _validate_nullable_editor_snapshot_pair(editor_id: str | None, name_snapshot: str | None) -> None:
+    if editor_id is None and name_snapshot is None:
+        return
+    if not editor_id or not editor_id.strip() or not name_snapshot or not name_snapshot.strip():
+        raise ValueError("responsible editor id and name snapshot must be non-blank together")
 
 
 def _resolve_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -212,6 +238,11 @@ class OriginalMediaSnapshotDTO(ContractModel):
     fps_den: int
     media_probe_version: str
 
+    @model_validator(mode="after")
+    def validate_frame_rate_pair(self) -> "OriginalMediaSnapshotDTO":
+        _validate_frame_rate_pair(self.fps_num, self.fps_den, nullable=False)
+        return self
+
 
 class ProjectDTO(ContractModel):
     project_ref_id: str
@@ -228,6 +259,11 @@ class ProjectDTO(ContractModel):
     lock_version: int
     created_at: str
     updated_at: str
+
+    @model_validator(mode="after")
+    def validate_frame_rate_pair(self) -> "ProjectDTO":
+        _validate_frame_rate_pair(self.fps_num, self.fps_den, nullable=True)
+        return self
 
 
 class ReviewVersionDTO(ContractModel):
@@ -249,6 +285,14 @@ class ReviewVersionDTO(ContractModel):
     change_summary: str | None = None
     lock_version: int
     created_at: str
+
+    @model_validator(mode="after")
+    def validate_editor_snapshot_pair(self) -> "ReviewVersionDTO":
+        _validate_nullable_editor_snapshot_pair(
+            self.responsible_editor_id,
+            self.responsible_editor_name_snapshot,
+        )
+        return self
 
 
 class ResponsibleEditorDTO(ContractModel):
@@ -396,6 +440,15 @@ class ProjectSummaryCurrentVersionDTO(ContractModel):
     playback_url: str | None = None
     thumbnail_status: Literal["pending", "ready", "failed"]
     thumbnail_url: str | None = None
+
+    @model_validator(mode="after")
+    def validate_snapshot_pairs(self) -> "ProjectSummaryCurrentVersionDTO":
+        _validate_frame_rate_pair(self.fps_num, self.fps_den, nullable=False)
+        _validate_nullable_editor_snapshot_pair(
+            self.responsible_editor_id,
+            self.responsible_editor_name_snapshot,
+        )
+        return self
 
 
 class ProjectSummaryFinalizationDTO(ContractModel):
