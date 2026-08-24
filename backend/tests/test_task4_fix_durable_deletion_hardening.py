@@ -440,6 +440,78 @@ def _make_ttl_expired(path: Path) -> None:
     os.utime(path, (old, old), follow_symlinks=False)
 
 
+def test_scoped_cleanup_claim_does_not_consume_unrelated_pending_intent(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.maintenance_cleanup import (
+        _claim_review_deletion_intents,
+        _cleanup_claimed_review_deletions,
+    )
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        ReviewVersionModel,
+        utcnow,
+    )
+    from backend.app.settings import get_settings
+
+    project, item = create_project_item(client, code="TASK4_SCOPED_CLEANUP")
+    with SessionLocal() as observer:
+        version = observer.get(ReviewVersionModel, item["current_version_id"])
+        assert version is not None
+        target = get_settings().storage_root / "files" / version.original_file_id
+
+    _pause_postcommit_deletion_processor(monkeypatch)
+    deleted = _delete_item(client, project["project_ref_id"], item)
+    assert deleted.status_code == 200, deleted.text
+    replacement = b"scoped cleanup must preserve this replacement"
+    target.unlink()
+    target.write_bytes(replacement)
+
+    unrelated_intent_id = "delete_" + "9" * 32
+    with SessionLocal.begin() as session:
+        session.add(
+            ReviewDeletionIntentModel(
+                id=unrelated_intent_id,
+                command_type="DeleteReviewItem",
+                operation_identity_hash="9" * 64,
+                subject_type="review_item",
+                project_ref_id_snapshot="unrelated-project",
+                review_item_id_snapshot="unrelated-item",
+                status="pending",
+                attempts=0,
+            ),
+        )
+
+    with SessionLocal() as session:
+        target_intent = session.scalar(
+            select(ReviewDeletionIntentModel).where(
+                ReviewDeletionIntentModel.review_item_id_snapshot == item["id"],
+            ),
+        )
+        assert target_intent is not None
+        claims = _claim_review_deletion_intents(
+            session,
+            utcnow(),
+            intent_ids=[target_intent.id],
+        )
+        assert [intent_id for intent_id, _claim_id in claims] == [
+            target_intent.id,
+        ]
+        assert _cleanup_claimed_review_deletions(
+            session,
+            claims,
+            get_settings(),
+        ) == (0, 1)
+
+    assert target.read_bytes() == replacement
+    with SessionLocal() as observer:
+        failed_target = observer.get(ReviewDeletionIntentModel, target_intent.id)
+        unrelated = observer.get(ReviewDeletionIntentModel, unrelated_intent_id)
+        assert failed_target is not None and failed_target.status == "failed"
+        assert unrelated is not None and unrelated.status == "pending"
+
+
 def test_orphan_sweep_preserves_pending_regular_artifact_replacement(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

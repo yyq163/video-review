@@ -1823,9 +1823,10 @@ def test_postgresql_fabricated_intent_does_not_authorize_partial_annotation_dele
                 annotation_set_id=annotation_id,
             ),
         )
+        fabricated_intent_id = f"delete_{uuid.uuid4().hex}"
         session.add(
             ReviewDeletionIntentModel(
-                id=f"delete_{uuid.uuid4().hex}",
+                id=fabricated_intent_id,
                 command_type="DeleteReviewItem",
                 operation_identity_hash=hashlib.sha256(prefix.encode()).hexdigest(),
                 subject_type="review_item",
@@ -1844,6 +1845,14 @@ def test_postgresql_fabricated_intent_does_not_authorize_partial_annotation_dele
             session.commit()
         session.rollback()
         assert session.get(ReviewAnnotationSetModel, annotation_id) is not None
+        fabricated_intent = session.get(
+            ReviewDeletionIntentModel,
+            fabricated_intent_id,
+        )
+        assert fabricated_intent is not None
+        assert fabricated_intent.status == "pending"
+        session.delete(fabricated_intent)
+        session.commit()
     finally:
         session.close()
         engine.dispose()
@@ -1925,6 +1934,13 @@ def test_postgresql_file_failure_keeps_db_delete_and_restart_completes(
         )
         session.commit()
         assert session.get(ReviewItemModel, item.id) is None
+        target_intent = session.scalar(
+            select(ReviewDeletionIntentModel).where(
+                ReviewDeletionIntentModel.review_item_id_snapshot == item.id,
+            ),
+        )
+        assert target_intent is not None
+        assert target_intent.status == "pending"
 
         def fail_unlink(
             _pinned: PinnedRegularFile,
@@ -1935,19 +1951,36 @@ def test_postgresql_file_failure_keeps_db_delete_and_restart_completes(
             raise OSError("forced pg deletion cleanup failure")
 
         monkeypatch.setattr(PinnedRegularFile, "unlink", fail_unlink)
-        claims = _claim_review_deletion_intents(session, utcnow())
+        claims = _claim_review_deletion_intents(
+            session,
+            utcnow(),
+            intent_ids=[target_intent.id],
+        )
+        assert [intent_id for intent_id, _claim_id in claims] == [
+            target_intent.id,
+        ]
         assert _cleanup_claimed_review_deletions(
             session,
             claims,
             get_settings(),
         ) == (0, 1)
         assert path.is_file()
+        session.expire_all()
+        failed_intent = session.get(ReviewDeletionIntentModel, target_intent.id)
+        assert failed_intent is not None and failed_intent.status == "failed"
         monkeypatch.setattr(PinnedRegularFile, "unlink", original_unlink)
         session.close()
 
         restarted = PgSession()
         try:
-            claims = _claim_review_deletion_intents(restarted, utcnow())
+            claims = _claim_review_deletion_intents(
+                restarted,
+                utcnow(),
+                intent_ids=[target_intent.id],
+            )
+            assert [intent_id for intent_id, _claim_id in claims] == [
+                target_intent.id,
+            ]
             assert _cleanup_claimed_review_deletions(
                 restarted,
                 claims,
@@ -1993,21 +2026,31 @@ def test_postgresql_replacement_identity_is_preserved_and_intent_stays_failed() 
             item.lock_version,
         )
         session.commit()
+        target_intent = session.scalar(
+            select(ReviewDeletionIntentModel).where(
+                ReviewDeletionIntentModel.review_item_id_snapshot == item.id,
+            ),
+        )
+        assert target_intent is not None
+        assert target_intent.status == "pending"
         path.unlink()
         replacement = b"pg replacement must survive"
         path.write_bytes(replacement)
-        claims = _claim_review_deletion_intents(session, utcnow())
+        claims = _claim_review_deletion_intents(
+            session,
+            utcnow(),
+            intent_ids=[target_intent.id],
+        )
+        assert [intent_id for intent_id, _claim_id in claims] == [
+            target_intent.id,
+        ]
         assert _cleanup_claimed_review_deletions(
             session,
             claims,
             get_settings(),
         ) == (0, 1)
         assert path.read_bytes() == replacement
-        intent = session.scalar(
-            select(ReviewDeletionIntentModel).where(
-                ReviewDeletionIntentModel.review_item_id_snapshot == item.id,
-            ),
-        )
+        intent = session.get(ReviewDeletionIntentModel, target_intent.id)
         assert intent is not None and intent.status == "failed"
     finally:
         session.close()
