@@ -500,7 +500,7 @@ def test_supervisor_fatal_stops_health_pulse_and_exits(
     heartbeat = tmp_path / "worker-heartbeat"
     status = tmp_path / "worker-status"
 
-    def fatal_cycle() -> dict[str, int]:
+    def fatal_cycle(**_callbacks: Any) -> dict[str, int]:
         qc._WORKER_FATAL.set()
         return {"complete": 0, "failed": 0, "skipped": 0}
 
@@ -511,4 +511,4 @@ def test_supervisor_fatal_stops_health_pulse_and_exits(
             heartbeat_path=heartbeat,
             status_path=status,
         )
-    assert status.read_text(encoding="ascii") == "stopped"
+    assert status.read_text(encoding="ascii") == "fatal"

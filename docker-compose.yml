@@ -491,12 +491,9 @@ services:
       test:
         - CMD
         - python
-        - -c
-        - >-
-          import os,time; from pathlib import Path;
-          p=Path('/tmp/fj-technical-qc-worker-heartbeat'); s=Path('/tmp/fj-technical-qc-worker-status');
-          allowed={'ok','running','degraded'}; limit=int(os.environ['TECHNICAL_QC_WORKER_HEALTH_MAX_AGE_SECONDS']);
-          raise SystemExit(0 if p.is_file() and s.is_file() and s.read_text().strip() in allowed and time.time()-p.stat().st_mtime <= limit else 1)
+        - -m
+        - backend.app.technical_qc
+        - health
       interval: 10s
       timeout: 3s
       retries: 3
@@ -541,11 +538,11 @@ services:
       test:
         - CMD
         - python
-        - -c
-        - >-
-          import stat; from pathlib import Path;
-          p=Path('/run/fj-technical-qc/sandbox.sock');
-          raise SystemExit(0 if p.exists() and stat.S_ISSOCK(p.stat().st_mode) else 1)
+        - -m
+        - backend.app.technical_qc_sandbox
+        - --socket-path
+        - /run/fj-technical-qc/sandbox.sock
+        - --healthcheck
       interval: 10s
       timeout: 3s
       retries: 3

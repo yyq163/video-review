@@ -6,6 +6,7 @@ import json
 import os
 import re
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -47,6 +48,10 @@ DEFAULT_MAX_ATTEMPTS = 3
 DISCOVERY_BATCH_SIZE = 128
 CLAIM_CANDIDATE_LIMIT = 256
 DEFAULT_CYCLE_MAX_TASKS = 64
+RUNNING_ITEM_UNIQUE_CONSTRAINT = "uq_technical_qc_tasks_running_item"
+SQLITE_RUNNING_ITEM_UNIQUE_MESSAGE = (
+    "UNIQUE constraint failed: technical_qc_tasks.review_item_id"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,6 +458,46 @@ def reconcile_expired_technical_qc_tasks(
     return len(tasks)
 
 
+def _is_running_item_unique_conflict(error: IntegrityError) -> bool:
+    diagnostic = getattr(error.orig, "diag", None)
+    constraint_name = getattr(diagnostic, "constraint_name", None)
+    if constraint_name is not None:
+        return constraint_name == RUNNING_ITEM_UNIQUE_CONSTRAINT
+    return (
+        isinstance(error.orig, sqlite3.IntegrityError)
+        and str(error.orig) == SQLITE_RUNNING_ITEM_UNIQUE_MESSAGE
+    )
+
+
+def _claim_payload(
+    task: TechnicalQcTaskModel,
+    item: ReviewItemModel,
+    file: FileObjectModel,
+    claim_id: str,
+) -> TechnicalQcClaim:
+    return TechnicalQcClaim(
+        task_id=task.id,
+        claim_id=claim_id,
+        project_ref_id=task.project_ref_id,
+        review_item_id=task.review_item_id,
+        version_id=task.version_id,
+        episode_no=item.episode_no,
+        input_file_id=file.id,
+        input_storage_path=file.storage_path,
+        input_sha256=file.sha256,
+        input_size=file.file_size,
+        total_ms=task.total_ms,
+        width=file.width,
+        height=file.height,
+        fps_num=file.fps_num,
+        fps_den=file.fps_den,
+        rule_version=task.rule_version,
+        video_frame_count=task.video_frame_count,
+        video_duration_ms=task.video_duration_ms,
+        container_duration_ms=task.container_duration_ms,
+    )
+
+
 def claim_technical_qc_tasks(
     session: Session,
     *,
@@ -472,113 +517,103 @@ def claim_technical_qc_tasks(
         max_attempts=max_attempts,
         batch_size=candidate_scan_limit,
     )
-    active_counts = {
-        project_ref_id: int(count)
-        for project_ref_id, count in session.execute(
-            select(TechnicalQcTaskModel.project_ref_id, func.count())
-            .where(
-                TechnicalQcTaskModel.status == "running",
+    claims: list[TechnicalQcClaim] = []
+    conflicted_item_ids: set[str] = set()
+    transition_attempts = 0
+    while len(claims) < limit and transition_attempts < candidate_scan_limit:
+        active_counts = {
+            project_ref_id: int(count)
+            for project_ref_id, count in session.execute(
+                select(TechnicalQcTaskModel.project_ref_id, func.count())
+                .where(TechnicalQcTaskModel.status == "running")
+                .group_by(TechnicalQcTaskModel.project_ref_id)
+            ).all()
+        }
+        active_item_ids = set(
+            session.scalars(
+                select(TechnicalQcTaskModel.review_item_id).where(
+                    TechnicalQcTaskModel.status == "running",
+                ),
+            ),
+        ) | conflicted_item_ids
+        grouped: dict[
+            str,
+            list[tuple[TechnicalQcTaskModel, ReviewItemModel, FileObjectModel]],
+        ] = {}
+        for task, item, file in _claim_candidates(
+            session,
+            now=claimed_at,
+            max_attempts=max_attempts,
+            candidate_limit=candidate_scan_limit,
+            per_project_candidate_limit=max(8, per_project_limit * 2),
+        ):
+            if task.review_item_id not in active_item_ids:
+                grouped.setdefault(task.project_ref_id, []).append((task, item, file))
+        for project_rows in grouped.values():
+            project_rows.sort(
+                key=lambda row: (
+                    row[1].episode_no is None,
+                    row[1].episode_no if row[1].episode_no is not None else 0,
+                    row[0].created_at,
+                    row[0].id,
+                ),
             )
-            .group_by(TechnicalQcTaskModel.project_ref_id)
-        ).all()
-    }
-    grouped: dict[
-        str,
-        list[tuple[TechnicalQcTaskModel, ReviewItemModel, FileObjectModel]],
-    ] = {}
-    for task, item, file in _claim_candidates(
-        session,
-        now=claimed_at,
-        max_attempts=max_attempts,
-        candidate_limit=candidate_scan_limit,
-        per_project_candidate_limit=max(8, per_project_limit * 2),
-    ):
-        grouped.setdefault(task.project_ref_id, []).append((task, item, file))
-    for project_rows in grouped.values():
-        project_rows.sort(
-            key=lambda row: (
-                row[1].episode_no is None,
-                row[1].episode_no if row[1].episode_no is not None else 0,
-                row[0].created_at,
-                row[0].id,
+        project_order = sorted(
+            grouped,
+            key=lambda project_ref_id: (
+                active_counts.get(project_ref_id, 0),
+                grouped[project_ref_id][0][0].created_at,
+                project_ref_id,
             ),
         )
-    project_order = sorted(
-        grouped,
-        key=lambda project_ref_id: (
-            active_counts.get(project_ref_id, 0),
-            grouped[project_ref_id][0][0].created_at,
-            project_ref_id,
-        ),
-    )
-    selected: list[tuple[TechnicalQcTaskModel, ReviewItemModel, FileObjectModel]] = []
-    active_item_ids = set(
-        session.scalars(
-            select(TechnicalQcTaskModel.review_item_id).where(
-                TechnicalQcTaskModel.status == "running",
-            ),
-        ),
-    )
-    while len(selected) < limit:
-        advanced = False
-        for project_ref_id in project_order:
-            if len(selected) >= limit:
+        selected: list[
+            tuple[TechnicalQcTaskModel, ReviewItemModel, FileObjectModel]
+        ] = []
+        while len(selected) < limit - len(claims):
+            advanced = False
+            for project_ref_id in project_order:
+                if len(selected) >= limit - len(claims):
+                    break
+                if active_counts.get(project_ref_id, 0) >= per_project_limit:
+                    continue
+                rows = grouped[project_ref_id]
+                while rows and rows[0][0].review_item_id in active_item_ids:
+                    rows.pop(0)
+                if not rows:
+                    continue
+                selected_row = rows.pop(0)
+                selected.append(selected_row)
+                active_item_ids.add(selected_row[0].review_item_id)
+                active_counts[project_ref_id] = active_counts.get(project_ref_id, 0) + 1
+                advanced = True
+            if not advanced:
                 break
-            if active_counts.get(project_ref_id, 0) >= per_project_limit:
-                continue
-            rows = grouped[project_ref_id]
-            while rows and rows[0][0].review_item_id in active_item_ids:
-                rows.pop(0)
-            if not rows:
-                continue
-            selected_row = rows.pop(0)
-            selected.append(selected_row)
-            active_item_ids.add(selected_row[0].review_item_id)
-            active_counts[project_ref_id] = active_counts.get(project_ref_id, 0) + 1
-            advanced = True
-        if not advanced:
+        if not selected:
             break
 
-    claims: list[TechnicalQcClaim] = []
-    for task, item, file in selected:
-        claim_id = uuid.uuid4().hex
-        try:
-            with session.begin_nested():
-                task.status = "running"
-                task.claim_id = claim_id
-                task.lease_expires_at = claimed_at + timedelta(seconds=lease_seconds)
-                task.attempts += 1
-                task.error_code = None
-                task.next_attempt_at = None
-                task.started_at = task.started_at or claimed_at
-                task.updated_at = claimed_at
-                session.flush()
-        except IntegrityError:
-            session.expire(task)
-            continue
-        claims.append(
-            TechnicalQcClaim(
-                task_id=task.id,
-                claim_id=claim_id,
-                project_ref_id=task.project_ref_id,
-                review_item_id=task.review_item_id,
-                version_id=task.version_id,
-                episode_no=item.episode_no,
-                input_file_id=file.id,
-                input_storage_path=file.storage_path,
-                input_sha256=file.sha256,
-                input_size=file.file_size,
-                total_ms=task.total_ms,
-                width=file.width,
-                height=file.height,
-                fps_num=file.fps_num,
-                fps_den=file.fps_den,
-                rule_version=task.rule_version,
-                video_frame_count=task.video_frame_count,
-                video_duration_ms=task.video_duration_ms,
-                container_duration_ms=task.container_duration_ms,
-            ),
-        )
+        for task, item, file in selected:
+            if len(claims) >= limit or transition_attempts >= candidate_scan_limit:
+                break
+            transition_attempts += 1
+            claim_id = uuid.uuid4().hex
+            try:
+                with session.begin_nested():
+                    task.status = "running"
+                    task.claim_id = claim_id
+                    task.lease_expires_at = claimed_at + timedelta(seconds=lease_seconds)
+                    task.attempts += 1
+                    task.error_code = None
+                    task.next_attempt_at = None
+                    task.started_at = task.started_at or claimed_at
+                    task.updated_at = claimed_at
+                    session.flush()
+            except IntegrityError as exc:
+                if not _is_running_item_unique_conflict(exc):
+                    raise
+                conflicted_item_ids.add(task.review_item_id)
+                session.expire(task)
+                continue
+            claims.append(_claim_payload(task, item, file, claim_id))
     return claims
 
 
@@ -1909,7 +1944,13 @@ def _process_technical_qc_claim(
     claim: TechnicalQcClaim,
     settings: Settings | Any,
     runtime_binding: database_module.RuntimeFenceBinding | None,
+    on_service_event: Callable[[], None] | None = None,
+    on_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
 ) -> str:
+    def record_service_event() -> None:
+        if on_service_event is not None:
+            on_service_event()
+
     def persist_progress(processed_ms: int) -> None:
         with _technical_qc_session(runtime_binding) as session:
             update_technical_qc_progress(
@@ -1919,6 +1960,7 @@ def _process_technical_qc_claim(
                 processed_ms=processed_ms,
             )
             session.commit()
+        record_service_event()
 
     def heartbeat() -> bool:
         with _technical_qc_session(runtime_binding) as session:
@@ -1929,6 +1971,8 @@ def _process_technical_qc_claim(
                 lease_seconds=settings.technical_qc_lease_seconds,
             )
             session.commit()
+            if renewed:
+                record_service_event()
             return renewed
 
     def persist_probe(probe: TechnicalQcMediaProbe) -> None:
@@ -1943,9 +1987,12 @@ def _process_technical_qc_claim(
                 session.rollback()
                 raise TechnicalQcError("TECHNICAL_QC_LEASE_LOST", retryable=False)
             session.commit()
+        record_service_event()
 
-    def mark_fatal(_error: TechnicalQcFatalError) -> None:
+    def mark_fatal(error: TechnicalQcFatalError) -> None:
         _WORKER_FATAL.set()
+        if on_fatal is not None:
+            on_fatal(error)
 
     try:
         result = scan_technical_qc_claim(
@@ -1977,9 +2024,12 @@ def _process_technical_qc_claim(
                 session.rollback()
                 return "skipped"
             session.commit()
+        record_service_event()
         return "complete"
-    except TechnicalQcFatalError:
+    except TechnicalQcFatalError as exc:
         _WORKER_FATAL.set()
+        if on_fatal is not None:
+            on_fatal(exc)
         raise
     except TechnicalQcError as exc:
         with _technical_qc_session(runtime_binding) as session:
@@ -1993,6 +2043,7 @@ def _process_technical_qc_claim(
                 retry_delay_seconds=settings.technical_qc_worker_retry_delay_seconds,
             )
             session.commit()
+        record_service_event()
         return "failed" if recorded else "skipped"
     except Exception:
         with _technical_qc_session(runtime_binding) as session:
@@ -2006,6 +2057,7 @@ def _process_technical_qc_claim(
                 retry_delay_seconds=settings.technical_qc_worker_retry_delay_seconds,
             )
             session.commit()
+        record_service_event()
         return "failed" if recorded else "skipped"
 
 
@@ -2013,6 +2065,8 @@ def process_technical_qc_batch(
     settings: Settings | Any,
     *,
     runtime_binding: database_module.RuntimeFenceBinding | None,
+    on_service_event: Callable[[], None] | None = None,
+    on_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
 ) -> dict[str, int]:
     concurrency = int(settings.technical_qc_worker_concurrency)
     if not 1 <= concurrency <= 8:
@@ -2036,6 +2090,8 @@ def process_technical_qc_batch(
                 max_attempts=int(settings.technical_qc_worker_max_attempts),
             )
             session.commit()
+            if on_service_event is not None:
+                on_service_event()
             return claimed
 
     claims = claim_slots(min(concurrency, cycle_max_tasks))
@@ -2053,6 +2109,8 @@ def process_technical_qc_batch(
                 claim,
                 settings,
                 runtime_binding,
+                on_service_event,
+                on_fatal,
             ): claim
             for claim in claims
         }
@@ -2062,8 +2120,10 @@ def process_technical_qc_batch(
                 futures.pop(future, None)
                 try:
                     status = future.result()
-                except TechnicalQcFatalError:
+                except TechnicalQcFatalError as exc:
                     _WORKER_FATAL.set()
+                    if on_fatal is not None:
+                        on_fatal(exc)
                     for pending in futures:
                         pending.cancel()
                     raise
@@ -2080,13 +2140,19 @@ def process_technical_qc_batch(
                     claim,
                     settings,
                     runtime_binding,
+                    on_service_event,
+                    on_fatal,
                 )
                 futures[future] = claim
                 submitted += 1
     return counts
 
 
-def process_pending_technical_qc() -> dict[str, int]:
+def process_pending_technical_qc(
+    *,
+    on_service_event: Callable[[], None] | None = None,
+    on_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
+) -> dict[str, int]:
     settings = get_database_settings()
     with database_module.runtime_participant_lease(
         database_module.engine,
@@ -2095,6 +2161,8 @@ def process_pending_technical_qc() -> dict[str, int]:
         return process_technical_qc_batch(
             settings,
             runtime_binding=runtime_binding,
+            on_service_event=on_service_event,
+            on_fatal=on_fatal,
         )
 
 
@@ -2127,9 +2195,20 @@ def _atomic_worker_state(path: Path, value: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _pulse_worker_heartbeat(path: Path, stop: threading.Event) -> None:
-    while not stop.wait(WORKER_HEARTBEAT_REFRESH_SECONDS):
-        _atomic_worker_state(path, str(time.time_ns()))
+def technical_qc_worker_healthcheck(
+    *,
+    heartbeat_path: Path = Path("/tmp/fj-technical-qc-worker-heartbeat"),
+    status_path: Path = Path("/tmp/fj-technical-qc-worker-status"),
+    max_age_seconds: int,
+) -> bool:
+    if not 1 <= max_age_seconds <= 86_400:
+        return False
+    try:
+        status = status_path.read_text(encoding="ascii")
+        age_seconds = time.time() - heartbeat_path.stat().st_mtime
+    except OSError:
+        return False
+    return status in {"running", "ok", "degraded"} and 0 <= age_seconds <= max_age_seconds
 
 
 def run_technical_qc_worker_loop(
@@ -2143,41 +2222,53 @@ def run_technical_qc_worker_loop(
     _WORKER_STOP.clear()
     _WORKER_FATAL.clear()
 
+    def record_service_event() -> None:
+        if not _WORKER_STOP.is_set() and not _WORKER_FATAL.is_set():
+            _atomic_worker_state(heartbeat_path, str(time.time_ns()))
+
+    def mark_fatal(_error: TechnicalQcFatalError) -> None:
+        _WORKER_FATAL.set()
+        _atomic_worker_state(status_path, "fatal")
+
     def stop_worker(_signum: int, _frame: Any) -> None:
         _WORKER_STOP.set()
+        if not _WORKER_FATAL.is_set():
+            _atomic_worker_state(status_path, "stopping")
 
     previous_term = signal.signal(signal.SIGTERM, stop_worker)
     previous_int = signal.signal(signal.SIGINT, stop_worker)
     try:
-        _atomic_worker_state(heartbeat_path, str(time.time_ns()))
         _atomic_worker_state(status_path, "running")
+        record_service_event()
         while not _WORKER_STOP.is_set():
-            pulse_stop = threading.Event()
-            pulse = threading.Thread(
-                target=_pulse_worker_heartbeat,
-                args=(heartbeat_path, pulse_stop),
-                daemon=True,
-                name="technical-qc-health-heartbeat",
+            result = process_pending_technical_qc(
+                on_service_event=record_service_event,
+                on_fatal=mark_fatal,
             )
-            pulse.start()
-            try:
-                result = process_pending_technical_qc()
-                if _WORKER_FATAL.is_set():
-                    raise TechnicalQcFatalError(
-                        "TECHNICAL_QC_REAP_FAILED",
-                        retryable=False,
-                    )
-            finally:
-                pulse_stop.set()
-                pulse.join(timeout=1)
+            if _WORKER_FATAL.is_set():
+                raise TechnicalQcFatalError(
+                    "TECHNICAL_QC_REAP_FAILED",
+                    retryable=False,
+                )
+            if _WORKER_STOP.is_set():
+                break
             status = "degraded" if result["failed"] else "ok"
             _atomic_worker_state(status_path, status)
-            _atomic_worker_state(heartbeat_path, str(time.time_ns()))
+            record_service_event()
             print(json.dumps({"status": status, **result}, sort_keys=True), flush=True)
-            _WORKER_STOP.wait(interval_seconds)
+            wait_deadline = time.monotonic() + interval_seconds
+            while not _WORKER_STOP.is_set():
+                remaining = wait_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if _WORKER_STOP.wait(min(WORKER_HEARTBEAT_REFRESH_SECONDS, remaining)):
+                    break
+                record_service_event()
     finally:
-        _atomic_worker_state(status_path, "stopped")
-        _atomic_worker_state(heartbeat_path, str(time.time_ns()))
+        _atomic_worker_state(
+            status_path,
+            "fatal" if _WORKER_FATAL.is_set() else "stopped",
+        )
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
 
@@ -2186,9 +2277,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("once")
+    commands.add_parser("health")
     run_parser = commands.add_parser("run")
     run_parser.add_argument("--interval-seconds", type=_bounded_interval, default=2)
     args = parser.parse_args()
+    if args.command == "health":
+        max_age_seconds = _bounded_interval(
+            os.environ.get("TECHNICAL_QC_WORKER_HEALTH_MAX_AGE_SECONDS", "90"),
+        )
+        return 0 if technical_qc_worker_healthcheck(
+            max_age_seconds=max_age_seconds,
+        ) else 1
     if args.command == "once":
         print(json.dumps(process_pending_technical_qc(), sort_keys=True), flush=True)
         return 0

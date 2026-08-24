@@ -35,6 +35,7 @@ from backend.app.technical_qc import (  # noqa: E402
     TechnicalQcMediaProbe,
     TechnicalQcScanResult,
     TechnicalQcThresholds,
+    _atomic_worker_state,
     probe_technical_qc_media,
     run_technical_qc_ffmpeg,
 )
@@ -49,6 +50,7 @@ _STOP = threading.Event()
 _FATAL = threading.Event()
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_CONNECTIONS: set[socket.socket] = set()
+_STATUS_PATH: Path | None = None
 _VALUE_KEYS = frozenset({"pblack", "yavg", "scene_score", "frame_count", "duration_ms"})
 _ERROR_RETRYABILITY = {
     "TECHNICAL_QC_FILTER_UNAVAILABLE": False,
@@ -68,6 +70,8 @@ _ERROR_RETRYABILITY = {
 def _mark_fatal(_error: TechnicalQcFatalError) -> None:
     _FATAL.set()
     _STOP.set()
+    if _STATUS_PATH is not None:
+        _atomic_worker_state(_STATUS_PATH, "fatal")
     with _ACTIVE_LOCK:
         for connection in tuple(_ACTIVE_CONNECTIONS):
             try:
@@ -80,28 +84,40 @@ def _json_line(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
-def _receive_request_and_fd(connection: socket.socket) -> tuple[dict[str, Any], int]:
-    descriptor_array = array.array("i")
+def _receive_request_and_fd(
+    connection: socket.socket,
+    *,
+    allow_health: bool = False,
+) -> tuple[dict[str, Any], int]:
     data, ancillary, _flags, _address = connection.recvmsg(
         MAX_REQUEST_BYTES + 1,
-        socket.CMSG_SPACE(descriptor_array.itemsize),
+        socket.CMSG_SPACE(array.array("i").itemsize),
     )
     if len(data) > MAX_REQUEST_BYTES or not data.endswith(b"\n"):
         raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
     descriptors: list[int] = []
     for level, kind, payload in ancillary:
         if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            descriptor_array = array.array("i")
             descriptor_array.frombytes(payload[: descriptor_array.itemsize])
             descriptors.extend(descriptor_array.tolist())
-    if len(descriptors) != 1:
-        for descriptor in descriptors:
-            os.close(descriptor)
-        raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
-    descriptor = descriptors[0]
     try:
         request = json.loads(data)
         if not isinstance(request, dict):
             raise ValueError
+        if request.get("type") == "health":
+            if (
+                not allow_health
+                or descriptors
+                or set(request) != {"type", "request_id"}
+                or not isinstance(request["request_id"], str)
+                or len(request["request_id"]) != 32
+            ):
+                raise ValueError
+            return request, -1
+        if len(descriptors) != 1:
+            raise ValueError
+        descriptor = descriptors[0]
         expected = {
             "type",
             "request_id",
@@ -156,7 +172,8 @@ def _receive_request_and_fd(connection: socket.socket) -> tuple[dict[str, Any], 
         ):
             raise ValueError
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        os.close(descriptor)
+        for descriptor in descriptors:
+            os.close(descriptor)
         raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False) from exc
     return request, descriptor
 
@@ -312,13 +329,33 @@ def serve_once(
         socket_path.unlink(missing_ok=True)
 
 
+def _sandbox_status_ready() -> bool:
+    if _STOP.is_set() or _FATAL.is_set() or _STATUS_PATH is None:
+        return False
+    try:
+        return _STATUS_PATH.is_file() and _STATUS_PATH.read_text(encoding="ascii") == "ready"
+    except OSError:
+        return False
+
+
 def _handle_connection(connection: socket.socket) -> None:
     with connection:
         with _ACTIVE_LOCK:
             _ACTIVE_CONNECTIONS.add(connection)
         descriptor = -1
         try:
-            request, descriptor = _receive_request_and_fd(connection)
+            request, descriptor = _receive_request_and_fd(connection, allow_health=True)
+            if request["type"] == "health":
+                connection.sendall(
+                    _json_line(
+                        {
+                            "type": "health",
+                            "request_id": request["request_id"],
+                            "status": "ready" if _sandbox_status_ready() else "not_ready",
+                        },
+                    ),
+                )
+                return
             reply = _default_handler(request, descriptor, connection)
             connection.sendall(_json_line(reply))
         except TechnicalQcFatalError as exc:
@@ -343,14 +380,17 @@ def _handle_connection(connection: socket.socket) -> None:
 
 
 def serve_forever(socket_path: Path, *, concurrency: int) -> None:
+    global _STATUS_PATH
     if not 1 <= concurrency <= 8:
         raise ValueError("sandbox concurrency is outside the supported range")
     _STOP.clear()
     _FATAL.clear()
     status_path = socket_path.with_name("sandbox.status")
+    _STATUS_PATH = status_path
 
     def stop(_signum: int, _frame: Any) -> None:
         _STOP.set()
+        _atomic_worker_state(status_path, "stopping")
         with _ACTIVE_LOCK:
             for connection in tuple(_ACTIVE_CONNECTIONS):
                 try:
@@ -361,12 +401,12 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
     previous_term = signal.signal(signal.SIGTERM, stop)
     previous_int = signal.signal(signal.SIGINT, stop)
     try:
-        status_path.write_text("starting", encoding="ascii")
+        _atomic_worker_state(status_path, "starting")
         with _prepare_listener(socket_path) as listener, ThreadPoolExecutor(
             max_workers=concurrency,
             thread_name_prefix="technical-qc-sandbox",
         ) as executor:
-            status_path.write_text("ready", encoding="ascii")
+            _atomic_worker_state(status_path, "ready")
             listener.settimeout(SOCKET_POLL_SECONDS)
             while not _STOP.is_set():
                 try:
@@ -375,12 +415,12 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
                     continue
                 executor.submit(_handle_connection, connection)
         if _FATAL.is_set():
-            status_path.write_text("fatal", encoding="ascii")
+            _atomic_worker_state(status_path, "fatal")
             raise SystemExit(70)
     finally:
         socket_path.unlink(missing_ok=True)
         if not _FATAL.is_set():
-            status_path.write_text("stopped", encoding="ascii")
+            _atomic_worker_state(status_path, "stopped")
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
 
@@ -395,6 +435,49 @@ def wait_for_socket(socket_path: Path, *, timeout_seconds: float) -> None:
             pass
         time.sleep(0.01)
     raise TimeoutError("sandbox socket did not become ready")
+
+
+def sandbox_healthcheck(socket_path: Path, *, timeout_seconds: float = 1.0) -> bool:
+    status_path = socket_path.with_name("sandbox.status")
+    try:
+        if status_path.read_text(encoding="ascii") != "ready":
+            return False
+    except OSError:
+        return False
+    request_id = uuid.uuid4().hex
+    deadline = time.monotonic() + timeout_seconds
+    response = bytearray()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(timeout_seconds)
+            connection.connect(str(socket_path))
+            connection.sendall(
+                _json_line({"type": "health", "request_id": request_id}),
+            )
+            while b"\n" not in response:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                connection.settimeout(remaining)
+                chunk = connection.recv(MAX_REQUEST_BYTES + 1 - len(response))
+                if not chunk:
+                    return False
+                response.extend(chunk)
+                if len(response) > MAX_REQUEST_BYTES:
+                    return False
+    except (OSError, TimeoutError):
+        return False
+    if not response.endswith(b"\n") or response.count(b"\n") != 1:
+        return False
+    try:
+        payload = json.loads(response)
+    except json.JSONDecodeError:
+        return False
+    return payload == {
+        "type": "health",
+        "request_id": request_id,
+        "status": "ready",
+    }
 
 
 def _threshold_payload(thresholds: TechnicalQcThresholds) -> dict[str, int]:
@@ -466,21 +549,37 @@ def _parse_interval(payload: Any, probe: TechnicalQcMediaProbe) -> QcInterval:
     ):
         raise ValueError
     for key, value in interval.values.items():
-        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        if key in {"frame_count", "duration_ms"}:
+            if type(value) is not int:
+                raise ValueError
+            if key == "frame_count" and (
+                value != interval.frame_count
+                or value > probe.video_frame_count
+                or "short_shot" not in interval.reason_codes
+            ):
+                raise ValueError
+            if key == "duration_ms" and (
+                value != interval.duration_ms
+                or value > probe.total_ms
+                or "silence" not in interval.reason_codes
+            ):
+                raise ValueError
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+        ):
             raise ValueError
         if key in {"pblack", "scene_score"} and not 0 <= value <= 100:
             raise ValueError
         if key == "yavg" and not 0 <= value <= 255:
-            raise ValueError
-        if key in {"frame_count", "duration_ms"} and value <= 0:
             raise ValueError
     if "pblack" in interval.values and "black_frame" not in interval.reason_codes:
         raise ValueError
     if "yavg" in interval.values and "white_frame" not in interval.reason_codes:
         raise ValueError
     if "scene_score" in interval.values and "short_shot" not in interval.reason_codes:
-        raise ValueError
-    if "duration_ms" in interval.values and "silence" not in interval.reason_codes:
         raise ValueError
     return interval
 
@@ -676,6 +775,13 @@ def _bounded_concurrency(value: str) -> int:
     return parsed
 
 
+def _bounded_health_timeout(value: str) -> float:
+    parsed = float(value)
+    if not 0 < parsed <= 5:
+        raise argparse.ArgumentTypeError("health timeout must be between 0 and 5 seconds")
+    return parsed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -688,7 +794,18 @@ def main() -> int:
         type=_bounded_concurrency,
         default=4,
     )
+    parser.add_argument("--healthcheck", action="store_true")
+    parser.add_argument(
+        "--health-timeout-seconds",
+        type=_bounded_health_timeout,
+        default=1.0,
+    )
     args = parser.parse_args()
+    if args.healthcheck:
+        return 0 if sandbox_healthcheck(
+            args.socket_path,
+            timeout_seconds=args.health_timeout_seconds,
+        ) else 1
     serve_forever(args.socket_path, concurrency=args.concurrency)
     return 0
 
