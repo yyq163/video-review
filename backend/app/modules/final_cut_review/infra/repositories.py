@@ -737,6 +737,8 @@ class SqlAlchemyReviewRepository:
             "ResolveReviewIssue": self.resolve_issue,
             "ReopenReviewIssue": self.reopen_issue,
             "SoftDeleteReviewIssue": self.soft_delete_issue,
+            "FinalizeProject": self.finalize_project,
+            "RevokeProjectFinalization": self.revoke_project_finalization,
             "FinalizeVersion": self.finalize_version,
             "RevokeFinalization": self.revoke_finalization,
             "RetryFinalizationCleanup": self.retry_finalization_cleanup,
@@ -2235,16 +2237,27 @@ class SqlAlchemyReviewRepository:
         )
         return self.issue_dto(issue)
 
-    def finalize_version(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
-        if payload.get("confirmed") is not True:
-            raise ReviewError("VALIDATION_ERROR", "定稿必须 confirmed=true")
-        project = self._get_project(payload["project_ref_id"], for_update=True)
-        self._assert_project_active(project)
-        item = self._get_item(project.id, payload["review_item_id"], for_update=True)
-        version = self._get_version(item.project_ref_id, item.id, payload["version_id"])
+    def _locked_project_items(self, project_ref_id: str) -> list[ReviewItemModel]:
+        return list(
+            self.session.scalars(
+                select(ReviewItemModel)
+                .where(ReviewItemModel.project_ref_id == project_ref_id)
+                .order_by(ReviewItemModel.id)
+                .with_for_update()
+            )
+        )
+
+    def _finalize_locked_item(
+        self,
+        project: ProjectRefModel,
+        item: ReviewItemModel,
+        context: ExecutionContext,
+        *,
+        version_id: str,
+    ) -> FinalizationRecordModel:
+        version = self._get_version(item.project_ref_id, item.id, version_id)
         invariants.ensure_current_version(version.id, item.current_version_id or "")
         self._assert_playback_ready(version)
-        self._expect_lock(item, expected_version)
         invariants.ensure_finalizable(item.workflow_status)
         incomplete_revocation_cleanup = self.session.scalar(
             select(FinalizationPackageInvalidationModel.id)
@@ -2253,7 +2266,10 @@ class SqlAlchemyReviewRepository:
                 FinalizationPackageInvalidationModel.review_item_id == item.id,
                 FinalizationPackageInvalidationModel.cleanup_status != "complete",
             )
-            .order_by(FinalizationPackageInvalidationModel.created_at)
+            .order_by(
+                FinalizationPackageInvalidationModel.created_at,
+                FinalizationPackageInvalidationModel.id,
+            )
             .limit(1)
             .with_for_update()
         )
@@ -2306,31 +2322,80 @@ class SqlAlchemyReviewRepository:
             version_id=version.id,
             finalization_id=finalization.id,
         )
-        return self.finalization_dto(finalization)
+        return finalization
 
-    def revoke_finalization(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
+    def finalize_version(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
         if payload.get("confirmed") is not True:
-            raise ReviewError("VALIDATION_ERROR", "撤销定稿必须 confirmed=true")
+            raise ReviewError("VALIDATION_ERROR", "定稿必须 confirmed=true")
         project = self._get_project(payload["project_ref_id"], for_update=True)
         self._assert_project_active(project)
         item = self._get_item(project.id, payload["review_item_id"], for_update=True)
         self._expect_lock(item, expected_version)
-        if item.workflow_status != "finalized" or not item.active_finalization_id:
-            raise ReviewError("RESOURCE_STATE_CONFLICT", "审阅条目当前未定稿")
-        finalization = self.session.scalar(
-            select(FinalizationRecordModel)
-            .where(
-                FinalizationRecordModel.id == item.active_finalization_id,
-                FinalizationRecordModel.project_ref_id == project.id,
-                FinalizationRecordModel.review_item_id == item.id,
-                FinalizationRecordModel.status == "active",
-            )
-            .with_for_update()
+        finalization = self._finalize_locked_item(
+            project,
+            item,
+            context,
+            version_id=payload["version_id"],
         )
-        if finalization is None:
-            raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿指针与权威记录不一致")
+        return self.finalization_dto(finalization)
 
-        now = utcnow()
+    def finalize_project(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        if payload.get("confirmed") is not True:
+            raise ReviewError("VALIDATION_ERROR", "全部定稿必须 confirmed=true")
+        project = self._get_project(payload["project_ref_id"], for_update=True)
+        self._assert_project_active(project)
+        self._expect_lock(project, expected_version)
+        items = self._locked_project_items(project.id)
+        targets = [item for item in items if item.workflow_status != "finalized"]
+        if not targets:
+            return self.get_project_summary(project.id)
+
+        for item in targets:
+            if item.current_version_id is None:
+                raise ReviewError("RESOURCE_STATE_CONFLICT", "审阅条目缺少当前版本")
+            self._finalize_locked_item(
+                project,
+                item,
+                context,
+                version_id=item.current_version_id,
+            )
+
+        project.lock_version += 1
+        project.updated_at = utcnow()
+        self.session.flush()
+        return self.get_project_summary(project.id)
+
+    def _locked_project_packages(self, project_ref_id: str) -> list[FinalCutPackageSnapshotModel]:
+        return list(
+            self.session.scalars(
+                select(FinalCutPackageSnapshotModel)
+                .where(
+                    FinalCutPackageSnapshotModel.project_ref_id == project_ref_id,
+                    FinalCutPackageSnapshotModel.status.in_(("preparing", "ready", "failed", "expired", "invalidated")),
+                    FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
+                )
+                .order_by(
+                    FinalCutPackageSnapshotModel.created_at,
+                    FinalCutPackageSnapshotModel.id,
+                )
+                .with_for_update()
+            )
+        )
+
+    def _revoke_locked_finalization(
+        self,
+        project: ProjectRefModel,
+        item: ReviewItemModel,
+        finalization: FinalizationRecordModel,
+        packages: list[FinalCutPackageSnapshotModel],
+        context: ExecutionContext,
+        now: datetime,
+    ) -> list[str]:
         # Existing database freeze triggers permit the exact item transition first;
         # the same transaction then revokes the child finalization and packages.
         item.workflow_status = "in_review"
@@ -2339,18 +2404,6 @@ class SqlAlchemyReviewRepository:
         item.updated_at = now
         self.session.flush()
 
-        packages = list(
-            self.session.scalars(
-                select(FinalCutPackageSnapshotModel)
-                .where(
-                    FinalCutPackageSnapshotModel.project_ref_id == project.id,
-                    FinalCutPackageSnapshotModel.status.in_(("preparing", "ready", "failed", "expired", "invalidated")),
-                    FinalCutPackageSnapshotModel.storage_reclaimed_at.is_(None),
-                )
-                .order_by(FinalCutPackageSnapshotModel.created_at, FinalCutPackageSnapshotModel.id)
-                .with_for_update()
-            )
-        )
         invalidated_package_ids: list[str] = []
         for package in packages:
             if not any(isinstance(package_item, dict) and package_item.get("finalization_id") == finalization.id for package_item in package.items):
@@ -2396,12 +2449,104 @@ class SqlAlchemyReviewRepository:
             version_id=finalization.version_id,
             finalization_id=finalization.id,
         )
+        return invalidated_package_ids
+
+    def revoke_finalization(self, payload: dict[str, Any], context: ExecutionContext, expected_version: int | None) -> dict[str, Any]:
+        if payload.get("confirmed") is not True:
+            raise ReviewError("VALIDATION_ERROR", "撤销定稿必须 confirmed=true")
+        project = self._get_project(payload["project_ref_id"], for_update=True)
+        self._assert_project_active(project)
+        item = self._get_item(project.id, payload["review_item_id"], for_update=True)
+        self._expect_lock(item, expected_version)
+        if item.workflow_status != "finalized" or not item.active_finalization_id:
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "审阅条目当前未定稿")
+        finalization = self.session.scalar(
+            select(FinalizationRecordModel)
+            .where(
+                FinalizationRecordModel.id == item.active_finalization_id,
+                FinalizationRecordModel.project_ref_id == project.id,
+                FinalizationRecordModel.review_item_id == item.id,
+                FinalizationRecordModel.status == "active",
+            )
+            .with_for_update()
+        )
+        if finalization is None:
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿指针与权威记录不一致")
+
+        invalidated_package_ids = self._revoke_locked_finalization(
+            project,
+            item,
+            finalization,
+            self._locked_project_packages(project.id),
+            context,
+            utcnow(),
+        )
         return {
             "finalization": self.finalization_dto(finalization),
             "review_item": self.item_dto(item),
             "cleanup_status": "pending" if invalidated_package_ids else "complete",
             "invalidated_package_ids": invalidated_package_ids,
         }
+
+    def revoke_project_finalization(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        if payload.get("confirmed") is not True:
+            raise ReviewError("VALIDATION_ERROR", "撤销全部定稿必须 confirmed=true")
+        project = self._get_project(payload["project_ref_id"], for_update=True)
+        self._assert_project_active(project)
+        self._expect_lock(project, expected_version)
+        items = self._locked_project_items(project.id)
+        targets = [item for item in items if item.workflow_status == "finalized"]
+        if not targets:
+            return self.get_project_summary(project.id)
+        if any(item.active_finalization_id is None for item in targets):
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿指针与权威记录不一致")
+
+        active_ids = [item.active_finalization_id for item in targets if item.active_finalization_id is not None]
+        finalizations = list(
+            self.session.scalars(
+                select(FinalizationRecordModel)
+                .where(
+                    FinalizationRecordModel.project_ref_id == project.id,
+                    FinalizationRecordModel.id.in_(active_ids),
+                    FinalizationRecordModel.status == "active",
+                )
+                .order_by(
+                    FinalizationRecordModel.review_item_id,
+                    FinalizationRecordModel.id,
+                )
+                .with_for_update()
+            )
+        )
+        finalizations_by_id = {finalization.id: finalization for finalization in finalizations}
+        if len(finalizations_by_id) != len(targets):
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿指针与权威记录不一致")
+        for item in targets:
+            finalization = finalizations_by_id.get(item.active_finalization_id or "")
+            if finalization is None or finalization.review_item_id != item.id:
+                raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿指针与权威记录不一致")
+
+        packages = self._locked_project_packages(project.id)
+        now = utcnow()
+        for item in targets:
+            finalization = finalizations_by_id[item.active_finalization_id or ""]
+            self._revoke_locked_finalization(
+                project,
+                item,
+                finalization,
+                packages,
+                context,
+                now,
+            )
+
+        project.lock_version += 1
+        project.updated_at = now
+        self.session.flush()
+        return self.get_project_summary(project.id)
 
     def retry_finalization_cleanup(
         self,

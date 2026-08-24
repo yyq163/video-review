@@ -56,6 +56,8 @@ COMMAND_ROUTE_TYPES = {
     "review_resolve_issue": "ResolveReviewIssue",
     "review_reopen_issue": "ReopenReviewIssue",
     "review_soft_delete_issue": "SoftDeleteReviewIssue",
+    "review_finalize_project": "FinalizeProject",
+    "review_revoke_project_finalization": "RevokeProjectFinalization",
     "review_finalize": "FinalizeVersion",
     "review_revoke_finalization": "RevokeFinalization",
     "review_retry_finalization_cleanup": "RetryFinalizationCleanup",
@@ -147,6 +149,8 @@ LOCK_REQUIRED_COMMANDS = {
     "ResolveReviewIssue",
     "ReopenReviewIssue",
     "SoftDeleteReviewIssue",
+    "FinalizeProject",
+    "RevokeProjectFinalization",
     "FinalizeVersion",
     "RevokeFinalization",
     "RetryFinalizationCleanup",
@@ -783,6 +787,44 @@ def review_finalize(
         "FinalizeVersion",
         envelope,
         {"project_ref_id": project_ref_id, "review_item_id": review_item_id, "version_id": version_id},
+        deps,
+        idempotency_key,
+        if_match,
+    )
+
+
+@router.post("/review/projects/{project_ref_id}/finalize")
+def review_finalize_project(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "FinalizeProject",
+        envelope,
+        {"project_ref_id": project_ref_id},
+        deps,
+        idempotency_key,
+        if_match,
+    )
+
+
+@router.post("/review/projects/{project_ref_id}/finalization/revoke")
+def review_revoke_project_finalization(
+    project_ref_id: str,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str = Header(..., alias="If-Match", pattern='^"?[0-9]+"?$'),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "RevokeProjectFinalization",
+        envelope,
+        {"project_ref_id": project_ref_id},
         deps,
         idempotency_key,
         if_match,

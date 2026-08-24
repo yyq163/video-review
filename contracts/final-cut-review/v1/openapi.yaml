@@ -981,6 +981,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectRefId"
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -1004,6 +1005,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectRefId"
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
