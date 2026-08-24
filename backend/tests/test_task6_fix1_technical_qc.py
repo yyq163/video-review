@@ -337,7 +337,9 @@ def test_threaded_real_popen_boundary_has_no_preexec_fn(tmp_path: Path) -> None:
 def _insert_second_ready_version_for_same_item(session: Any, item_id: str) -> str:
     models = _models()
     first = session.scalar(
-        select(models.ReviewVersionModel).where(models.ReviewVersionModel.review_item_id == item_id),
+        select(models.ReviewVersionModel)
+        .where(models.ReviewVersionModel.review_item_id == item_id)
+        .order_by(models.ReviewVersionModel.version_no.desc()),
     )
     assert first is not None
     source = session.get(models.FileObjectModel, first.original_file_id)
@@ -427,19 +429,15 @@ def test_same_item_multiple_ready_versions_claim_and_render_as_one_running_episo
 
 def test_deadline_and_cancel_cover_slow_hash_before_process_start(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     qc = _qc()
     media = tmp_path / "slow-hash.mp4"
     media.write_bytes(b"x" * (3 * 1024 * 1024))
     claim = _file_claim(qc, media, total_ms=160, frames=4)
-    original_pread = os.pread
-
-    def slow_pread(fd: int, size: int, offset: int) -> bytes:
-        time.sleep(0.04)
-        return original_pread(fd, size, offset)
-
-    monkeypatch.setattr(os, "pread", slow_pread)
+    blocking_hash = _write_executable(
+        tmp_path / "blocking-hash.py",
+        "import time\ntime.sleep(5)\n",
+    )
     started = time.monotonic()
     with pytest.raises(qc.TechnicalQcError) as caught:
         qc.scan_technical_qc_claim(
@@ -448,6 +446,7 @@ def test_deadline_and_cancel_cover_slow_hash_before_process_start(
             ffmpeg_command="/usr/bin/false",
             timeout_seconds=0.05,
             output_limit_bytes=4_096,
+            hash_helper_argv=[str(blocking_hash)],
         )
     assert caught.value.code == "TECHNICAL_QC_SCAN_TIMEOUT"
     assert time.monotonic() - started < 0.2
@@ -468,6 +467,7 @@ def test_deadline_and_cancel_cover_slow_hash_before_process_start(
             timeout_seconds=2,
             output_limit_bytes=4_096,
             should_cancel=cancel_after_first_chunk,
+            hash_helper_argv=[str(blocking_hash)],
         )
     assert cancelled.value.code == "TECHNICAL_QC_SCAN_CANCELLED"
     assert time.monotonic() - started < 0.2
@@ -546,7 +546,12 @@ def test_slow_process_start_is_bounded_by_lifecycle_deadline(
     assert time.monotonic() - started < 0.12
 
 
-def _seed_large_ready_backlog(session: Any, *, count: int) -> str:
+def _seed_large_ready_backlog(
+    session: Any,
+    *,
+    count: int,
+    include_tasks: bool = True,
+) -> str:
     models = _models()
     now = datetime.now(timezone.utc)
     project_id = f"prj_fix1_backlog_{uuid.uuid4().hex}"
@@ -660,7 +665,8 @@ def _seed_large_ready_backlog(session: Any, *, count: int) -> str:
     session.execute(insert(models.ReviewItemModel), items)
     session.execute(insert(models.ReviewVersionModel), versions)
     session.execute(insert(models.MediaDerivativeTaskModel), derivatives)
-    session.execute(insert(models.TechnicalQcTaskModel), tasks)
+    if include_tasks:
+        session.execute(insert(models.TechnicalQcTaskModel), tasks)
     return project_id
 
 
@@ -786,19 +792,34 @@ def test_sandbox_ipc_passes_only_readonly_fd_and_fails_closed_on_malformed_reply
     socket_path = Path("/tmp") / f"tqc-{uuid.uuid4().hex}.sock"
     received = threading.Event()
 
-    def handler(request: dict[str, Any], fd: int) -> dict[str, Any]:
+    def handler(request: dict[str, Any], fd: int) -> list[dict[str, Any]]:
         assert os.pread(fd, 15, 0) == b"fd-only-payload"
         received.set()
-        return {
-            "type": "result",
-            "request_id": request["request_id"],
-            "frames_processed": 4,
-            "video_frame_count": 4,
-            "video_duration_ms": 160,
-            "total_ms": 160,
-            "processed_ms": 160,
-            "intervals": [],
-        }
+        return [
+            {
+                "type": "probe",
+                "request_id": request["request_id"],
+                "video_frame_count": 4,
+                "video_duration_ms": 160,
+                "total_ms": 160,
+            },
+            {
+                "type": "progress",
+                "request_id": request["request_id"],
+                "processed_ms": 160,
+                "total_ms": 160,
+            },
+            {
+                "type": "result",
+                "request_id": request["request_id"],
+                "frames_processed": 4,
+                "video_frame_count": 4,
+                "video_duration_ms": 160,
+                "total_ms": 160,
+                "processed_ms": 160,
+                "intervals": [],
+            },
+        ]
 
     def serve_once() -> None:
         sandbox.serve_once(

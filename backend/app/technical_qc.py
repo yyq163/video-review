@@ -7,6 +7,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -62,6 +63,7 @@ DEFAULT_THRESHOLDS = TechnicalQcThresholds()
 PROCESS_POLL_SECONDS = 0.02
 WORKER_HEARTBEAT_REFRESH_SECONDS = 30.0
 _WORKER_STOP = threading.Event()
+_WORKER_FATAL = threading.Event()
 
 
 class TechnicalQcError(RuntimeError):
@@ -69,6 +71,10 @@ class TechnicalQcError(RuntimeError):
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+
+
+class TechnicalQcFatalError(TechnicalQcError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,10 +243,17 @@ def discover_ready_technical_qc_tasks(
 ) -> int:
     if not 1 <= batch_size <= DISCOVERY_BATCH_SIZE:
         raise ValueError("technical QC discovery batch is outside the supported range")
-    rows = session.execute(
+    ranked_ready = (
         select(
-            ReviewVersionModel,
-            MediaDerivativeTaskModel.output_file_id,
+            ReviewVersionModel.id.label("version_id"),
+            MediaDerivativeTaskModel.output_file_id.label("output_file_id"),
+            ReviewVersionModel.created_at.label("version_created_at"),
+            func.row_number()
+            .over(
+                partition_by=ReviewVersionModel.project_ref_id,
+                order_by=(ReviewVersionModel.created_at, ReviewVersionModel.id),
+            )
+            .label("project_rank"),
         )
         .join(
             MediaDerivativeTaskModel,
@@ -261,7 +274,16 @@ def discover_ready_technical_qc_tasks(
             ReviewVersionModel.playback_asset_id == MediaDerivativeTaskModel.output_file_id,
             TechnicalQcTaskModel.id.is_(None),
         )
-        .order_by(ReviewVersionModel.created_at, ReviewVersionModel.id)
+        .subquery()
+    )
+    rows = session.execute(
+        select(ReviewVersionModel, ranked_ready.c.output_file_id)
+        .join(ranked_ready, ranked_ready.c.version_id == ReviewVersionModel.id)
+        .order_by(
+            ranked_ready.c.project_rank,
+            ranked_ready.c.version_created_at,
+            ranked_ready.c.version_id,
+        )
         .limit(batch_size)
     ).all()
     created = 0
@@ -340,40 +362,51 @@ def _claim_candidates(
         remaining = candidate_limit - len(rows)
         if remaining <= 0:
             break
+        ranked_items = (
+            select(
+                TechnicalQcTaskModel.id.label("task_id"),
+                func.row_number()
+                .over(
+                    partition_by=TechnicalQcTaskModel.review_item_id,
+                    order_by=(TechnicalQcTaskModel.created_at, TechnicalQcTaskModel.id),
+                )
+                .label("item_rank"),
+            )
+            .join(ProjectRefModel, ProjectRefModel.id == TechnicalQcTaskModel.project_ref_id)
+            .join(
+                MediaDerivativeTaskModel,
+                (MediaDerivativeTaskModel.version_id == TechnicalQcTaskModel.version_id)
+                & (MediaDerivativeTaskModel.project_ref_id == TechnicalQcTaskModel.project_ref_id)
+                & (MediaDerivativeTaskModel.review_item_id == TechnicalQcTaskModel.review_item_id)
+                & (MediaDerivativeTaskModel.kind == "playback_faststart"),
+            )
+            .where(
+                ProjectRefModel.deleted_at.is_(None),
+                TechnicalQcTaskModel.project_ref_id == project_ref_id,
+                MediaDerivativeTaskModel.status == "ready",
+                MediaDerivativeTaskModel.output_file_id == TechnicalQcTaskModel.input_file_id,
+                TechnicalQcTaskModel.attempts < max_attempts,
+                eligible,
+            )
+            .subquery()
+        )
         statement = (
             select(TechnicalQcTaskModel, ReviewItemModel, FileObjectModel)
-        .join(
-            ReviewItemModel,
-            (ReviewItemModel.id == TechnicalQcTaskModel.review_item_id)
-            & (ReviewItemModel.project_ref_id == TechnicalQcTaskModel.project_ref_id),
-        )
-        .join(ProjectRefModel, ProjectRefModel.id == TechnicalQcTaskModel.project_ref_id)
-        .join(
-            MediaDerivativeTaskModel,
-            (MediaDerivativeTaskModel.version_id == TechnicalQcTaskModel.version_id)
-            & (MediaDerivativeTaskModel.project_ref_id == TechnicalQcTaskModel.project_ref_id)
-            & (MediaDerivativeTaskModel.review_item_id == TechnicalQcTaskModel.review_item_id)
-            & (MediaDerivativeTaskModel.kind == "playback_faststart"),
-        )
-        .join(
-            FileObjectModel,
-            FileObjectModel.id == TechnicalQcTaskModel.input_file_id,
-        )
-        .where(
-            ProjectRefModel.deleted_at.is_(None),
-            TechnicalQcTaskModel.project_ref_id == project_ref_id,
-            MediaDerivativeTaskModel.status == "ready",
-            MediaDerivativeTaskModel.output_file_id == TechnicalQcTaskModel.input_file_id,
-            TechnicalQcTaskModel.attempts < max_attempts,
-            eligible,
-        )
-        .order_by(
-            ReviewItemModel.episode_no.is_(None),
-            ReviewItemModel.episode_no,
-            TechnicalQcTaskModel.created_at,
-            TechnicalQcTaskModel.id,
-        )
-        .limit(min(remaining, per_project_candidate_limit))
+            .join(ranked_items, ranked_items.c.task_id == TechnicalQcTaskModel.id)
+            .join(
+                ReviewItemModel,
+                (ReviewItemModel.id == TechnicalQcTaskModel.review_item_id)
+                & (ReviewItemModel.project_ref_id == TechnicalQcTaskModel.project_ref_id),
+            )
+            .join(FileObjectModel, FileObjectModel.id == TechnicalQcTaskModel.input_file_id)
+            .where(ranked_items.c.item_rank == 1)
+            .order_by(
+                ReviewItemModel.episode_no.is_(None),
+                ReviewItemModel.episode_no,
+                TechnicalQcTaskModel.created_at,
+                TechnicalQcTaskModel.id,
+            )
+            .limit(min(remaining, per_project_candidate_limit))
         )
         if session.get_bind().dialect.name == "postgresql":
             statement = statement.with_for_update(skip_locked=True, of=TechnicalQcTaskModel)
@@ -445,7 +478,6 @@ def claim_technical_qc_tasks(
             select(TechnicalQcTaskModel.project_ref_id, func.count())
             .where(
                 TechnicalQcTaskModel.status == "running",
-                TechnicalQcTaskModel.lease_expires_at > claimed_at,
             )
             .group_by(TechnicalQcTaskModel.project_ref_id)
         ).all()
@@ -484,7 +516,6 @@ def claim_technical_qc_tasks(
         session.scalars(
             select(TechnicalQcTaskModel.review_item_id).where(
                 TechnicalQcTaskModel.status == "running",
-                TechnicalQcTaskModel.lease_expires_at > claimed_at,
             ),
         ),
     )
@@ -511,14 +542,20 @@ def claim_technical_qc_tasks(
     claims: list[TechnicalQcClaim] = []
     for task, item, file in selected:
         claim_id = uuid.uuid4().hex
-        task.status = "running"
-        task.claim_id = claim_id
-        task.lease_expires_at = claimed_at + timedelta(seconds=lease_seconds)
-        task.attempts += 1
-        task.error_code = None
-        task.next_attempt_at = None
-        task.started_at = task.started_at or claimed_at
-        task.updated_at = claimed_at
+        try:
+            with session.begin_nested():
+                task.status = "running"
+                task.claim_id = claim_id
+                task.lease_expires_at = claimed_at + timedelta(seconds=lease_seconds)
+                task.attempts += 1
+                task.error_code = None
+                task.next_attempt_at = None
+                task.started_at = task.started_at or claimed_at
+                task.updated_at = claimed_at
+                session.flush()
+        except IntegrityError:
+            session.expire(task)
+            continue
         claims.append(
             TechnicalQcClaim(
                 task_id=task.id,
@@ -542,7 +579,6 @@ def claim_technical_qc_tasks(
                 container_duration_ms=task.container_duration_ms,
             ),
         )
-    session.flush()
     return claims
 
 
@@ -1163,7 +1199,7 @@ def _terminate_and_reap_process(process: subprocess.Popen[bytes]) -> int:
     try:
         return process.wait(timeout=0.75)
     except subprocess.TimeoutExpired as exc:
-        raise TechnicalQcError("TECHNICAL_QC_REAP_FAILED", retryable=True) from exc
+        raise TechnicalQcFatalError("TECHNICAL_QC_REAP_FAILED", retryable=False) from exc
 
 
 def _remaining_seconds(deadline: float) -> float:
@@ -1192,19 +1228,31 @@ def _popen_with_deadline(
     kwargs: dict[str, Any],
     *,
     deadline: float,
+    on_late_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
+    before_publish: Callable[[subprocess.Popen[bytes]], None] | None = None,
 ) -> subprocess.Popen[bytes]:
     completed = threading.Event()
-    expired = threading.Event()
+    ownership_lock = threading.Lock()
+    timed_out = False
     process_box: list[subprocess.Popen[bytes]] = []
     error_box: list[BaseException] = []
 
     def launch() -> None:
+        nonlocal timed_out
         try:
             process = subprocess.Popen(argv, **kwargs)
-            if expired.is_set():
-                _terminate_and_reap_process(process)
-            else:
-                process_box.append(process)
+            if before_publish is not None:
+                before_publish(process)
+            with ownership_lock:
+                late = timed_out
+                if not late:
+                    process_box.append(process)
+            if late:
+                try:
+                    _terminate_and_reap_process(process)
+                except TechnicalQcFatalError as exc:
+                    if on_late_fatal is not None:
+                        on_late_fatal(exc)
         except BaseException as exc:
             error_box.append(exc)
         finally:
@@ -1216,9 +1264,11 @@ def _popen_with_deadline(
         name="technical-qc-bounded-spawn",
     ).start()
     if not completed.wait(_remaining_seconds(deadline)):
-        expired.set()
-        if completed.is_set() and process_box:
-            _terminate_and_reap_process(process_box[0])
+        with ownership_lock:
+            timed_out = True
+            owned_process = process_box[0] if process_box else None
+        if owned_process is not None:
+            _terminate_and_reap_process(owned_process)
         raise TechnicalQcError("TECHNICAL_QC_SCAN_TIMEOUT", retryable=True)
     if error_box:
         error = error_box[0]
@@ -1242,6 +1292,7 @@ def probe_technical_qc_media(
     deadline: float,
     output_limit_bytes: int,
     should_cancel: Callable[[], bool] | None = None,
+    on_late_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
 ) -> TechnicalQcMediaProbe:
     _check_lifecycle(deadline, should_cancel)
     descriptor = input_handle.fileno()
@@ -1258,19 +1309,15 @@ def probe_technical_qc_media(
         "json",
         f"/dev/fd/{descriptor}",
     ]
-    process = _popen_with_deadline(
+    return_code, stdout, stderr = _run_bounded_capture(
         argv,
-        technical_qc_popen_kwargs(descriptor),
+        input_fd=descriptor,
         deadline=deadline,
+        output_limit_bytes=output_limit_bytes,
+        should_cancel=should_cancel,
+        on_late_fatal=on_late_fatal,
     )
-    try:
-        stdout, stderr = process.communicate(timeout=_remaining_seconds(deadline))
-    except subprocess.TimeoutExpired as exc:
-        _terminate_and_reap_process(process)
-        raise TechnicalQcError("TECHNICAL_QC_SCAN_TIMEOUT", retryable=True) from exc
-    if len(stdout) + len(stderr) > output_limit_bytes:
-        raise TechnicalQcError("TECHNICAL_QC_OUTPUT_LIMIT", retryable=True)
-    if process.returncode != 0:
+    if return_code != 0:
         code = classify_technical_qc_ffmpeg_failure(stderr.decode("utf-8", errors="replace"))
         raise TechnicalQcError(code, retryable=code != "TECHNICAL_QC_MEDIA_INVALID")
     try:
@@ -1294,6 +1341,15 @@ def _read_stderr(
     try:
         while chunk := stream.read(16 * 1024):
             state.append(state.stderr, chunk)
+    except Exception:
+        with state.lock:
+            state.read_failed = True
+
+
+def _read_stdout(stream: BinaryIO, state: _BoundedProcessOutput) -> None:
+    try:
+        while chunk := stream.read(16 * 1024):
+            state.append(state.stdout, chunk)
     except Exception:
         with state.lock:
             state.read_failed = True
@@ -1339,6 +1395,128 @@ def _read_progress(
             state.read_failed = True
 
 
+def _run_bounded_capture(
+    argv: list[str],
+    *,
+    input_fd: int,
+    deadline: float,
+    output_limit_bytes: int,
+    should_cancel: Callable[[], bool] | None,
+    on_heartbeat: Callable[[], bool] | None = None,
+    heartbeat_interval_seconds: float = 15.0,
+    on_late_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
+) -> tuple[int, bytes, bytes]:
+    process = _popen_with_deadline(
+        argv,
+        technical_qc_popen_kwargs(input_fd),
+        deadline=deadline,
+        on_late_fatal=on_late_fatal,
+    )
+    if process.stdout is None or process.stderr is None:
+        _terminate_and_reap_process(process)
+        raise TechnicalQcError("TECHNICAL_QC_SCAN_FAILED", retryable=True)
+    state = _BoundedProcessOutput(output_limit_bytes)
+    stdout_thread = threading.Thread(
+        target=_read_stdout,
+        args=(process.stdout, state),
+        daemon=True,
+        name="technical-qc-bounded-stdout",
+    )
+    stderr_thread = threading.Thread(
+        target=_read_stderr,
+        args=(process.stderr, state),
+        daemon=True,
+        name="technical-qc-bounded-stderr",
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    next_heartbeat = time.monotonic() + heartbeat_interval_seconds
+    failure: TechnicalQcError | None = None
+    while process.poll() is None:
+        with state.lock:
+            if state.limit_exceeded:
+                failure = TechnicalQcError("TECHNICAL_QC_OUTPUT_LIMIT", retryable=True)
+            elif state.read_failed:
+                failure = TechnicalQcError("TECHNICAL_QC_SCAN_FAILED", retryable=True)
+        if failure is not None:
+            break
+        try:
+            _check_lifecycle(deadline, should_cancel)
+        except TechnicalQcError as exc:
+            failure = exc
+            break
+        if on_heartbeat is not None and time.monotonic() >= next_heartbeat:
+            try:
+                if on_heartbeat() is not True:
+                    failure = TechnicalQcError("TECHNICAL_QC_LEASE_LOST", retryable=False)
+                    break
+            except TechnicalQcError as exc:
+                failure = exc
+                break
+            except Exception as exc:
+                failure = TechnicalQcError("TECHNICAL_QC_SCAN_FAILED", retryable=True)
+                failure.__cause__ = exc
+                break
+            next_heartbeat = time.monotonic() + heartbeat_interval_seconds
+        time.sleep(PROCESS_POLL_SECONDS)
+    if failure is not None:
+        _terminate_and_reap_process(process)
+    else:
+        try:
+            process.wait(timeout=max(0.05, _remaining_seconds(deadline)))
+        except subprocess.TimeoutExpired as exc:
+            _terminate_and_reap_process(process)
+            failure = TechnicalQcError("TECHNICAL_QC_SCAN_TIMEOUT", retryable=True)
+            failure.__cause__ = exc
+    process.stdout.close()
+    process.stderr.close()
+    stdout_thread.join(timeout=0.1)
+    stderr_thread.join(timeout=0.1)
+    with state.lock:
+        if state.limit_exceeded and failure is None:
+            failure = TechnicalQcError("TECHNICAL_QC_OUTPUT_LIMIT", retryable=True)
+        stdout = bytes(state.stdout)
+        stderr = bytes(state.stderr)
+    if failure is not None:
+        raise failure
+    return int(process.returncode or 0), stdout, stderr
+
+
+def _hash_descriptor_isolated(
+    input_handle: BinaryIO,
+    size: int,
+    *,
+    deadline: float,
+    should_cancel: Callable[[], bool] | None,
+    on_heartbeat: Callable[[], bool] | None,
+    helper_argv: list[str] | None = None,
+    on_late_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
+) -> str:
+    descriptor = input_handle.fileno()
+    argv = helper_argv or [
+        sys.executable,
+        "-m",
+        "backend.app.technical_qc_hash_helper",
+        "--fd",
+        str(descriptor),
+        "--size",
+        str(size),
+    ]
+    return_code, stdout, _stderr = _run_bounded_capture(
+        argv,
+        input_fd=descriptor,
+        deadline=deadline,
+        output_limit_bytes=4_096,
+        should_cancel=should_cancel,
+        on_heartbeat=on_heartbeat,
+        on_late_fatal=on_late_fatal,
+    )
+    digest = stdout.strip().decode("ascii", errors="ignore")
+    if return_code != 0 or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise TechnicalQcError("TECHNICAL_QC_INPUT_IDENTITY_INVALID", retryable=False)
+    return digest
+
+
 def run_technical_qc_ffmpeg(
     claim: TechnicalQcClaim,
     *,
@@ -1353,6 +1531,7 @@ def run_technical_qc_ffmpeg(
     thresholds: TechnicalQcThresholds = DEFAULT_THRESHOLDS,
     probe: TechnicalQcMediaProbe | None = None,
     deadline: float | None = None,
+    on_late_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
 ) -> TechnicalQcScanResult:
     if timeout_seconds <= 0 or output_limit_bytes < 1 or heartbeat_interval_seconds <= 0:
         raise ValueError("technical QC process bounds must be positive")
@@ -1377,6 +1556,7 @@ def run_technical_qc_ffmpeg(
         argv,
         technical_qc_popen_kwargs(descriptor),
         deadline=lifecycle_deadline,
+        on_late_fatal=on_late_fatal,
     )
     if process.stdout is None or process.stderr is None:
         _terminate_and_reap_process(process)
@@ -1541,6 +1721,8 @@ def scan_technical_qc_claim(
     thresholds: TechnicalQcThresholds = DEFAULT_THRESHOLDS,
     on_probe: Callable[[TechnicalQcMediaProbe], None] | None = None,
     sandbox_socket: Path | None = None,
+    hash_helper_argv: list[str] | None = None,
+    on_late_fatal: Callable[[TechnicalQcFatalError], None] | None = None,
 ) -> TechnicalQcScanResult:
     deadline = time.monotonic() + timeout_seconds
     try:
@@ -1576,12 +1758,14 @@ def scan_technical_qc_claim(
                         "TECHNICAL_QC_INPUT_IDENTITY_INVALID",
                         retryable=False,
                     )
-                if _descriptor_sha256(
-                    handle.fileno(),
+                if _hash_descriptor_isolated(
+                    handle,
                     claim.input_size,
                     deadline=deadline,
                     should_cancel=should_cancel,
                     on_heartbeat=on_heartbeat,
+                    helper_argv=hash_helper_argv,
+                    on_late_fatal=on_late_fatal,
                 ) != claim.input_sha256:
                     raise TechnicalQcError(
                         "TECHNICAL_QC_INPUT_IDENTITY_INVALID",
@@ -1611,6 +1795,7 @@ def scan_technical_qc_claim(
                             deadline=deadline,
                             output_limit_bytes=output_limit_bytes,
                             should_cancel=should_cancel,
+                            on_late_fatal=on_late_fatal,
                         )
                         if on_probe is not None:
                             on_probe(probe)
@@ -1626,6 +1811,7 @@ def scan_technical_qc_claim(
                         thresholds=thresholds,
                         probe=probe,
                         deadline=deadline,
+                        on_late_fatal=on_late_fatal,
                     )
                 finished = os.fstat(handle.fileno())
                 if (
@@ -1758,6 +1944,9 @@ def _process_technical_qc_claim(
                 raise TechnicalQcError("TECHNICAL_QC_LEASE_LOST", retryable=False)
             session.commit()
 
+    def mark_fatal(_error: TechnicalQcFatalError) -> None:
+        _WORKER_FATAL.set()
+
     try:
         result = scan_technical_qc_claim(
             claim,
@@ -1766,7 +1955,7 @@ def _process_technical_qc_claim(
             timeout_seconds=settings.technical_qc_timeout_seconds,
             output_limit_bytes=settings.technical_qc_output_limit_bytes,
             on_progress=persist_progress,
-            should_cancel=_WORKER_STOP.is_set,
+            should_cancel=lambda: _WORKER_STOP.is_set() or _WORKER_FATAL.is_set(),
             on_heartbeat=heartbeat,
             thresholds=_settings_thresholds(settings),
             on_probe=persist_probe,
@@ -1775,6 +1964,7 @@ def _process_technical_qc_claim(
                 if getattr(settings, "technical_qc_sandbox_socket", None)
                 else None
             ),
+            on_late_fatal=mark_fatal,
         )
         with _technical_qc_session(runtime_binding) as session:
             persist_technical_qc_findings(session, claim, result.intervals)
@@ -1788,6 +1978,9 @@ def _process_technical_qc_claim(
                 return "skipped"
             session.commit()
         return "complete"
+    except TechnicalQcFatalError:
+        _WORKER_FATAL.set()
+        raise
     except TechnicalQcError as exc:
         with _technical_qc_session(runtime_binding) as session:
             recorded = fail_technical_qc_task(
@@ -1869,6 +2062,11 @@ def process_technical_qc_batch(
                 futures.pop(future, None)
                 try:
                     status = future.result()
+                except TechnicalQcFatalError:
+                    _WORKER_FATAL.set()
+                    for pending in futures:
+                        pending.cancel()
+                    raise
                 except Exception:
                     status = "skipped"
                 counts[status if status in counts else "skipped"] += 1
@@ -1943,6 +2141,7 @@ def run_technical_qc_worker_loop(
     if not 1 <= interval_seconds <= 86_400:
         raise ValueError("technical QC worker interval is outside the supported range")
     _WORKER_STOP.clear()
+    _WORKER_FATAL.clear()
 
     def stop_worker(_signum: int, _frame: Any) -> None:
         _WORKER_STOP.set()
@@ -1963,6 +2162,11 @@ def run_technical_qc_worker_loop(
             pulse.start()
             try:
                 result = process_pending_technical_qc()
+                if _WORKER_FATAL.is_set():
+                    raise TechnicalQcFatalError(
+                        "TECHNICAL_QC_REAP_FAILED",
+                        retryable=False,
+                    )
             finally:
                 pulse_stop.set()
                 pulse.join(timeout=1)

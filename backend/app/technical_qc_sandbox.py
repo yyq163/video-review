@@ -4,6 +4,7 @@ import argparse
 import array
 import fcntl
 import json
+import math
 import os
 import signal
 import socket
@@ -27,12 +28,13 @@ os.environ.setdefault("PACKAGE_ROOT", "/tmp/fj-technical-qc-packages")
 from backend.app.technical_qc import (  # noqa: E402
     DEFAULT_THRESHOLDS,
     QcInterval,
+    REASON_LABELS,
     TechnicalQcClaim,
     TechnicalQcError,
+    TechnicalQcFatalError,
     TechnicalQcMediaProbe,
     TechnicalQcScanResult,
     TechnicalQcThresholds,
-    _descriptor_sha256,
     probe_technical_qc_media,
     run_technical_qc_ffmpeg,
 )
@@ -40,10 +42,38 @@ from backend.app.technical_qc import (  # noqa: E402
 
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_REPLY_BYTES = 16 * 1024 * 1024
+MAX_INTERVALS = 10_000
+MAX_MEDIA_DURATION_MS = 7 * 24 * 60 * 60 * 1_000
 SOCKET_POLL_SECONDS = 0.1
 _STOP = threading.Event()
+_FATAL = threading.Event()
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_CONNECTIONS: set[socket.socket] = set()
+_VALUE_KEYS = frozenset({"pblack", "yavg", "scene_score", "frame_count", "duration_ms"})
+_ERROR_RETRYABILITY = {
+    "TECHNICAL_QC_FILTER_UNAVAILABLE": False,
+    "TECHNICAL_QC_MEDIA_INVALID": False,
+    "TECHNICAL_QC_INPUT_UNREADABLE": False,
+    "TECHNICAL_QC_INPUT_IDENTITY_INVALID": False,
+    "TECHNICAL_QC_PROCESS_UNAVAILABLE": True,
+    "TECHNICAL_QC_SCAN_FAILED": True,
+    "TECHNICAL_QC_SCAN_TIMEOUT": True,
+    "TECHNICAL_QC_OUTPUT_LIMIT": True,
+    "TECHNICAL_QC_SCAN_CANCELLED": False,
+    "TECHNICAL_QC_LEASE_LOST": False,
+    "TECHNICAL_QC_INCOMPLETE_SCAN": True,
+}
+
+
+def _mark_fatal(_error: TechnicalQcFatalError) -> None:
+    _FATAL.set()
+    _STOP.set()
+    with _ACTIVE_LOCK:
+        for connection in tuple(_ACTIVE_CONNECTIONS):
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
 
 def _json_line(payload: dict[str, Any]) -> bytes:
@@ -169,15 +199,6 @@ def _default_handler(
     send_lock = threading.Lock()
     thresholds = TechnicalQcThresholds(**request["thresholds"])
     with os.fdopen(os.dup(descriptor), "rb") as handle:
-        digest = _descriptor_sha256(
-            handle.fileno(),
-            request["input_size"],
-            deadline=deadline,
-            should_cancel=lambda: _STOP.is_set() or _connection_closed(connection),
-            on_heartbeat=None,
-        )
-        if digest != request["input_sha256"]:
-            raise TechnicalQcError("TECHNICAL_QC_INPUT_IDENTITY_INVALID", retryable=False)
         ffmpeg_command = os.environ.get("TECHNICAL_QC_FFMPEG_COMMAND", "/usr/bin/ffmpeg")
         ffprobe_command = os.environ.get("TECHNICAL_QC_FFPROBE_COMMAND", "/usr/bin/ffprobe")
         probe = probe_technical_qc_media(
@@ -186,6 +207,7 @@ def _default_handler(
             deadline=deadline,
             output_limit_bytes=request["output_limit_bytes"],
             should_cancel=lambda: _STOP.is_set() or _connection_closed(connection),
+            on_late_fatal=_mark_fatal,
         )
         _send(
             connection,
@@ -239,6 +261,7 @@ def _default_handler(
             thresholds=thresholds,
             probe=probe,
             deadline=deadline,
+            on_late_fatal=_mark_fatal,
         )
     return {
         "type": "result",
@@ -272,7 +295,7 @@ def _prepare_listener(socket_path: Path) -> socket.socket:
 def serve_once(
     socket_path: Path,
     *,
-    handler: Callable[[dict[str, Any], int], dict[str, Any]],
+    handler: Callable[[dict[str, Any], int], dict[str, Any] | list[dict[str, Any]]],
 ) -> None:
     try:
         with _prepare_listener(socket_path) as listener:
@@ -281,7 +304,8 @@ def serve_once(
                 request, descriptor = _receive_request_and_fd(connection)
                 try:
                     reply = handler(request, descriptor)
-                    connection.sendall(_json_line(reply))
+                    for item in reply if isinstance(reply, list) else [reply]:
+                        connection.sendall(_json_line(item))
                 finally:
                     os.close(descriptor)
     finally:
@@ -297,6 +321,8 @@ def _handle_connection(connection: socket.socket) -> None:
             request, descriptor = _receive_request_and_fd(connection)
             reply = _default_handler(request, descriptor, connection)
             connection.sendall(_json_line(reply))
+        except TechnicalQcFatalError as exc:
+            _mark_fatal(exc)
         except TechnicalQcError as exc:
             try:
                 connection.sendall(
@@ -304,7 +330,6 @@ def _handle_connection(connection: socket.socket) -> None:
                         {
                             "type": "error",
                             "code": exc.code,
-                            "retryable": exc.retryable,
                         },
                     ),
                 )
@@ -321,6 +346,8 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
     if not 1 <= concurrency <= 8:
         raise ValueError("sandbox concurrency is outside the supported range")
     _STOP.clear()
+    _FATAL.clear()
+    status_path = socket_path.with_name("sandbox.status")
 
     def stop(_signum: int, _frame: Any) -> None:
         _STOP.set()
@@ -334,10 +361,12 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
     previous_term = signal.signal(signal.SIGTERM, stop)
     previous_int = signal.signal(signal.SIGINT, stop)
     try:
+        status_path.write_text("starting", encoding="ascii")
         with _prepare_listener(socket_path) as listener, ThreadPoolExecutor(
             max_workers=concurrency,
             thread_name_prefix="technical-qc-sandbox",
         ) as executor:
+            status_path.write_text("ready", encoding="ascii")
             listener.settimeout(SOCKET_POLL_SECONDS)
             while not _STOP.is_set():
                 try:
@@ -345,8 +374,13 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
                 except TimeoutError:
                     continue
                 executor.submit(_handle_connection, connection)
+        if _FATAL.is_set():
+            status_path.write_text("fatal", encoding="ascii")
+            raise SystemExit(70)
     finally:
         socket_path.unlink(missing_ok=True)
+        if not _FATAL.is_set():
+            status_path.write_text("stopped", encoding="ascii")
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
 
@@ -374,7 +408,36 @@ def _threshold_payload(thresholds: TechnicalQcThresholds) -> dict[str, int]:
     }
 
 
-def _parse_interval(payload: Any) -> QcInterval:
+def _validate_probe(
+    message: dict[str, Any],
+    claim: TechnicalQcClaim,
+) -> TechnicalQcMediaProbe:
+    probe = TechnicalQcMediaProbe(
+        int(message["video_frame_count"]),
+        int(message["video_duration_ms"]),
+        int(message["total_ms"]),
+    )
+    maximum_total = min(MAX_MEDIA_DURATION_MS, claim.total_ms + 1_000)
+    minimum_total = max(1, claim.total_ms - 1_000)
+    maximum_frames = max(
+        1,
+        math.ceil(maximum_total * claim.fps_num / (1_000 * claim.fps_den)) + 1,
+    )
+    expected_video_ms = round(
+        probe.video_frame_count * 1_000 * claim.fps_den / claim.fps_num,
+    )
+    frame_tolerance_ms = max(100, math.ceil(2_000 * claim.fps_den / claim.fps_num))
+    if (
+        not minimum_total <= probe.total_ms <= maximum_total
+        or not 1 <= probe.video_frame_count <= maximum_frames
+        or not 1 <= probe.video_duration_ms <= probe.total_ms + frame_tolerance_ms
+        or abs(probe.video_duration_ms - expected_video_ms) > frame_tolerance_ms
+    ):
+        raise ValueError
+    return probe
+
+
+def _parse_interval(payload: Any, probe: TechnicalQcMediaProbe) -> QcInterval:
     expected = {
         "start_frame",
         "end_frame",
@@ -385,7 +448,7 @@ def _parse_interval(payload: Any) -> QcInterval:
     }
     if not isinstance(payload, dict) or set(payload) != expected:
         raise ValueError
-    return QcInterval(
+    interval = QcInterval(
         start_frame=int(payload["start_frame"]),
         end_frame=int(payload["end_frame"]),
         start_ms=int(payload["start_ms"]),
@@ -393,6 +456,33 @@ def _parse_interval(payload: Any) -> QcInterval:
         reason_codes=tuple(str(code) for code in payload["reason_codes"]),
         values=dict(payload["values"]),
     )
+    if (
+        interval.end_frame >= probe.video_frame_count
+        or interval.end_ms > probe.total_ms
+        or len(interval.reason_codes) != len(set(interval.reason_codes))
+        or not set(interval.reason_codes) <= set(REASON_LABELS)
+        or len(interval.values) > len(_VALUE_KEYS)
+        or not set(interval.values) <= _VALUE_KEYS
+    ):
+        raise ValueError
+    for key, value in interval.values.items():
+        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+            raise ValueError
+        if key in {"pblack", "scene_score"} and not 0 <= value <= 100:
+            raise ValueError
+        if key == "yavg" and not 0 <= value <= 255:
+            raise ValueError
+        if key in {"frame_count", "duration_ms"} and value <= 0:
+            raise ValueError
+    if "pblack" in interval.values and "black_frame" not in interval.reason_codes:
+        raise ValueError
+    if "yavg" in interval.values and "white_frame" not in interval.reason_codes:
+        raise ValueError
+    if "scene_score" in interval.values and "short_shot" not in interval.reason_codes:
+        raise ValueError
+    if "duration_ms" in interval.values and "silence" not in interval.reason_codes:
+        raise ValueError
+    return interval
 
 
 def scan_via_sandbox(
@@ -429,6 +519,8 @@ def scan_via_sandbox(
     total_received = 0
     buffer = bytearray()
     next_heartbeat = time.monotonic() + heartbeat_interval_seconds
+    accepted_probe: TechnicalQcMediaProbe | None = None
+    last_progress_ms = -1
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(min(SOCKET_POLL_SECONDS, timeout_seconds))
@@ -451,7 +543,12 @@ def scan_via_sandbox(
                 except TimeoutError:
                     continue
                 if not chunk:
-                    raise TechnicalQcError("TECHNICAL_QC_SANDBOX_UNAVAILABLE", retryable=True)
+                    code = (
+                        "TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID"
+                        if accepted_probe is not None
+                        else "TECHNICAL_QC_SANDBOX_UNAVAILABLE"
+                    )
+                    raise TechnicalQcError(code, retryable=accepted_probe is None)
                 total_received += len(chunk)
                 if total_received > output_limit_bytes:
                     raise TechnicalQcError("TECHNICAL_QC_OUTPUT_LIMIT", retryable=True)
@@ -469,15 +566,16 @@ def scan_via_sandbox(
                     if not isinstance(message, dict):
                         raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
                     kind = message.get("type")
-                    if kind == "error" and set(message) == {"type", "code", "retryable"}:
-                        if not isinstance(message["retryable"], bool):
+                    if kind == "error" and set(message) == {"type", "code"}:
+                        code = str(message["code"])
+                        if code not in _ERROR_RETRYABILITY:
                             raise TechnicalQcError(
                                 "TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID",
                                 retryable=False,
                             )
                         raise TechnicalQcError(
-                            str(message["code"]),
-                            retryable=message["retryable"],
+                            code,
+                            retryable=_ERROR_RETRYABILITY[code],
                         )
                     if message.get("request_id") != request_id:
                         raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
@@ -487,9 +585,16 @@ def scan_via_sandbox(
                         "processed_ms",
                         "total_ms",
                     }:
-                        processed_ms = int(message["processed_ms"])
-                        if processed_ms < 0 or processed_ms > int(message["total_ms"]):
+                        if accepted_probe is None:
                             raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
+                        processed_ms = int(message["processed_ms"])
+                        if (
+                            int(message["total_ms"]) != accepted_probe.total_ms
+                            or processed_ms < last_progress_ms
+                            or processed_ms > accepted_probe.total_ms
+                        ):
+                            raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
+                        last_progress_ms = processed_ms
                         if on_progress is not None:
                             on_progress(processed_ms)
                         continue
@@ -500,13 +605,16 @@ def scan_via_sandbox(
                         "video_duration_ms",
                         "total_ms",
                     }:
-                        probe = TechnicalQcMediaProbe(
-                            int(message["video_frame_count"]),
-                            int(message["video_duration_ms"]),
-                            int(message["total_ms"]),
-                        )
-                        if min(probe.video_frame_count, probe.video_duration_ms, probe.total_ms) <= 0:
+                        if accepted_probe is not None:
                             raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
+                        try:
+                            probe = _validate_probe(message, claim)
+                        except (TypeError, ValueError) as exc:
+                            raise TechnicalQcError(
+                                "TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID",
+                                retryable=False,
+                            ) from exc
+                        accepted_probe = probe
                         if on_probe is not None:
                             on_probe(probe)
                         continue
@@ -522,17 +630,31 @@ def scan_via_sandbox(
                     }
                     if kind != "result" or set(message) != result_fields:
                         raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
-                    result = TechnicalQcScanResult(
-                        intervals=tuple(_parse_interval(item) for item in message["intervals"]),
-                        processed_ms=int(message["processed_ms"]),
-                        frames_processed=int(message["frames_processed"]),
-                        video_frame_count=int(message["video_frame_count"]),
-                        video_duration_ms=int(message["video_duration_ms"]),
-                        total_ms=int(message["total_ms"]),
-                    )
+                    if accepted_probe is None or last_progress_ms < 0:
+                        raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
+                    if not isinstance(message["intervals"], list) or len(message["intervals"]) > MAX_INTERVALS:
+                        raise TechnicalQcError("TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID", retryable=False)
+                    try:
+                        result = TechnicalQcScanResult(
+                            intervals=tuple(_parse_interval(item, accepted_probe) for item in message["intervals"]),
+                            processed_ms=int(message["processed_ms"]),
+                            frames_processed=int(message["frames_processed"]),
+                            video_frame_count=int(message["video_frame_count"]),
+                            video_duration_ms=int(message["video_duration_ms"]),
+                            total_ms=int(message["total_ms"]),
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise TechnicalQcError(
+                            "TECHNICAL_QC_SANDBOX_PROTOCOL_INVALID",
+                            retryable=False,
+                        ) from exc
                     if (
                         result.frames_processed != result.video_frame_count
                         or result.processed_ms != result.total_ms
+                        or result.video_frame_count != accepted_probe.video_frame_count
+                        or result.video_duration_ms != accepted_probe.video_duration_ms
+                        or result.total_ms != accepted_probe.total_ms
+                        or last_progress_ms > result.processed_ms
                         or min(
                             result.frames_processed,
                             result.video_duration_ms,
