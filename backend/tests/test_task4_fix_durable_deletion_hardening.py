@@ -37,6 +37,128 @@ from .test_task1_contract_and_migration import (
 from .test_task4_durable_deletion import _delete_item
 
 
+def _normalize_sqlite_sql(value: object) -> str:
+    return " ".join(str(value or "").lower().split())
+
+
+def _sqlite_task4_schema_inventory(engine: Engine) -> dict[str, Any]:
+    inspector = inspect(engine)
+    tables = (
+        "review_deletion_intents",
+        "review_deletion_artifacts",
+        "issue_revisions",
+        "annotation_sets",
+    )
+    columns = {
+        table_name: tuple(
+            (
+                column["name"],
+                str(column["type"]).lower(),
+                bool(column["nullable"]),
+            )
+            for column in inspector.get_columns(table_name)
+        )
+        for table_name in tables[:2]
+    }
+    checks = {
+        table_name: tuple(
+            sorted(
+                (
+                    str(constraint["name"]),
+                    _normalize_sqlite_sql(constraint["sqltext"]),
+                )
+                for constraint in inspector.get_check_constraints(table_name)
+            ),
+        )
+        for table_name in tables
+    }
+    foreign_keys = {
+        table_name: tuple(
+            sorted(
+                (
+                    str(foreign_key["name"]),
+                    tuple(foreign_key["constrained_columns"]),
+                    str(foreign_key["referred_table"]),
+                    tuple(foreign_key["referred_columns"]),
+                    str(
+                        foreign_key["options"].get("ondelete", ""),
+                    ).upper(),
+                )
+                for foreign_key in inspector.get_foreign_keys(table_name)
+            ),
+        )
+        for table_name in tables[1:]
+    }
+    with engine.connect() as connection:
+        triggers = tuple(
+            sorted(
+                (
+                    table_name,
+                    name,
+                    _normalize_sqlite_sql(sql),
+                )
+                for table_name, name, sql in connection.execute(
+                    text(
+                        "SELECT tbl_name, name, sql FROM sqlite_master "
+                        "WHERE type = 'trigger' AND tbl_name IN ("
+                        "'review_deletion_intents', "
+                        "'review_deletion_artifacts', "
+                        "'issue_revisions', 'annotation_sets')",
+                    ),
+                )
+            ),
+        )
+        foreign_key_violations = tuple(
+            tuple(row)
+            for row in connection.execute(text("PRAGMA foreign_key_check"))
+        )
+    return {
+        "columns": columns,
+        "checks": checks,
+        "foreign_keys": foreign_keys,
+        "triggers": triggers,
+        "foreign_key_violations": foreign_key_violations,
+    }
+
+
+def _install_committed_0023_sqlite_rows(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO review_deletion_intents (
+                  id, command_type, operation_identity_hash, subject_type,
+                  project_ref_id_snapshot, review_item_id_snapshot,
+                  status, attempts, last_error_code, completed_at,
+                  created_at, updated_at
+                ) VALUES (
+                  'delete_c043_legacy', 'DeleteReviewItem', :identity,
+                  'review_item', 'project-c043', 'item-c043', 'pending', 0,
+                  NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                """,
+            ),
+            {"identity": "c" * 64},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO review_deletion_artifacts (
+                  id, deletion_intent_id, artifact_kind,
+                  relative_logical_target, expected_device, expected_inode,
+                  expected_ctime_ns, expected_size, status, attempts,
+                  last_error_code, deleted_at, created_at, updated_at
+                ) VALUES (
+                  'artifact_c043_legacy', 'delete_c043_legacy',
+                  'original_media', 'files/file-c043-legacy', 1, 2, 3, 4,
+                  'pending', 0, NULL, NULL,
+                  CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                """,
+            ),
+        )
+
+
 def _install_c043_0023_sqlite_shape(engine: Engine) -> None:
     with engine.begin() as connection:
         operations = Operations(MigrationContext.configure(connection))
@@ -181,6 +303,123 @@ def test_committed_0023_keeps_task1_schema_and_0024_adds_task4_cleanup_fields(
         assert "expected_sha256" in artifact_columns
     finally:
         engine.dispose()
+
+
+def test_0024_sqlite_committed_and_c043_stamped_shapes_converge_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+
+    def migrate_starting_shape(
+        db_path: Path,
+        *,
+        c043_shape: bool,
+    ) -> tuple[
+        dict[str, Any],
+        tuple[object, ...],
+        tuple[object, ...],
+    ]:
+        _set_migration_env(db_path, tmp_path, monkeypatch)
+        config = _alembic_config(root)
+        alembic_command.upgrade(config, "20260824_0023")
+        engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            if c043_shape:
+                _install_c043_0023_sqlite_shape(engine)
+            else:
+                _install_committed_0023_sqlite_rows(engine)
+        finally:
+            engine.dispose()
+        alembic_command.upgrade(config, "20260824_0024")
+        engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            inventory = _sqlite_task4_schema_inventory(engine)
+            with engine.connect() as connection:
+                intent_row = tuple(
+                    connection.execute(
+                        text(
+                            "SELECT command_type, operation_identity_hash, "
+                            "subject_type, project_ref_id_snapshot, "
+                            "review_item_id_snapshot, status, attempts, "
+                            "last_error_code, cleanup_claim_id, "
+                            "cleanup_claim_expires_at, completed_at "
+                            "FROM review_deletion_intents "
+                            "WHERE id = 'delete_c043_legacy'",
+                        ),
+                    ).one(),
+                )
+                artifact_row = tuple(
+                    connection.execute(
+                        text(
+                            "SELECT artifact_kind, relative_logical_target, "
+                            "expected_device, expected_inode, "
+                            "expected_ctime_ns, expected_size, "
+                            "expected_sha256, status, attempts, "
+                            "last_error_code, deleted_at "
+                            "FROM review_deletion_artifacts "
+                            "WHERE id = 'artifact_c043_legacy'",
+                        ),
+                    ).one(),
+                )
+                assert connection.scalar(
+                    text("SELECT version_num FROM alembic_version"),
+                ) == "20260824_0024"
+            return inventory, intent_row, artifact_row
+        finally:
+            engine.dispose()
+
+    committed_inventory, committed_intent, committed_artifact = (
+        migrate_starting_shape(
+            tmp_path / "task4-parity-committed-0023.db",
+            c043_shape=False,
+        )
+    )
+    c043_inventory, c043_intent, c043_artifact = migrate_starting_shape(
+        tmp_path / "task4-parity-c043-0023.db",
+        c043_shape=True,
+    )
+
+    assert committed_inventory == c043_inventory
+    assert committed_intent == c043_intent == (
+        "DeleteReviewItem",
+        "c" * 64,
+        "review_item",
+        "project-c043",
+        "item-c043",
+        "pending",
+        0,
+        None,
+        None,
+        None,
+        None,
+    )
+    assert committed_artifact[:6] == c043_artifact[:6] == (
+        "original_media",
+        "files/file-c043-legacy",
+        1,
+        2,
+        3,
+        4,
+    )
+    assert committed_artifact[6] is None
+    assert c043_artifact[6] == hashlib.sha256(
+        b"c043 legacy artifact",
+    ).hexdigest()
+    assert committed_artifact[7:] == c043_artifact[7:] == (
+        "pending",
+        0,
+        None,
+        None,
+    )
+    intent_checks = {
+        name
+        for name, _sql in committed_inventory["checks"][
+            "review_deletion_intents"
+        ]
+    }
+    assert "ck_review_deletion_intents_cleanup_claim" not in intent_checks
+    assert committed_inventory["foreign_key_violations"] == ()
 
 
 def test_0024_reconciles_c043_0023_sqlite_shape_without_losing_rows(

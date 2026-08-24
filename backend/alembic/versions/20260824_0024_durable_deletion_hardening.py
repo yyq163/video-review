@@ -34,6 +34,7 @@ ISSUE_IDENTITY_COLUMNS = ["id", "project_ref_id", "review_item_id", "version_id"
 INTENT_CLAIM_CHECK = "ck_review_deletion_intents_cleanup_claim"
 ARTIFACT_SHA_CHECK = "ck_review_deletion_artifacts_sha256"
 ARTIFACT_NAMESPACE_CHECK = "ck_review_deletion_artifacts_kind_namespace"
+ARTIFACT_INTENT_FOREIGN_KEY = "fk_review_deletion_artifacts_intent"
 
 
 def _recreate_mode() -> str:
@@ -266,6 +267,44 @@ def _drop_intent_claim_guard() -> None:
     )
 
 
+def _drop_sqlite_legacy_intent_claim_check(
+    intent_checks: set[str | None],
+) -> bool:
+    if (
+        op.get_bind().dialect.name != "sqlite"
+        or INTENT_CLAIM_CHECK not in intent_checks
+    ):
+        return False
+    artifact_foreign_keys = sa.inspect(op.get_bind()).get_foreign_keys(
+        "review_deletion_artifacts",
+    )
+    intent_foreign_key = next(
+        (
+            foreign_key
+            for foreign_key in artifact_foreign_keys
+            if foreign_key.get("name") == ARTIFACT_INTENT_FOREIGN_KEY
+        ),
+        None,
+    )
+    with op.batch_alter_table(
+        "review_deletion_artifacts",
+        recreate="always",
+    ) as batch_op:
+        if intent_foreign_key is not None:
+            batch_op.drop_constraint(
+                ARTIFACT_INTENT_FOREIGN_KEY,
+                type_="foreignkey",
+            )
+    for table_name in ("issue_revisions", "annotation_sets"):
+        op.execute(f"DROP TRIGGER IF EXISTS trg_{table_name}_no_delete")
+    with op.batch_alter_table(
+        "review_deletion_intents",
+        recreate="always",
+    ) as batch_op:
+        batch_op.drop_constraint(INTENT_CLAIM_CHECK, type_="check")
+    return True
+
+
 def upgrade() -> None:
     intent_columns = {
         column["name"]
@@ -293,6 +332,9 @@ def upgrade() -> None:
             "review_deletion_intents",
         )
     }
+    restore_artifact_intent_foreign_key = (
+        _drop_sqlite_legacy_intent_claim_check(intent_checks)
+    )
     if (
         INTENT_CLAIM_CHECK in intent_checks
         and op.get_bind().dialect.name != "sqlite"
@@ -347,6 +389,14 @@ def upgrade() -> None:
             "('original_media','playback_derivative','thumbnail') "
             "AND relative_logical_target LIKE 'files/%')",
         )
+        if restore_artifact_intent_foreign_key:
+            batch_op.create_foreign_key(
+                ARTIFACT_INTENT_FOREIGN_KEY,
+                "review_deletion_intents",
+                ["deletion_intent_id"],
+                ["id"],
+                ondelete="RESTRICT",
+            )
 
     _drop_sqlite_child_rebuild_dependencies()
     _replace_issue_child_foreign_keys("CASCADE")
