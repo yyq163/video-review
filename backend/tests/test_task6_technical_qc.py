@@ -948,7 +948,7 @@ def test_real_ffmpeg_filters_detect_single_black_and_white_frames_without_audio(
     assert "white_frame" in reasons
 
 
-def test_technical_qc_subprocess_boundary_is_shell_free_fd_pinned_and_resource_limited(
+def test_technical_qc_subprocess_boundary_is_shell_free_and_fd_pinned_without_preexec(
     tmp_path: Path,
 ) -> None:
     qc = _technical_qc()
@@ -967,7 +967,7 @@ def test_technical_qc_subprocess_boundary_is_shell_free_fd_pinned_and_resource_l
     assert kwargs["stderr"] is subprocess.PIPE
     assert kwargs["text"] is False
     assert kwargs["env"] == {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C"}
-    assert callable(kwargs["preexec_fn"])
+    assert "preexec_fn" not in kwargs
 
 
 def test_scan_rejects_symlink_and_detects_path_replacement_after_pin(

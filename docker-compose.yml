@@ -443,6 +443,8 @@ services:
     mem_limit: 8g
     pids_limit: 256
     restart: unless-stopped
+    entrypoint: []
+    user: "10001:10001"
     command:
       - python
       - -m
@@ -462,10 +464,12 @@ services:
       STORAGE_ROOT: /data/storage
       PACKAGE_ROOT: /data/packages
       TECHNICAL_QC_FFMPEG_COMMAND: /usr/bin/ffmpeg
+      TECHNICAL_QC_SANDBOX_SOCKET: /run/fj-technical-qc/sandbox.sock
       TECHNICAL_QC_TIMEOUT_SECONDS: ${TECHNICAL_QC_TIMEOUT_SECONDS:-7200}
       TECHNICAL_QC_OUTPUT_LIMIT_BYTES: ${TECHNICAL_QC_OUTPUT_LIMIT_BYTES:-8388608}
       TECHNICAL_QC_WORKER_CONCURRENCY: ${TECHNICAL_QC_WORKER_CONCURRENCY:-4}
       TECHNICAL_QC_PER_PROJECT_CONCURRENCY: ${TECHNICAL_QC_PER_PROJECT_CONCURRENCY:-2}
+      TECHNICAL_QC_CYCLE_MAX_TASKS: ${TECHNICAL_QC_CYCLE_MAX_TASKS:-64}
       TECHNICAL_QC_LEASE_SECONDS: ${TECHNICAL_QC_LEASE_SECONDS:-900}
       TECHNICAL_QC_WORKER_MAX_ATTEMPTS: ${TECHNICAL_QC_WORKER_MAX_ATTEMPTS:-3}
       TECHNICAL_QC_WORKER_RETRY_DELAY_SECONDS: ${TECHNICAL_QC_WORKER_RETRY_DELAY_SECONDS:-30}
@@ -481,11 +485,11 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      technical-qc-sandbox:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
-        - gosu
-        - app
         - python
         - -c
         - >-
@@ -504,16 +508,71 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - CHOWN
-      - DAC_READ_SEARCH
-      - SETGID
-      - SETUID
     volumes:
-      - fj-final-cut-review-data:/data
-      - fj-final-cut-review-runtime-state:/var/lib/fj-runtime-state
+      - fj-final-cut-review-data:/data:ro
+      - fj-technical-qc-ipc:/run/fj-technical-qc
     networks:
       app-internal: {}
+
+  technical-qc-sandbox:
+    image: ${BACKEND_IMAGE:-fj-final-cut-review-backend:local}
+    cpus: 8.0
+    mem_limit: 8g
+    pids_limit: 256
+    restart: unless-stopped
+    entrypoint: []
+    user: "10001:10001"
+    command:
+      - python
+      - -m
+      - backend.app.technical_qc_sandbox
+      - --socket-path
+      - /run/fj-technical-qc/sandbox.sock
+      - --concurrency
+      - ${TECHNICAL_QC_WORKER_CONCURRENCY:-4}
+    environment:
+      DATABASE_URL: "sqlite:///:memory:"
+      ALLOW_SQLITE_FOR_TESTS: "true"
+      STORAGE_ROOT: /tmp/fj-technical-qc-storage
+      PACKAGE_ROOT: /tmp/fj-technical-qc-packages
+      TECHNICAL_QC_FFMPEG_COMMAND: /usr/bin/ffmpeg
+      TECHNICAL_QC_FFPROBE_COMMAND: /usr/bin/ffprobe
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import stat; from pathlib import Path;
+          p=Path('/run/fj-technical-qc/sandbox.sock');
+          raise SystemExit(0 if p.exists() and stat.S_ISSOCK(p.stat().st_mode) else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+      nofile:
+        soft: 64
+        hard: 64
+      fsize:
+        soft: 16777216
+        hard: 16777216
+      cpu:
+        soft: 7200
+        hard: 7200
+    volumes:
+      - fj-technical-qc-ipc:/run/fj-technical-qc
 
   nginx:
     image: nginx:1.31.3-alpine3.24@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
@@ -678,6 +737,8 @@ volumes:
     name: ${DATA_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-data}
   fj-final-cut-review-runtime-state:
     name: ${RUNTIME_STATE_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-runtime-state}
+  fj-technical-qc-ipc:
+    name: ${TECHNICAL_QC_IPC_VOLUME_NAME:-fj-final-cut-review_fj-technical-qc-ipc}
   fj-final-cut-review-prometheus:
     name: ${PROMETHEUS_VOLUME_NAME:-fj-final-cut-review_fj-final-cut-review-prometheus}
 

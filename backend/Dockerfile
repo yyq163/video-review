@@ -177,10 +177,10 @@ COPY contracts contracts
 
 RUN groupadd --system --gid "${APP_GID}" app \
     && useradd --system --uid "${APP_UID}" --gid app --home-dir /app --no-create-home app \
-    && mkdir -p /app/backend/.data /data /var/lib/fj-runtime-state \
+    && mkdir -p /app/backend/.data /data /var/lib/fj-runtime-state /run/fj-technical-qc \
     && chown root:root /var/lib/fj-runtime-state \
     && chmod 0755 /var/lib/fj-runtime-state \
-    && chown -R app:app /app /data
+    && chown -R app:app /app /data /run/fj-technical-qc
 
 ENTRYPOINT ["sh", "backend/docker-entrypoint.sh"]
 

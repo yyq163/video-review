@@ -316,11 +316,11 @@ fingerprint() {
 }
 
 assert_four_services_healthy() {
-    compose ps --format json postgres backend maintenance package-worker media-worker technical-qc-worker nginx | python3 -c '
+    compose ps --format json postgres backend maintenance package-worker media-worker technical-qc-worker technical-qc-sandbox nginx | python3 -c '
 import json
 import sys
 
-expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "technical-qc-worker", "nginx"}
+expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "technical-qc-worker", "technical-qc-sandbox", "nginx"}
 payload = sys.stdin.read().strip()
 if not payload:
     raise SystemExit("Compose returned no service health records")

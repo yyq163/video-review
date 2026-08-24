@@ -523,6 +523,13 @@ class TechnicalQcTaskModel(Base):
     __tablename__ = "technical_qc_tasks"
     __table_args__ = (
         UniqueConstraint("version_id", name="uq_technical_qc_tasks_version"),
+        UniqueConstraint(
+            "id",
+            "project_ref_id",
+            "review_item_id",
+            "version_id",
+            name="uq_technical_qc_tasks_identity",
+        ),
         ForeignKeyConstraint(
             ["version_id", "project_ref_id", "review_item_id"],
             ["review_versions.id", "review_versions.project_ref_id", "review_versions.review_item_id"],
@@ -558,6 +565,11 @@ class TechnicalQcTaskModel(Base):
             "OR (status != 'complete' AND completed_at IS NULL)",
             name="ck_technical_qc_tasks_completed",
         ),
+        CheckConstraint(
+            "(video_frame_count IS NULL AND video_duration_ms IS NULL AND container_duration_ms IS NULL) "
+            "OR (video_frame_count > 0 AND video_duration_ms > 0 AND container_duration_ms > 0)",
+            name="ck_technical_qc_tasks_probe_facts",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -570,6 +582,9 @@ class TechnicalQcTaskModel(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processed_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     total_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    video_frame_count: Mapped[int | None] = mapped_column(BigInteger)
+    video_duration_ms: Mapped[int | None] = mapped_column(BigInteger)
+    container_duration_ms: Mapped[int | None] = mapped_column(BigInteger)
     error_code: Mapped[str | None] = mapped_column(String(64))
     rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -589,6 +604,13 @@ Index(
     TechnicalQcTaskModel.id,
 )
 Index(
+    "uq_technical_qc_tasks_running_item",
+    TechnicalQcTaskModel.review_item_id,
+    unique=True,
+    sqlite_where=TechnicalQcTaskModel.status == "running",
+    postgresql_where=TechnicalQcTaskModel.status == "running",
+)
+Index(
     "ix_technical_qc_tasks_project_running",
     TechnicalQcTaskModel.project_ref_id,
     TechnicalQcTaskModel.status,
@@ -602,9 +624,14 @@ class TechnicalQcFindingModel(Base):
     __table_args__ = (
         UniqueConstraint("identity_hash", name="uq_technical_qc_findings_identity"),
         ForeignKeyConstraint(
-            ["task_id"],
-            ["technical_qc_tasks.id"],
-            name="fk_technical_qc_findings_task",
+            ["task_id", "project_ref_id", "review_item_id", "version_id"],
+            [
+                "technical_qc_tasks.id",
+                "technical_qc_tasks.project_ref_id",
+                "technical_qc_tasks.review_item_id",
+                "technical_qc_tasks.version_id",
+            ],
+            name="fk_technical_qc_findings_task_identity",
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
@@ -614,10 +641,15 @@ class TechnicalQcFindingModel(Base):
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
-            ["issue_id"],
-            ["review_issues.id"],
-            name="fk_technical_qc_findings_issue",
-            ondelete="SET NULL",
+            ["issue_id", "project_ref_id", "review_item_id", "version_id"],
+            [
+                "review_issues.id",
+                "review_issues.project_ref_id",
+                "review_issues.review_item_id",
+                "review_issues.version_id",
+            ],
+            name="fk_technical_qc_findings_issue_identity",
+            ondelete="CASCADE",
         ),
         CheckConstraint("length(identity_hash) = 64", name="ck_technical_qc_findings_identity"),
         CheckConstraint(

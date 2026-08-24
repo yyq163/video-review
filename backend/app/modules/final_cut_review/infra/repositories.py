@@ -4060,6 +4060,7 @@ class SqlAlchemyReviewRepository:
             .where(
                 TechnicalQcTaskModel.project_ref_id == project_ref_id,
                 TechnicalQcTaskModel.status == "running",
+                TechnicalQcTaskModel.lease_expires_at > utcnow(),
             )
             .order_by(
                 case((ReviewItemModel.episode_no.is_(None), 1), else_=0),

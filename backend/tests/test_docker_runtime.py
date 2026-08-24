@@ -223,7 +223,8 @@ def test_technical_qc_worker_is_a_dedicated_bounded_unprivileged_service() -> No
     assert worker["cap_drop"] == ["ALL"]
     assert "privileged" not in worker
     assert "devices" not in worker
-    assert "fj-final-cut-review-data:/data" in worker["volumes"]
+    assert "fj-final-cut-review-data:/data:ro" in worker["volumes"]
+    assert "fj-technical-qc-ipc:/run/fj-technical-qc" in worker["volumes"]
     assert worker["depends_on"]["backend"]["condition"] == "service_healthy"
 
     delivery = (root / "docker-compose.delivery.yml").read_text(encoding="utf-8")
@@ -460,8 +461,8 @@ def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:
     assert script.index("stop_writers\nbefore=$(database_snapshot)") < script.index("before=$(database_snapshot)")
     assert script.count("stop_writers\nafter_") == 2
     assert "compose stop backend maintenance package-worker media-worker technical-qc-worker" in script
-    assert "compose ps --format json postgres backend maintenance package-worker media-worker technical-qc-worker nginx" in script
-    assert 'expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "technical-qc-worker", "nginx"}' in script
+    assert "compose ps --format json postgres backend maintenance package-worker media-worker technical-qc-worker technical-qc-sandbox nginx" in script
+    assert 'expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "technical-qc-worker", "technical-qc-sandbox", "nginx"}' in script
     assert script.count("restore_four_services") >= 4
     restore_block = script[script.index("restore_four_services()") : script.index(
         "restart_four_services_in_dependency_order()"
@@ -550,7 +551,7 @@ def test_fixed_docker_runtime_gate_covers_delivery_lifecycle() -> None:
     assert positions == sorted(positions)
     assert "down -v" not in script
     assert 'sh "$script_dir/compose-delivery.sh" "$@"' in script
-    assert 'expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "technical-qc-worker", "nginx"}' in script
+    assert 'expected = {"postgres", "backend", "maintenance", "package-worker", "media-worker", "technical-qc-worker", "technical-qc-sandbox", "nginx"}' in script
     assert 're.fullmatch(r"(?:sha256:)?([0-9a-f]{64})", image_id)' in script
     assert 'docker image inspect "$image_id"' in script
     assert 'docker container inspect "$1"' in script
@@ -574,7 +575,7 @@ printf '%s\\n' "$*" >> "$FAKE_COMPOSE_LOG"
 if [ "${1:-}" = ps ] && [ "${2:-}" = -q ]; then
     printf '%s-container\n' "${3:-unknown}"
 elif [ "${1:-}" = ps ]; then
-    printf '%s\\n' '[{"Service":"postgres","State":"running","Health":"healthy"},{"Service":"backend","State":"running","Health":"healthy"},{"Service":"maintenance","State":"running","Health":"healthy"},{"Service":"package-worker","State":"running","Health":"healthy"},{"Service":"media-worker","State":"running","Health":"healthy"},{"Service":"technical-qc-worker","State":"running","Health":"healthy"},{"Service":"nginx","State":"running","Health":"healthy"}]'
+    printf '%s\\n' '[{"Service":"postgres","State":"running","Health":"healthy"},{"Service":"backend","State":"running","Health":"healthy"},{"Service":"maintenance","State":"running","Health":"healthy"},{"Service":"package-worker","State":"running","Health":"healthy"},{"Service":"media-worker","State":"running","Health":"healthy"},{"Service":"technical-qc-worker","State":"running","Health":"healthy"},{"Service":"technical-qc-sandbox","State":"running","Health":"healthy"},{"Service":"nginx","State":"running","Health":"healthy"}]'
 elif [ "${1:-}" = images ] && [ "${2:-}" = -q ]; then
     printf 'a%.0s' $(seq 1 64)
     printf '\\n'
@@ -1305,8 +1306,16 @@ def test_delivery_overlay_constructs_digest_only_image_reference() -> None:
     root = Path(__file__).resolve().parents[2]
     overlay = (root / "docker-compose.delivery.yml").read_text(encoding="utf-8")
     expected = "${BACKEND_IMAGE_REPOSITORY:?BACKEND_IMAGE_REPOSITORY is required}@sha256:${BACKEND_IMAGE_DIGEST:?BACKEND_IMAGE_DIGEST is required}"
-    assert overlay.count(expected) == 6
-    for service_name in ("migrate", "backend", "maintenance", "package-worker", "media-worker", "technical-qc-worker"):
+    assert overlay.count(expected) == 7
+    for service_name in (
+        "migrate",
+        "backend",
+        "maintenance",
+        "package-worker",
+        "media-worker",
+        "technical-qc-worker",
+        "technical-qc-sandbox",
+    ):
         assert f"  {service_name}:\n    image: {expected}\n    build: !reset null" in overlay
     persistence = (root / "scripts/verify-compose-persistence.sh").read_text(encoding="utf-8")
     assert "sh scripts/compose-delivery.sh" in persistence
