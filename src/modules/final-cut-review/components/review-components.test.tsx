@@ -1517,23 +1517,39 @@ describe('ProjectDetailPage archive workflow', () => {
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
 
-  it('aborts an active V1 media probe when the centered upload modal closes', async () => {
+  it('aborts active and queued V1 media probes when the centered upload modal closes', async () => {
     const runtimeResult = renderProjectDetail('/edit/projects/prj_seed_final_cut');
-    let probeSignal: AbortSignal | undefined;
-    vi.spyOn(runtimeResult.runtime.mediaMetadata, 'probe').mockImplementation((_blob, options) => {
-      probeSignal = options?.signal;
-      return new Promise<MediaMetadata>(() => undefined);
+    const probeSignals: AbortSignal[] = [];
+    const resolveProbes: Array<(metadata: MediaMetadata) => void> = [];
+    const probe = vi.spyOn(runtimeResult.runtime.mediaMetadata, 'probe').mockImplementation((_blob, options) => {
+      if (!options?.signal) throw new Error('missing V1 probe signal');
+      probeSignals.push(options.signal);
+      return new Promise<MediaMetadata>((resolve) => resolveProbes.push(resolve));
     });
 
     await screen.findByRole('heading', { name: /真千金是男的/ });
     const dialog = await openV1UploadModal();
     await userEvent.upload(
       within(dialog).getByTestId('create-item-file'),
-      new File(['v1'], '第99集.mp4', { type: 'video/mp4' }),
+      Array.from({ length: 5 }, (_, index) =>
+        new File([`v1-${index}`], `第${90 + index}集.mp4`, { type: 'video/mp4' })),
     );
-    expect(probeSignal?.aborted).toBe(false);
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    expect(probeSignals.every((signal) => !signal.aborted)).toBe(true);
     await userEvent.click(within(dialog).getByRole('button', { name: '关闭创建成片并上传 V1' }));
-    expect(probeSignal?.aborted).toBe(true);
+    expect(probeSignals.every((signal) => signal.aborted)).toBe(true);
+    act(() => resolveProbes.forEach((resolve) => resolve({
+      durationMs: 60_000,
+      width: 1920,
+      height: 1080,
+      bitrateBps: 8_000_000,
+      fpsNum: 25,
+      fpsDen: 1,
+      isVariableFrameRate: false,
+      probeVersion: 'mediainfo.js-0.3.7',
+    })));
+    await Promise.resolve();
+    expect(probe).toHaveBeenCalledTimes(2);
 
     cleanupRuntime(runtimeResult.runtime, runtimeResult.queryClient);
   });
@@ -2154,6 +2170,123 @@ describe('AppendVersionPanel component', () => {
     expect(screen.getByTestId('upload-row-99')).toHaveTextContent('排队中 · 尚未创建上传会话');
   });
 
+  it('bounds deferred V1 media probes while abort and failure release slots for other rows', async () => {
+    const metadata: MediaMetadata = {
+      durationMs: 60_000,
+      width: 1920,
+      height: 1080,
+      bitrateBps: 8_000_000,
+      fpsNum: 25,
+      fpsDen: 1,
+      isVariableFrameRate: false,
+      probeVersion: 'mediainfo.js-0.3.7',
+    };
+    const pending = new Map<string, {
+      resolve(): void;
+      reject(error: Error): void;
+    }>();
+    let active = 0;
+    let peakActive = 0;
+    const probe = vi.fn((blob: Blob, options?: { signal?: AbortSignal }) => {
+      const fileName = (blob as File).name;
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      return new Promise<MediaMetadata>((resolve, reject) => {
+        let settled = false;
+        const finish = (callback: () => void) => {
+          if (settled) return;
+          settled = true;
+          active -= 1;
+          callback();
+        };
+        pending.set(fileName, {
+          resolve: () => finish(() => resolve(metadata)),
+          reject: (error) => finish(() => reject(error)),
+        });
+        options?.signal?.addEventListener('abort', () => {
+          finish(() => reject(new DOMException('probe aborted', 'AbortError')));
+        }, { once: true });
+      });
+    });
+    render(
+      <CreateItemUploadPanel
+        mediaMetadata={{ probe }}
+        onSubmit={vi.fn()}
+        projectFrameRate={{ fpsNum: 25, fpsDen: 1 }}
+        responsibleEditors={[
+          { responsibleEditorId: 'editor-a', displayName: '剪辑师甲', lockVersion: 1, createdAt: '', updatedAt: '' },
+        ]}
+      />,
+    );
+
+    await userEvent.upload(
+      screen.getByTestId('create-item-file'),
+      Array.from({ length: 5 }, (_, index) =>
+        new File([String(index)], `第${index + 1}集.mp4`, { type: 'video/mp4' })),
+    );
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    expect(peakActive).toBeLessThanOrEqual(2);
+
+    await userEvent.click(
+      within(screen.getByTestId('upload-row-0')).getByRole('button', { name: /移除待上传条目/ }),
+    );
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
+    act(() => pending.get('第2集.mp4')?.reject(new Error('不允许可变帧率视频')));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(4));
+    act(() => pending.get('第3集.mp4')?.resolve());
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(5));
+    act(() => {
+      pending.get('第4集.mp4')?.resolve();
+      pending.get('第5集.mp4')?.resolve();
+    });
+
+    await waitFor(() => expect(screen.getByTestId('upload-row-1')).toHaveClass('is-media-invalid'));
+    expect(screen.getByTestId('upload-row-2')).not.toHaveClass('is-media-invalid');
+    expect(screen.getByTestId('upload-row-3')).not.toHaveClass('is-media-invalid');
+    expect(screen.getByTestId('upload-row-4')).not.toHaveClass('is-media-invalid');
+    expect(peakActive).toBeLessThanOrEqual(2);
+  });
+
+  it('aborts queued and active V1 probe controllers on unmount without starting queued work', async () => {
+    const NativeAbortController = globalThis.AbortController;
+    const createdControllers: AbortController[] = [];
+    vi.stubGlobal('AbortController', class extends NativeAbortController {
+      constructor() {
+        super();
+        createdControllers.push(this);
+      }
+    });
+    const probe = vi.fn(() => new Promise<MediaMetadata>(() => undefined));
+    const result = render(
+      <CreateItemUploadPanel
+        mediaMetadata={{ probe }}
+        onSubmit={vi.fn()}
+        projectFrameRate={{ fpsNum: 25, fpsDen: 1 }}
+      />,
+    );
+    try {
+      const controllerCountBeforeSelection = createdControllers.length;
+      fireEvent.change(screen.getByTestId('create-item-file'), {
+        target: {
+          files: Array.from({ length: 5 }, (_, index) =>
+            new File([String(index)], `第${index + 1}集.mp4`, { type: 'video/mp4' })),
+        },
+      });
+      const rowControllers = createdControllers.slice(controllerCountBeforeSelection);
+      expect(rowControllers).toHaveLength(5);
+      await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+
+      result.unmount();
+
+      expect(rowControllers.every((controller) => controller.signal.aborted)).toBe(true);
+      await Promise.resolve();
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      result.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('grays a media-preflight rejection while allowing valid rows to continue', async () => {
     const onSubmit = vi.fn().mockResolvedValue({ outcome: 'success' });
     const validMetadata = {
@@ -2565,6 +2698,8 @@ describe('ReviewWorkspacePage issue playback', () => {
         }),
         versionNote: 'V3 stale detail regression',
         changeSummary: '验证 workspace 比项目详情更新时的剧集卡片。',
+        responsibleEditorId: 'editor_seed',
+        responsibleEditorNameSnapshot: '剪辑师甲',
       },
       editApi.entryPolicy.createContext('edit'),
     );
@@ -2641,6 +2776,8 @@ describe('ReviewWorkspacePage issue playback', () => {
         file: new File(['episode-29-current'], '第29集当前版本原文件.mp4', {
           type: 'video/mp4',
         }),
+        responsibleEditorId: 'editor_seed',
+        responsibleEditorNameSnapshot: '剪辑师甲',
       },
       editApi.entryPolicy.createContext('edit'),
     );

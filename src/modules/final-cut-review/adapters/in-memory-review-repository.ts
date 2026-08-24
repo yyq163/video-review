@@ -48,6 +48,7 @@ export class InMemoryReviewRepository {
   readonly appendVersion: InMemoryReviewItems['appendVersion'];
   readonly startReview: InMemoryReviewItems['startReview'];
   readonly ensureAppendVersionWritable: InMemoryReviewItems['ensureAppendVersionWritable'];
+  readonly requireResponsibleEditor: InMemoryReviewItems['requireResponsibleEditor'];
   readonly createIssue: InMemoryReviewIssues['createIssue'];
   readonly editIssue: InMemoryReviewIssues['editIssue'];
   readonly replyToIssue: InMemoryReviewIssues['replyToIssue'];
@@ -101,6 +102,7 @@ export class InMemoryReviewRepository {
     this.appendVersion = items.appendVersion;
     this.startReview = items.startReview;
     this.ensureAppendVersionWritable = items.ensureAppendVersionWritable;
+    this.requireResponsibleEditor = items.requireResponsibleEditor;
     this.createIssue = issues.createIssue;
     this.editIssue = issues.editIssue;
     this.replyToIssue = issues.replyToIssue;

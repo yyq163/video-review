@@ -50,6 +50,11 @@ const HTTP_UPLOAD_BINDING = {
   },
 };
 
+const MOCK_UPLOAD_EDITOR_BINDING = {
+  responsibleEditorId: 'editor_seed',
+  responsibleEditorNameSnapshot: '剪辑师甲',
+};
+
 type BinaryUploadResponder = (url: string, init: RequestInit) => Promise<Response>;
 type BinaryUploadXhrListener = (event: Event) => void;
 
@@ -167,6 +172,7 @@ it('restores mock repository state from a snapshot and relinks uploaded original
     title: '第一集',
     episode: '01',
     file,
+    ...MOCK_UPLOAD_EDITOR_BINDING,
   });
 
   const restored = new InMemoryReviewRepository(repository.snapshot());
@@ -2026,6 +2032,89 @@ describe('browser host bridge', () => {
 });
 
 describe('final cut review core invariants', () => {
+  it('rejects missing and unknown version editors in the mock adapter before storing V1 or append files', async () => {
+    const editorCases = [
+      { responsibleEditorId: '   ', errorCode: 'VALIDATION_ERROR' },
+      { responsibleEditorId: 'editor_missing', errorCode: 'RESOURCE_NOT_FOUND' },
+    ] as const;
+    for (const operation of ['create', 'append'] as const) {
+      for (const editorCase of editorCases) {
+        const { edit, repository, storage } = makeHarness();
+        const beforeSnapshot = repository.snapshot();
+        const storeOriginal = vi.spyOn(storage, 'storeOriginal');
+        const editorBinding = {
+          responsibleEditorId: editorCase.responsibleEditorId,
+          responsibleEditorNameSnapshot: '不得代替 editor id',
+          localProbe: HTTP_UPLOAD_BINDING.localProbe,
+        };
+        const result = operation === 'create'
+          ? edit.createReviewItemWithVersion(
+              {
+                projectRefId: 'prj_seed_final_cut',
+                title: '缺失责任剪辑师 V1',
+                episode: '99',
+                file: demoFile(`invalid-editor-${operation}.mp4`),
+                ...editorBinding,
+              },
+              ctx(edit),
+            )
+          : edit.appendVersion(
+              {
+                projectRefId: 'prj_seed_final_cut',
+                reviewItemId: 'item_ep28',
+                file: demoFile(`invalid-editor-${operation}.mp4`),
+                versionNote: '',
+                changeSummary: '',
+                ...editorBinding,
+              },
+              ctx(edit),
+            );
+
+        await expect(result).rejects.toMatchObject({ code: editorCase.errorCode });
+        expect(storeOriginal).not.toHaveBeenCalled();
+        expect(repository.snapshot()).toEqual(beforeSnapshot);
+      }
+    }
+  });
+
+  it('rejects missing and unknown version editors in the in-memory repository before item or version writes', async () => {
+    const editorCases = [
+      { responsibleEditorId: '', errorCode: 'VALIDATION_ERROR' },
+      { responsibleEditorId: 'editor_missing', errorCode: 'RESOURCE_NOT_FOUND' },
+    ] as const;
+    for (const operation of ['create', 'append'] as const) {
+      for (const editorCase of editorCases) {
+        const seed = createSeedData();
+        const repository = new InMemoryReviewRepository(seed);
+        const beforeSnapshot = repository.snapshot();
+        const editorBinding = {
+          responsibleEditorId: editorCase.responsibleEditorId,
+          responsibleEditorNameSnapshot: '不得代替 editor id',
+          localProbe: HTTP_UPLOAD_BINDING.localProbe,
+        };
+        const result = operation === 'create'
+          ? repository.createReviewItemWithVersion({
+              projectRefId: 'prj_seed_final_cut',
+              title: '绕过 UI 的 V1',
+              episode: '99',
+              file: seed.files[0],
+              ...editorBinding,
+            })
+          : repository.appendVersion({
+              projectRefId: 'prj_seed_final_cut',
+              reviewItemId: 'item_ep28',
+              file: seed.files[0],
+              versionNote: '',
+              changeSummary: '',
+              ...editorBinding,
+            });
+
+        await expect(result).rejects.toMatchObject({ code: editorCase.errorCode });
+        expect(repository.snapshot()).toEqual(beforeSnapshot);
+      }
+    }
+  });
+
   it('keeps issue numbers monotonically increasing across all versions of one review item', async () => {
     const { review } = makeHarness();
     const workspace = await review.getWorkspace({ projectRefId: 'prj_seed_final_cut', reviewItemId: 'item_ep28' });
@@ -2258,6 +2347,7 @@ describe('final cut review core invariants', () => {
           title: '恢复后新成片',
           episode: '30',
           file: demoFile('restored-v1.mp4'),
+          ...MOCK_UPLOAD_EDITOR_BINDING,
         },
         ctx(edit),
       ),
@@ -2393,6 +2483,7 @@ describe('final cut review core invariants', () => {
         title: '待确认删除分集',
         episode: '1',
         file: demoFile('confirm-delete.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2428,6 +2519,7 @@ describe('final cut review core invariants', () => {
         file: demoFile('EP28-V3.mp4'),
         versionNote: 'V3 版本说明',
         changeSummary: '完成 V2 审阅意见修改。',
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2476,6 +2568,7 @@ describe('final cut review core invariants', () => {
         title: '新成片',
         episode: '02',
         file: demoFile('new-v1.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2529,6 +2622,7 @@ describe('final cut review core invariants', () => {
         projectRefId: project.projectRefId,
         reviewItemId: created.item.reviewItemId,
         file: demoFile('new-v2.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2703,6 +2797,7 @@ describe('final cut review core invariants', () => {
         title: '其他成片',
         episode: '01',
         file: demoFile('other-v1.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2756,6 +2851,7 @@ describe('final cut review core invariants', () => {
         title: '大文件成片',
         episode: '01',
         file,
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2796,6 +2892,7 @@ describe('final cut review core invariants', () => {
         title: '哈希成片',
         episode: '01',
         file: demoFile('hash-v1.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2835,6 +2932,7 @@ describe('final cut review core invariants', () => {
         title: '缺失权威集数',
         episode: '',
         file: demoFile('missing-episode.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2873,6 +2971,7 @@ describe('final cut review core invariants', () => {
         title: '无扩展名原片',
         episode: '09',
         file: demoFile('original.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2926,6 +3025,7 @@ describe('final cut review core invariants', () => {
         title: '源身份成片',
         episode: '1',
         file: demoFile('identity.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -2956,6 +3056,7 @@ describe('final cut review core invariants', () => {
         title: '新成片',
         episode: '02',
         file: demoFile('new-v1.mp4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );
@@ -3036,6 +3137,7 @@ describe('final cut review core invariants', () => {
         title: '../成片',
         episode: '01',
         file: demoFile('payload.MP4'),
+        ...MOCK_UPLOAD_EDITOR_BINDING,
       },
       ctx(edit),
     );

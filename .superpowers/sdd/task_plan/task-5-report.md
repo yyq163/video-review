@@ -105,3 +105,25 @@
 - `npm run contracts:generate`、`npm run contracts:check`、Python generator `--check`：PASS。
 - 显式本地 origin build：PASS；`frontend security headers: PASS`；保留既有 MediaInfo WASM runtime URL warning。
 - Browser：`UNVERIFIED_BROWSER`，由主控 Computer Use 裁决。
+
+## Fix round 2/5 — bounded media probes and editor parity
+
+- `BASE = 9468d9e260a6003a6852cdd0970d0ef4a34ca07d`
+- 冻结范围仅两项：V1 `mediaMetadata.probe` 内部有界并发；mock/in-memory V1 + append 的 responsible editor 写前校验。未改 `versionNote` / `changeSummary` 可选性，未扩展 Browser、Task 6 或根账本。
+
+### RED / GREEN
+
+- Probe RED（Node 24.19.0）：5 行 deferred probes 在旧实现中全部立即启动；modal close、peak/abort/failure 续流、unmount queued+active 三项均精确失败为 `expected 2, got 5`。
+- Probe GREEN：`MAX_CONCURRENT_V1_MEDIA_PROBES = 2` 的内部 worker queue；选中时为每行先建独立 controller，remove/replace/modal close/unmount 均 abort；sequence + controller identity 双重防 stale commit；单行 abort/失败释放槽位并继续后续行。Focused：`1 file / 5 tests passed`。
+- Editor RED（Node 24.19.0）：mock 空白 ID 落到 `RESOURCE_NOT_FOUND` 且位于 storage 之后；direct in-memory 缺失 ID 直接 resolve 并写入 item/version。`1 file / 2 tests failed`。
+- Editor GREEN：InMemory V1/create + append 都先执行共享 editor 校验；空/blank ID 为 `VALIDATION_ERROR`，未知 ID 为 `RESOURCE_NOT_FOUND`。Mock upload 在 `fileStorage.storeOriginal` 和 progress/binding 前执行同一校验。四种 create/append 绕 UI 组合均断言 `storage calls = 0` 且 repository snapshot 不变。Focused：`1 file / 2 tests passed`。
+- 最终合并 focused：`2 files / 7 tests passed`；受影响整文件回归：`2 files / 174 tests passed`。
+
+### Node 24.19.0 final verification
+
+- Fresh full Vitest：`29 passed / 1 skipped` files；`378 passed / 1 skipped` tests。`HTMLMediaElement.load()` 为既有 jsdom 提示，退出码为 0。
+- `npm run contracts:generate`、`npm run contracts:check`、Python generator `--check`：PASS。
+- `npm run typecheck`：PASS。
+- `npm run lint`：PASS。
+- `VITE_FINAL_CUT_REVIEW_API_BASE_URL=http://127.0.0.1:8000 npm run build`：PASS；`frontend security headers: PASS`；仅保留既有 MediaInfo WASM runtime URL warning。
+- Browser：`UNVERIFIED_BROWSER`；实现者未执行或授予 Computer Use Browser PASS。

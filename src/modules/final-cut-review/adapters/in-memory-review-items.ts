@@ -3,6 +3,7 @@ import type {
   ReviewItem,
   ReviewItemId,
   ReviewVersion,
+  ResponsibleEditor,
   StoredOriginalFile,
   VersionId,
 } from '../contracts/types';
@@ -26,6 +27,12 @@ function validateEpisode(episodeValue: string): void {
 export class InMemoryReviewItems {
   constructor(private readonly store: InMemoryReviewStore) {}
 
+  readonly requireResponsibleEditor = (responsibleEditorId?: string): ResponsibleEditor => {
+    const normalizedId = responsibleEditorId?.trim() ?? '';
+    invariant(normalizedId.length > 0, '责任剪辑师必填', 'VALIDATION_ERROR');
+    return this.store.getResponsibleEditor(normalizedId);
+  };
+
   readonly createReviewItemWithVersion = async (input: {
     projectRefId: ProjectRefId;
     title: string;
@@ -36,9 +43,7 @@ export class InMemoryReviewItems {
     localProbe?: MediaMetadata;
   }): Promise<{ item: ReviewItemWithMetadata; version: ReviewVersion }> => {
     const project = this.store.assertProjectWritable(input.projectRefId);
-    const editor = input.responsibleEditorId
-      ? this.store.getResponsibleEditor(input.responsibleEditorId)
-      : null;
+    const editor = this.requireResponsibleEditor(input.responsibleEditorId);
     if (input.localProbe) {
       invariant(project.frameRate, '上传 V1 前必须先锁定项目帧率', 'RESOURCE_STATE_CONFLICT');
       invariant(
@@ -70,8 +75,8 @@ export class InMemoryReviewItems {
       file: input.file,
       timestamp,
       status: 'pending_review',
-      responsibleEditorId: editor?.responsibleEditorId ?? null,
-      responsibleEditorNameSnapshot: editor?.displayName ?? null,
+      responsibleEditorId: editor.responsibleEditorId,
+      responsibleEditorNameSnapshot: editor.displayName,
     });
     item.currentVersionId = version.versionId;
     this.store.items.set(item.reviewItemId, item);
@@ -200,9 +205,7 @@ export class InMemoryReviewItems {
   }): Promise<ReviewVersion> => {
     const item = this.ensureAppendVersionWritable(input);
     const project = this.store.getProject(input.projectRefId);
-    const editor = input.responsibleEditorId
-      ? this.store.getResponsibleEditor(input.responsibleEditorId)
-      : null;
+    const editor = this.requireResponsibleEditor(input.responsibleEditorId);
     if (input.localProbe) {
       invariant(project.frameRate, '追加版本前必须先锁定项目帧率', 'RESOURCE_STATE_CONFLICT');
       invariant(
@@ -223,8 +226,8 @@ export class InMemoryReviewItems {
       status: 'pending_review',
       versionNote: input.versionNote,
       changeSummary: input.changeSummary || input.supersedeReason,
-      responsibleEditorId: editor?.responsibleEditorId ?? null,
-      responsibleEditorNameSnapshot: editor?.displayName ?? null,
+      responsibleEditorId: editor.responsibleEditorId,
+      responsibleEditorNameSnapshot: editor.displayName,
     });
     this.store.versions.set(version.versionId, version);
     this.store.items.set(item.reviewItemId, {

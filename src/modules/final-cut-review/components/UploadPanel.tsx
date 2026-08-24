@@ -9,6 +9,7 @@ const APPEND_VERSION_FILE_ERROR_ID = 'append-version-file-error';
 const APPEND_VERSION_SUBMISSION_ERROR_ID = 'append-version-upload-error';
 const ACCEPTED_VIDEO_TYPES = '.mp4,.m4v,.mov,.qt,video/mp4,video/quicktime';
 const MAX_CONCURRENT_V1_UPLOADS = 5;
+const MAX_CONCURRENT_V1_MEDIA_PROBES = 2;
 const UPLOAD_STAGE_LABELS: Record<UploadProgress['stage'], string> = {
   validating: '校验文件',
   initiated: '创建上传会话',
@@ -106,6 +107,7 @@ export function CreateItemUploadPanel({
   const removedRowIdsRef = useRef(new Set<string>());
   const activeBatchEpisodeKeysRef = useRef(new Set<string>());
   const mediaProbeAbortRef = useRef(new Map<string, AbortController>());
+  const mediaProbeSequenceRef = useRef(0);
   const [bulkEditorId, setBulkEditorId] = useState(responsibleEditors?.[0]?.responsibleEditorId ?? '');
   const [rows, setRows] = useState<CreateItemUploadRow[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -168,6 +170,7 @@ export function CreateItemUploadPanel({
     setBatchError(null);
   };
   useEffect(() => () => {
+    mediaProbeSequenceRef.current += 1;
     for (const controller of mediaProbeAbortRef.current.values()) controller.abort();
     mediaProbeAbortRef.current.clear();
   }, []);
@@ -362,6 +365,7 @@ export function CreateItemUploadPanel({
           disabled={disabled}
           onChange={(event) => {
             const selected = Array.from(event.currentTarget.files ?? []);
+            const probeSequence = ++mediaProbeSequenceRef.current;
             for (const controller of mediaProbeAbortRef.current.values()) controller.abort();
             mediaProbeAbortRef.current.clear();
             const nextRows: CreateItemUploadRow[] = selected.map((file) => ({
@@ -378,36 +382,61 @@ export function CreateItemUploadPanel({
             setBatchCompleted(false);
             setBatchError(null);
             if (mediaMetadata) {
-              for (const row of nextRows) {
+              const probeQueue = nextRows.map((row) => {
                 const abortController = new AbortController();
                 mediaProbeAbortRef.current.set(row.id, abortController);
-                void mediaMetadata.probe(row.file, {
-                  signal: abortController.signal,
-                  expectedFrameRate: projectFrameRate ?? undefined,
-                }).then((localProbe) => {
-                  if (abortController.signal.aborted) return;
-                  setRows((current) => current.map((candidate) =>
-                    candidate.id === row.id
-                      ? { ...candidate, localProbe, mediaState: 'ready', mediaError: undefined }
-                      : candidate,
-                  ));
-                }).catch((error: unknown) => {
-                  if (abortController.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
-                  setRows((current) => current.map((candidate) =>
-                    candidate.id === row.id
-                      ? {
-                          ...candidate,
-                          mediaState: 'invalid',
-                          mediaError: error instanceof Error ? error.message : '媒体预检失败',
-                        }
-                      : candidate,
-                  ));
-                }).finally(() => {
-                  if (mediaProbeAbortRef.current.get(row.id) === abortController) {
-                    mediaProbeAbortRef.current.delete(row.id);
+                return { row, abortController };
+              });
+              let nextProbeIndex = 0;
+              const runProbeWorker = async () => {
+                while (nextProbeIndex < probeQueue.length) {
+                  const entry = probeQueue[nextProbeIndex];
+                  nextProbeIndex += 1;
+                  if (!entry) return;
+                  const { row, abortController } = entry;
+                  const isCurrentProbe = () =>
+                    !abortController.signal.aborted
+                    && mediaProbeSequenceRef.current === probeSequence
+                    && mediaProbeAbortRef.current.get(row.id) === abortController;
+                  if (!isCurrentProbe()) continue;
+                  try {
+                    const localProbe = await mediaMetadata.probe(row.file, {
+                      signal: abortController.signal,
+                      expectedFrameRate: projectFrameRate ?? undefined,
+                    });
+                    if (!isCurrentProbe()) continue;
+                    setRows((current) => current.map((candidate) =>
+                      candidate.id === row.id
+                        ? { ...candidate, localProbe, mediaState: 'ready', mediaError: undefined }
+                        : candidate,
+                    ));
+                  } catch (error: unknown) {
+                    if (
+                      !isCurrentProbe()
+                      || (error instanceof DOMException && error.name === 'AbortError')
+                    ) continue;
+                    setRows((current) => current.map((candidate) =>
+                      candidate.id === row.id
+                        ? {
+                            ...candidate,
+                            mediaState: 'invalid',
+                            mediaError: error instanceof Error ? error.message : '媒体预检失败',
+                          }
+                        : candidate,
+                    ));
+                  } finally {
+                    if (mediaProbeAbortRef.current.get(row.id) === abortController) {
+                      mediaProbeAbortRef.current.delete(row.id);
+                    }
                   }
-                });
-              }
+                }
+              };
+              void Promise.all(
+                Array.from(
+                  { length: Math.min(MAX_CONCURRENT_V1_MEDIA_PROBES, probeQueue.length) },
+                  () => runProbeWorker(),
+                ),
+              );
             }
           }}
         />

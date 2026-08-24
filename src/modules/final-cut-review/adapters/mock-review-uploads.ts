@@ -34,6 +34,7 @@ export class MockReviewUploads implements UploadApi {
     await this.context.ready();
     this.context.assertContext(executionContext, 'review.item.create');
     this.context.repository.ensureProjectWritable(input.projectRefId);
+    this.context.repository.requireResponsibleEditor(input.responsibleEditorId);
     await reportMockUploadProgress(input.onProgress, {
       stage: 'validating',
       percent: 0,
@@ -89,6 +90,7 @@ export class MockReviewUploads implements UploadApi {
     await this.context.ready();
     this.context.assertContext(executionContext, 'review.version.upload');
     this.context.repository.ensureAppendVersionWritable(input);
+    this.context.repository.requireResponsibleEditor(input.responsibleEditorId);
     await reportMockUploadProgress(input.onProgress, {
       stage: 'validating',
       percent: 0,
