@@ -7,7 +7,13 @@ Create Date: 2026-08-24
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import importlib
+import json
+import math
+import re
+from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
@@ -35,69 +41,530 @@ INTENT_CLAIM_CHECK = "ck_review_deletion_intents_cleanup_claim"
 ARTIFACT_SHA_CHECK = "ck_review_deletion_artifacts_sha256"
 ARTIFACT_NAMESPACE_CHECK = "ck_review_deletion_artifacts_kind_namespace"
 ARTIFACT_INTENT_FOREIGN_KEY = "fk_review_deletion_artifacts_intent"
-SQLITE_BATCH_RECOVERY_COLUMNS = {
-    "review_deletion_intents": {
-        "id",
-        "command_type",
-        "operation_identity_hash",
-        "subject_type",
-        "project_ref_id_snapshot",
-        "review_item_id_snapshot",
-        "status",
-        "attempts",
-        "last_error_code",
-        "completed_at",
-        "created_at",
-        "updated_at",
-    },
-    "review_deletion_artifacts": {
-        "id",
-        "deletion_intent_id",
-        "artifact_kind",
-        "relative_logical_target",
-        "expected_device",
-        "expected_inode",
-        "expected_ctime_ns",
-        "expected_size",
-        "status",
-        "attempts",
-        "last_error_code",
-        "quarantined_at",
-        "deleted_at",
-        "created_at",
-        "updated_at",
-    },
-    "issue_revisions": {
-        "id",
-        "issue_id",
-        "project_ref_id",
-        "review_item_id",
-        "version_id",
-        "revision_no",
-        "content",
-        "annotation_set_id",
-        "created_at",
-    },
-    "annotation_sets": {
-        "id",
-        "issue_id",
-        "project_ref_id",
-        "review_item_id",
-        "version_id",
-        "timestamp_ms",
-        "frame_number",
-        "canvas_width",
-        "canvas_height",
-        "video_width",
-        "video_height",
-        "shapes",
-        "created_at",
-    },
+SQLITE_RECOVERY_MANIFEST_TABLE = "fcr_0024_recovery_manifest"
+SQLITE_RECOVERY_MANIFEST_VERSION = 1
+SQLITE_RECOVERY_STAGES = {
+    "artifact_detach_intent_fk": "review_deletion_artifacts",
+    "intent_drop_claim_check": "review_deletion_intents",
+    "artifact_normalize": "review_deletion_artifacts",
+    "issue_revisions_cascade": "issue_revisions",
+    "annotation_sets_cascade": "annotation_sets",
 }
 
 
 def _recreate_mode() -> str:
     return "always" if op.get_bind().dialect.name == "sqlite" else "auto"
+
+
+def _normalized_sql(value: object) -> str:
+    return " ".join(str(value or "").lower().split())
+
+
+def _sqlite_schema_inventory(table_name: str) -> dict[str, Any]:
+    inspector = sa.inspect(op.get_bind())
+    return {
+        "columns": [
+            {
+                "name": column["name"],
+                "type": str(column["type"]).lower(),
+                "nullable": bool(column["nullable"]),
+                "default": _normalized_sql(column.get("default")) or None,
+                "primary_key": int(column.get("primary_key") or 0),
+            }
+            for column in inspector.get_columns(table_name)
+        ],
+        "primary_key": {
+            "name": inspector.get_pk_constraint(table_name).get("name"),
+            "columns": list(
+                inspector.get_pk_constraint(table_name).get(
+                    "constrained_columns",
+                )
+                or []
+            ),
+        },
+        "unique_constraints": sorted(
+            (
+                {
+                    "name": constraint.get("name"),
+                    "columns": list(constraint.get("column_names") or []),
+                }
+                for constraint in inspector.get_unique_constraints(table_name)
+            ),
+            key=lambda value: (str(value["name"]), value["columns"]),
+        ),
+        "checks": sorted(
+            (
+                {
+                    "name": constraint.get("name"),
+                    "sql": _normalized_sql(constraint.get("sqltext")),
+                }
+                for constraint in inspector.get_check_constraints(table_name)
+            ),
+            key=lambda value: (str(value["name"]), value["sql"]),
+        ),
+        "foreign_keys": sorted(
+            (
+                {
+                    "name": foreign_key.get("name"),
+                    "columns": list(
+                        foreign_key.get("constrained_columns") or [],
+                    ),
+                    "referred_table": foreign_key.get("referred_table"),
+                    "referred_columns": list(
+                        foreign_key.get("referred_columns") or [],
+                    ),
+                    "ondelete": str(
+                        (foreign_key.get("options") or {}).get(
+                            "ondelete",
+                            "",
+                        ),
+                    ).upper(),
+                }
+                for foreign_key in inspector.get_foreign_keys(table_name)
+            ),
+            key=lambda value: (str(value["name"]), value["columns"]),
+        ),
+        "indexes": sorted(
+            (
+                {
+                    "name": index.get("name"),
+                    "columns": list(index.get("column_names") or []),
+                    "unique": bool(index.get("unique")),
+                    "where": _normalized_sql(
+                        (index.get("dialect_options") or {}).get(
+                            "sqlite_where",
+                        ),
+                    )
+                    or None,
+                }
+                for index in inspector.get_indexes(table_name)
+            ),
+            key=lambda value: (str(value["name"]), value["columns"]),
+        ),
+    }
+
+
+def _inventory_sha256(inventory: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            inventory,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode(),
+    ).hexdigest()
+
+
+def _replace_named_inventory_entry(
+    entries: list[dict[str, Any]],
+    name: str,
+    replacement: dict[str, Any] | None,
+) -> None:
+    entries[:] = [entry for entry in entries if entry.get("name") != name]
+    if replacement is not None:
+        entries.append(replacement)
+    entries.sort(key=lambda value: (str(value["name"]), value.get("columns", [])))
+
+
+def _sqlite_target_inventory(
+    source: dict[str, Any],
+    stage: str,
+) -> dict[str, Any]:
+    target = copy.deepcopy(source)
+    if stage == "artifact_detach_intent_fk":
+        _replace_named_inventory_entry(
+            target["foreign_keys"],
+            ARTIFACT_INTENT_FOREIGN_KEY,
+            None,
+        )
+    elif stage == "intent_drop_claim_check":
+        _replace_named_inventory_entry(
+            target["checks"],
+            INTENT_CLAIM_CHECK,
+            None,
+        )
+    elif stage == "artifact_normalize":
+        expected_sha_column = next(
+            (
+                column
+                for column in target["columns"]
+                if column["name"] == "expected_sha256"
+            ),
+            None,
+        )
+        if expected_sha_column is None:
+            target["columns"].append(
+                {
+                    "name": "expected_sha256",
+                    "type": "varchar(64)",
+                    "nullable": True,
+                    "default": None,
+                    "primary_key": 0,
+                },
+            )
+        else:
+            expected_sha_column["nullable"] = True
+        _replace_named_inventory_entry(
+            target["checks"],
+            ARTIFACT_SHA_CHECK,
+            {
+                "name": ARTIFACT_SHA_CHECK,
+                "sql": _normalized_sql(
+                    "expected_sha256 IS NULL OR length(expected_sha256) = 64",
+                ),
+            },
+        )
+        _replace_named_inventory_entry(
+            target["checks"],
+            ARTIFACT_NAMESPACE_CHECK,
+            {
+                "name": ARTIFACT_NAMESPACE_CHECK,
+                "sql": _normalized_sql(
+                    "(artifact_kind = 'project_package' "
+                    "AND relative_logical_target LIKE 'packages/%') "
+                    "OR (artifact_kind IN "
+                    "('original_media','playback_derivative','thumbnail') "
+                    "AND relative_logical_target LIKE 'files/%')",
+                ),
+            },
+        )
+        _replace_named_inventory_entry(
+            target["foreign_keys"],
+            ARTIFACT_INTENT_FOREIGN_KEY,
+            {
+                "name": ARTIFACT_INTENT_FOREIGN_KEY,
+                "columns": ["deletion_intent_id"],
+                "referred_table": "review_deletion_intents",
+                "referred_columns": ["id"],
+                "ondelete": "RESTRICT",
+            },
+        )
+    elif stage in {"issue_revisions_cascade", "annotation_sets_cascade"}:
+        table_name = SQLITE_RECOVERY_STAGES[stage]
+        constraint_name = f"fk_{table_name}_issue_identity"
+        _replace_named_inventory_entry(
+            target["foreign_keys"],
+            constraint_name,
+            {
+                "name": constraint_name,
+                "columns": ISSUE_CHILD_COLUMNS,
+                "referred_table": "review_issues",
+                "referred_columns": ISSUE_IDENTITY_COLUMNS,
+                "ondelete": "CASCADE",
+            },
+        )
+    else:
+        raise RuntimeError(f"unknown SQLite deletion recovery stage: {stage}")
+    return target
+
+
+def _canonical_sqlite_value(value: object) -> bytes:
+    if value is None:
+        return b"n"
+    if isinstance(value, bytes):
+        payload = value
+        tag = b"b"
+    elif isinstance(value, str):
+        payload = value.encode()
+        tag = b"s"
+    elif isinstance(value, bool):
+        payload = b"1" if value else b"0"
+        tag = b"q"
+    elif isinstance(value, int):
+        payload = str(value).encode()
+        tag = b"i"
+    elif isinstance(value, float):
+        payload = (
+            b"nan"
+            if math.isnan(value)
+            else (b"+inf" if value == math.inf else b"-inf")
+            if math.isinf(value)
+            else value.hex().encode()
+        )
+        tag = b"f"
+    elif hasattr(value, "isoformat"):
+        payload = str(value.isoformat()).encode()  # type: ignore[union-attr]
+        tag = b"d"
+    else:
+        raise RuntimeError(
+            f"unsupported SQLite recovery value type: {type(value).__name__}",
+        )
+    return tag + len(payload).to_bytes(8, "big") + payload
+
+
+def _sqlite_rows_identity(
+    table_name: str,
+    target_columns: list[str] | None = None,
+) -> tuple[int, str]:
+    source_columns = [
+        column["name"]
+        for column in _sqlite_schema_inventory(table_name)["columns"]
+    ]
+    selected_columns = target_columns or source_columns
+    missing_columns = set(selected_columns) - set(source_columns)
+    if missing_columns - {"expected_sha256"}:
+        raise RuntimeError(
+            f"SQLite recovery row projection has unknown columns: {missing_columns}",
+        )
+    projections = [
+        f'"{column_name}"'
+        if column_name in source_columns
+        else f'NULL AS "{column_name}"'
+        for column_name in selected_columns
+    ]
+    if "id" not in source_columns:
+        raise RuntimeError(f"SQLite recovery table {table_name} lacks id identity")
+    rows = op.get_bind().execute(
+        sa.text(
+            f'SELECT {", ".join(projections)} FROM "{table_name}" '
+            'ORDER BY "id"',
+        ),
+    )
+    digest = hashlib.sha256(b"fcr-0024-sqlite-rows-v1\0")
+    for column_name in selected_columns:
+        digest.update(_canonical_sqlite_value(column_name))
+    row_count = 0
+    for row in rows:
+        row_count += 1
+        digest.update(len(row).to_bytes(4, "big"))
+        for value in row:
+            digest.update(_canonical_sqlite_value(value))
+    return row_count, digest.hexdigest()
+
+
+def _sqlite_canonical_rows(
+    table_name: str,
+    target_columns: list[str],
+) -> dict[bytes, str]:
+    source_columns = [
+        column["name"]
+        for column in _sqlite_schema_inventory(table_name)["columns"]
+    ]
+    missing_columns = set(target_columns) - set(source_columns)
+    if missing_columns - {"expected_sha256"}:
+        raise RuntimeError(
+            f"SQLite recovery row projection has unknown columns: {missing_columns}",
+        )
+    projections = [
+        f'"{column_name}"'
+        if column_name in source_columns
+        else f'NULL AS "{column_name}"'
+        for column_name in target_columns
+    ]
+    rows = op.get_bind().execute(
+        sa.text(
+            f'SELECT {", ".join(projections)} FROM "{table_name}" '
+            'ORDER BY "id"',
+        ),
+    )
+    id_index = target_columns.index("id")
+    canonical: dict[bytes, str] = {}
+    for row in rows:
+        encoded = tuple(_canonical_sqlite_value(value) for value in row)
+        identity = encoded[id_index]
+        if identity in canonical:
+            raise RuntimeError(
+                f"SQLite recovery table {table_name} has duplicate identity",
+            )
+        row_digest = hashlib.sha256(b"fcr-0024-sqlite-row-v1\0")
+        for column_name, value in zip(target_columns, encoded, strict=True):
+            row_digest.update(_canonical_sqlite_value(column_name))
+            row_digest.update(value)
+        canonical[identity] = row_digest.hexdigest()
+    return canonical
+
+
+SQLITE_MANIFEST_FIELDS = (
+    "manifest_version",
+    "revision_id",
+    "table_name",
+    "stage",
+    "source_schema_sha256",
+    "staging_schema_sha256",
+    "target_schema_sha256",
+    "source_row_count",
+    "target_row_count",
+    "source_rows_sha256",
+    "target_rows_sha256",
+)
+
+
+def _sqlite_default_value(value: object) -> str:
+    raw = str(value or "").strip()
+    while raw.startswith("(") and raw.endswith(")"):
+        raw = raw[1:-1].strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
+        return raw[1:-1].replace("''", "'")
+    return raw
+
+
+def _load_sqlite_recovery_manifest() -> dict[str, Any] | None:
+    inspector = sa.inspect(op.get_bind())
+    if SQLITE_RECOVERY_MANIFEST_TABLE not in inspector.get_table_names():
+        return None
+    columns = inspector.get_columns(SQLITE_RECOVERY_MANIFEST_TABLE)
+    if [column["name"] for column in columns] != list(SQLITE_MANIFEST_FIELDS):
+        raise RuntimeError("SQLite deletion recovery manifest has an unsafe schema")
+    for index, column in enumerate(columns):
+        expected_type = "integer" if index in {0, 7, 8} else "text"
+        if (
+            str(column["type"]).lower() != expected_type
+            or bool(column["nullable"])
+            or int(column.get("primary_key") or 0) != (1 if index == 0 else 0)
+            or column.get("default") is None
+        ):
+            raise RuntimeError(
+                "SQLite deletion recovery manifest has an unsafe column",
+            )
+    if inspector.get_pk_constraint(SQLITE_RECOVERY_MANIFEST_TABLE).get(
+        "constrained_columns",
+    ) != ["manifest_version"]:
+        raise RuntimeError("SQLite deletion recovery manifest has an unsafe PK")
+    if (
+        inspector.get_unique_constraints(SQLITE_RECOVERY_MANIFEST_TABLE)
+        or inspector.get_check_constraints(SQLITE_RECOVERY_MANIFEST_TABLE)
+        or inspector.get_foreign_keys(SQLITE_RECOVERY_MANIFEST_TABLE)
+        or inspector.get_indexes(SQLITE_RECOVERY_MANIFEST_TABLE)
+    ):
+        raise RuntimeError(
+            "SQLite deletion recovery manifest has unexpected constraints",
+        )
+    values = {
+        column["name"]: _sqlite_default_value(column["default"])
+        for column in columns
+    }
+    if values["manifest_version"] != str(SQLITE_RECOVERY_MANIFEST_VERSION):
+        raise RuntimeError("SQLite deletion recovery manifest is expired")
+    if values["revision_id"] != revision:
+        raise RuntimeError("SQLite deletion recovery manifest is expired")
+    stage = values["stage"]
+    if stage not in SQLITE_RECOVERY_STAGES:
+        raise RuntimeError("SQLite deletion recovery manifest has unknown stage")
+    if values["table_name"] != SQLITE_RECOVERY_STAGES[stage]:
+        raise RuntimeError("SQLite deletion recovery manifest table mismatch")
+    for field in (
+        "source_schema_sha256",
+        "staging_schema_sha256",
+        "target_schema_sha256",
+        "source_rows_sha256",
+        "target_rows_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", values[field]) is None:
+            raise RuntimeError("SQLite deletion recovery manifest digest is invalid")
+    for field in ("source_row_count", "target_row_count"):
+        if not values[field].isdigit():
+            raise RuntimeError("SQLite deletion recovery manifest count is invalid")
+        values[field] = int(values[field])
+    values["manifest_version"] = int(values["manifest_version"])
+    return values
+
+
+def _drop_sqlite_recovery_manifest() -> None:
+    op.execute(f'DROP TABLE IF EXISTS "{SQLITE_RECOVERY_MANIFEST_TABLE}"')
+
+
+def _prepare_sqlite_batch_manifest(stage: str) -> None:
+    if op.get_bind().dialect.name != "sqlite":
+        return
+    if stage not in SQLITE_RECOVERY_STAGES:
+        raise RuntimeError(f"unknown SQLite deletion recovery stage: {stage}")
+    if _load_sqlite_recovery_manifest() is not None:
+        raise RuntimeError("SQLite deletion recovery manifest is already active")
+    table_name = SQLITE_RECOVERY_STAGES[stage]
+    source_inventory = _sqlite_schema_inventory(table_name)
+    target_inventory = _sqlite_target_inventory(source_inventory, stage)
+    staging_inventory = copy.deepcopy(target_inventory)
+    staging_inventory["indexes"] = []
+    source_columns = [column["name"] for column in source_inventory["columns"]]
+    target_columns = [column["name"] for column in target_inventory["columns"]]
+    source_row_count, source_rows_sha256 = _sqlite_rows_identity(
+        table_name,
+        source_columns,
+    )
+    target_row_count, target_rows_sha256 = _sqlite_rows_identity(
+        table_name,
+        target_columns,
+    )
+    values: dict[str, object] = {
+        "manifest_version": SQLITE_RECOVERY_MANIFEST_VERSION,
+        "revision_id": revision,
+        "table_name": table_name,
+        "stage": stage,
+        "source_schema_sha256": _inventory_sha256(source_inventory),
+        "staging_schema_sha256": _inventory_sha256(staging_inventory),
+        "target_schema_sha256": _inventory_sha256(target_inventory),
+        "source_row_count": source_row_count,
+        "target_row_count": target_row_count,
+        "source_rows_sha256": source_rows_sha256,
+        "target_rows_sha256": target_rows_sha256,
+    }
+    if not all(
+        re.fullmatch(r"[a-z0-9_]+", str(values[field]))
+        for field in ("revision_id", "table_name", "stage")
+    ):
+        raise RuntimeError("SQLite deletion recovery manifest identity is invalid")
+    for field in (
+        "source_schema_sha256",
+        "staging_schema_sha256",
+        "target_schema_sha256",
+        "source_rows_sha256",
+        "target_rows_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", str(values[field])) is None:
+            raise RuntimeError("SQLite deletion recovery manifest digest is invalid")
+    op.execute(
+        f"""
+        CREATE TABLE "{SQLITE_RECOVERY_MANIFEST_TABLE}" (
+          manifest_version INTEGER NOT NULL PRIMARY KEY DEFAULT {values['manifest_version']},
+          revision_id TEXT NOT NULL DEFAULT '{values['revision_id']}',
+          table_name TEXT NOT NULL DEFAULT '{values['table_name']}',
+          stage TEXT NOT NULL DEFAULT '{values['stage']}',
+          source_schema_sha256 TEXT NOT NULL DEFAULT '{values['source_schema_sha256']}',
+          staging_schema_sha256 TEXT NOT NULL DEFAULT '{values['staging_schema_sha256']}',
+          target_schema_sha256 TEXT NOT NULL DEFAULT '{values['target_schema_sha256']}',
+          source_row_count INTEGER NOT NULL DEFAULT {values['source_row_count']},
+          target_row_count INTEGER NOT NULL DEFAULT {values['target_row_count']},
+          source_rows_sha256 TEXT NOT NULL DEFAULT '{values['source_rows_sha256']}',
+          target_rows_sha256 TEXT NOT NULL DEFAULT '{values['target_rows_sha256']}'
+        )
+        """,
+    )
+    _load_sqlite_recovery_manifest()
+
+
+def _table_matches_sqlite_manifest(
+    table_name: str,
+    manifest: dict[str, Any],
+    schema_prefix: str,
+    row_prefix: str | None = None,
+) -> bool:
+    resolved_row_prefix = row_prefix or schema_prefix
+    schema_sha256 = _inventory_sha256(_sqlite_schema_inventory(table_name))
+    columns = [
+        column["name"]
+        for column in _sqlite_schema_inventory(table_name)["columns"]
+    ]
+    row_count, rows_sha256 = _sqlite_rows_identity(table_name, columns)
+    return (
+        schema_sha256 == manifest[f"{schema_prefix}_schema_sha256"]
+        and row_count == manifest[f"{resolved_row_prefix}_row_count"]
+        and rows_sha256 == manifest[f"{resolved_row_prefix}_rows_sha256"]
+    )
+
+
+def _finish_sqlite_batch_manifest(stage: str) -> None:
+    if op.get_bind().dialect.name != "sqlite":
+        return
+    manifest = _load_sqlite_recovery_manifest()
+    if manifest is None or manifest["stage"] != stage:
+        raise RuntimeError("SQLite deletion recovery manifest is missing")
+    if not _table_matches_sqlite_manifest(
+        manifest["table_name"],
+        manifest,
+        "target",
+    ):
+        raise RuntimeError("SQLite deletion batch target identity mismatch")
+    _drop_sqlite_recovery_manifest()
 
 
 def _drop_sqlite_rebuild_triggers() -> None:
@@ -119,7 +586,7 @@ def _recover_sqlite_batch_residue() -> None:
     table_names = set(sa.inspect(bind).get_table_names())
     known_temporary_tables = {
         f"_alembic_tmp_{table_name}"
-        for table_name in SQLITE_BATCH_RECOVERY_COLUMNS
+        for table_name in SQLITE_RECOVERY_STAGES.values()
     }
     found_temporary_tables = {
         table_name
@@ -134,53 +601,96 @@ def _recover_sqlite_batch_residue() -> None:
             "unknown Alembic temporary table blocks deletion migration retry: "
             + ",".join(sorted(unknown_temporary_tables)),
         )
+    manifest = _load_sqlite_recovery_manifest()
     if not found_temporary_tables:
-        return
-    recovery_actions: list[tuple[str, str, str]] = []
-    for table_name, required_columns in SQLITE_BATCH_RECOVERY_COLUMNS.items():
-        temporary_table = f"_alembic_tmp_{table_name}"
-        if temporary_table not in found_temporary_tables:
-            continue
-        temporary_columns = {
-            column["name"]
-            for column in sa.inspect(bind).get_columns(temporary_table)
-        }
-        if not required_columns <= temporary_columns:
+        if manifest is None:
+            return
+        table_name = manifest["table_name"]
+        if table_name not in table_names:
             raise RuntimeError(
-                f"Alembic temporary table {temporary_table} has an unsafe shape",
+                "SQLite deletion recovery manifest source is missing",
             )
-        if table_name in table_names:
-            source_columns = {
-                column["name"]
-                for column in sa.inspect(bind).get_columns(table_name)
-            }
-            if not required_columns <= source_columns:
-                raise RuntimeError(
-                    f"migration source table {table_name} has an unsafe shape",
-                )
-            temp_only_rows = bind.scalar(
-                sa.text(
-                    f'SELECT count(*) FROM "{temporary_table}" AS temp '
-                    f'LEFT JOIN "{table_name}" AS source ON source.id = temp.id '
-                    "WHERE source.id IS NULL",
-                ),
+        if not (
+            _table_matches_sqlite_manifest(table_name, manifest, "source")
+            or _table_matches_sqlite_manifest(table_name, manifest, "target")
+        ):
+            raise RuntimeError("SQLite deletion recovery manifest is expired")
+        _drop_sqlite_recovery_manifest()
+        return
+    if manifest is None:
+        raise RuntimeError("SQLite deletion recovery manifest is missing")
+    table_name = manifest["table_name"]
+    temporary_table = f"_alembic_tmp_{table_name}"
+    if found_temporary_tables != {temporary_table}:
+        raise RuntimeError(
+            "SQLite deletion recovery has multiple or mismatched temporary tables",
+        )
+    temporary_inventory = _sqlite_schema_inventory(temporary_table)
+    if (
+        _inventory_sha256(temporary_inventory)
+        != manifest["staging_schema_sha256"]
+    ):
+        raise RuntimeError("SQLite deletion temporary table identity mismatch")
+    source_exists = table_name in table_names
+    if source_exists:
+        source_is_pre_batch = _table_matches_sqlite_manifest(
+            table_name,
+            manifest,
+            "source",
+        )
+        source_is_post_batch = _table_matches_sqlite_manifest(
+            table_name,
+            manifest,
+            "target",
+        )
+        if not (source_is_pre_batch or source_is_post_batch):
+            raise RuntimeError("SQLite deletion source table identity mismatch")
+        source_inventory = _sqlite_schema_inventory(table_name)
+        expected_target_inventory = (
+            _sqlite_target_inventory(source_inventory, manifest["stage"])
+            if source_is_pre_batch
+            else source_inventory
+        )
+        expected_staging_inventory = copy.deepcopy(expected_target_inventory)
+        expected_staging_inventory["indexes"] = []
+        if (
+            _inventory_sha256(expected_target_inventory)
+            != manifest["target_schema_sha256"]
+            or _inventory_sha256(expected_staging_inventory)
+            != manifest["staging_schema_sha256"]
+        ):
+            raise RuntimeError("SQLite deletion recovery manifest is forged")
+        target_columns = [
+            column["name"]
+            for column in expected_target_inventory["columns"]
+        ]
+        source_rows = _sqlite_canonical_rows(table_name, target_columns)
+        temporary_rows = _sqlite_canonical_rows(
+            temporary_table,
+            target_columns,
+        )
+        if any(
+            identity not in source_rows or source_rows[identity] != row
+            for identity, row in temporary_rows.items()
+        ):
+            raise RuntimeError(
+                "SQLite deletion temporary rows diverge from source",
             )
-            if int(temp_only_rows or 0) != 0:
-                raise RuntimeError(
-                    f"Alembic temporary table {temporary_table} contains "
-                    "rows absent from its source",
-                )
-            recovery_actions.append(("drop", temporary_table, table_name))
-        else:
-            recovery_actions.append(("rename", temporary_table, table_name))
+    elif not _table_matches_sqlite_manifest(
+        temporary_table,
+        manifest,
+        "staging",
+        "target",
+    ):
+        raise RuntimeError("SQLite deletion temp-only identity mismatch")
     _drop_sqlite_rebuild_triggers()
-    for action, temporary_table, table_name in recovery_actions:
-        if action == "drop":
-            op.execute(f'DROP TABLE "{temporary_table}"')
-        else:
-            op.execute(
-                f'ALTER TABLE "{temporary_table}" RENAME TO "{table_name}"',
-            )
+    if source_exists:
+        op.execute(f'DROP TABLE "{temporary_table}"')
+    else:
+        op.execute(
+            f'ALTER TABLE "{temporary_table}" RENAME TO "{table_name}"',
+        )
+    _drop_sqlite_recovery_manifest()
     remaining_temporary_tables = {
         table_name
         for table_name in sa.inspect(bind).get_table_names()
@@ -212,6 +722,14 @@ def _replace_issue_child_foreign_keys(ondelete: str) -> None:
         )
         if current_ondelete == ondelete.upper():
             continue
+        manifest_stage = (
+            f"{table_name}_cascade"
+            if op.get_bind().dialect.name == "sqlite"
+            and ondelete.upper() == "CASCADE"
+            else None
+        )
+        if manifest_stage is not None:
+            _prepare_sqlite_batch_manifest(manifest_stage)
         with op.batch_alter_table(
             table_name,
             recreate=_recreate_mode(),
@@ -225,6 +743,8 @@ def _replace_issue_child_foreign_keys(ondelete: str) -> None:
                 ISSUE_IDENTITY_COLUMNS,
                 ondelete=ondelete,
             )
+        if manifest_stage is not None:
+            _finish_sqlite_batch_manifest(manifest_stage)
 
 
 def _restore_governance_triggers() -> None:
@@ -438,6 +958,7 @@ def _drop_sqlite_legacy_intent_claim_check(
         ),
         None,
     )
+    _prepare_sqlite_batch_manifest("artifact_detach_intent_fk")
     with op.batch_alter_table(
         "review_deletion_artifacts",
         recreate="always",
@@ -447,13 +968,16 @@ def _drop_sqlite_legacy_intent_claim_check(
                 ARTIFACT_INTENT_FOREIGN_KEY,
                 type_="foreignkey",
             )
+    _finish_sqlite_batch_manifest("artifact_detach_intent_fk")
     for table_name in ("issue_revisions", "annotation_sets"):
         op.execute(f"DROP TRIGGER IF EXISTS trg_{table_name}_no_delete")
+    _prepare_sqlite_batch_manifest("intent_drop_claim_check")
     with op.batch_alter_table(
         "review_deletion_intents",
         recreate="always",
     ) as batch_op:
         batch_op.drop_constraint(INTENT_CLAIM_CHECK, type_="check")
+    _finish_sqlite_batch_manifest("intent_drop_claim_check")
     return True
 
 
@@ -540,6 +1064,7 @@ def upgrade() -> None:
             or artifact_intent_ondelete != "RESTRICT"
         )
     )
+    _prepare_sqlite_batch_manifest("artifact_normalize")
     with op.batch_alter_table(
         "review_deletion_artifacts",
         recreate=_recreate_mode(),
@@ -586,6 +1111,7 @@ def upgrade() -> None:
                 ["id"],
                 ondelete="RESTRICT",
             )
+    _finish_sqlite_batch_manifest("artifact_normalize")
 
     _drop_sqlite_child_rebuild_dependencies()
     _replace_issue_child_foreign_keys("CASCADE")

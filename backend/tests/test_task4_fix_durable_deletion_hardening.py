@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import fcntl
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -426,6 +427,8 @@ def test_0024_sqlite_committed_and_c043_stamped_shapes_converge_exactly(
     "failure_window",
     (
         "after_artifact_detach",
+        "after_artifact_detach_divergent",
+        "after_artifact_detach_temp_only_ctas",
         "during_intent_parent_rebuild",
         "after_final_artifact_normalization",
     ),
@@ -493,7 +496,12 @@ def test_0024_sqlite_c043_retry_recovers_known_batch_failure_windows(
         if artifact_rename in normalized:
             artifact_rename_count += 1
         should_inject = (
-            failure_window == "after_artifact_detach"
+            failure_window
+            in {
+                "after_artifact_detach",
+                "after_artifact_detach_divergent",
+                "after_artifact_detach_temp_only_ctas",
+            }
             and artifact_rename_count == 1
         ) or (
             failure_window == "during_intent_parent_rebuild"
@@ -524,6 +532,7 @@ def test_0024_sqlite_c043_retry_recovers_known_batch_failure_windows(
             if table_name.startswith("_alembic_tmp_")
         }
         assert temporary_tables <= allowed_temporary_tables
+        assert "fcr_0024_recovery_manifest" in table_names
         with failed_engine.connect() as connection:
             assert connection.scalar(
                 text("SELECT version_num FROM alembic_version"),
@@ -553,6 +562,100 @@ def test_0024_sqlite_c043_retry_recovers_known_batch_failure_windows(
     finally:
         failed_engine.dispose()
 
+    if failure_window in {
+        "after_artifact_detach_divergent",
+        "after_artifact_detach_temp_only_ctas",
+    }:
+        failed_engine = create_engine(f"sqlite:///{failed_path}")
+        try:
+            with failed_engine.begin() as connection:
+                if failure_window == "after_artifact_detach_divergent":
+                    connection.execute(
+                        text(
+                            "INSERT INTO "
+                            "_alembic_tmp_review_deletion_artifacts "
+                            "SELECT * FROM review_deletion_artifacts",
+                        ),
+                    )
+                    connection.execute(
+                        text(
+                            "UPDATE _alembic_tmp_review_deletion_artifacts "
+                            "SET relative_logical_target = "
+                            "'files/file-same-id-different-content' "
+                            "WHERE id = 'artifact_c043_legacy'",
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        text(
+                            "DROP TABLE "
+                            "_alembic_tmp_review_deletion_artifacts",
+                        ),
+                    )
+                    connection.execute(
+                        text(
+                            "CREATE TABLE "
+                            "_alembic_tmp_review_deletion_artifacts "
+                            "AS SELECT * FROM review_deletion_artifacts",
+                        ),
+                    )
+                    connection.execute(
+                        text("DROP TABLE review_deletion_artifacts"),
+                    )
+        finally:
+            failed_engine.dispose()
+
+        def recovery_snapshot() -> tuple[object, ...]:
+            snapshot_engine = create_engine(f"sqlite:///{failed_path}")
+            try:
+                with snapshot_engine.connect() as connection:
+                    schema = tuple(
+                        tuple(row)
+                        for row in connection.execute(
+                            text(
+                                "SELECT type, name, tbl_name, sql "
+                                "FROM sqlite_master "
+                                "WHERE name NOT LIKE 'sqlite_%' "
+                                "ORDER BY type, name",
+                            ),
+                        )
+                    )
+                    table_names = {
+                        row[1] for row in schema if row[0] == "table"
+                    }
+                    rows = tuple(
+                        (
+                            table_name,
+                            tuple(
+                                tuple(row)
+                                for row in connection.execute(
+                                    text(
+                                        f'SELECT * FROM "{table_name}" '
+                                        "ORDER BY id",
+                                    ),
+                                )
+                            ),
+                        )
+                        for table_name in (
+                            "review_deletion_artifacts",
+                            "_alembic_tmp_review_deletion_artifacts",
+                        )
+                        if table_name in table_names
+                    )
+                    revision_value = connection.scalar(
+                        text("SELECT version_num FROM alembic_version"),
+                    )
+                return schema, rows, revision_value
+            finally:
+                snapshot_engine.dispose()
+
+        before_rejected_retry = recovery_snapshot()
+        _set_migration_env(failed_path, tmp_path, monkeypatch)
+        with pytest.raises(RuntimeError):
+            alembic_command.upgrade(failed_config, "20260824_0024")
+        assert recovery_snapshot() == before_rejected_retry
+        return
+
     _set_migration_env(failed_path, tmp_path, monkeypatch)
     alembic_command.upgrade(failed_config, "20260824_0024")
     recovered_engine = create_engine(f"sqlite:///{failed_path}")
@@ -565,6 +668,9 @@ def test_0024_sqlite_c043_retry_recovers_known_batch_failure_windows(
             table_name
             for table_name in recovered_inspector.get_table_names()
             if table_name.startswith("_alembic_tmp_")
+        }
+        assert "fcr_0024_recovery_manifest" not in {
+            table_name for table_name in recovered_inspector.get_table_names()
         }
         with recovered_engine.connect() as connection:
             assert connection.scalar(
@@ -596,6 +702,219 @@ def test_0024_sqlite_c043_retry_recovers_known_batch_failure_windows(
             )
     finally:
         recovered_engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("manifest_corruption", "expected_error"),
+    (
+        ("forged_digest", "identity mismatch"),
+        ("expired_revision", "expired"),
+        ("unknown_stage", "unknown stage"),
+    ),
+)
+def test_0024_sqlite_recovery_manifest_corruption_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    manifest_corruption: str,
+    expected_error: str,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / f"task4-manifest-{manifest_corruption}.db"
+    _set_migration_env(db_path, tmp_path, monkeypatch)
+    config = _alembic_config(root)
+    alembic_command.upgrade(config, "20260824_0023")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        _install_c043_0023_sqlite_shape(engine)
+    finally:
+        engine.dispose()
+
+    injected = False
+
+    class InjectedMigrationFailure(RuntimeError):
+        pass
+
+    def fail_after_detach(
+        connection: Any,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        nonlocal injected
+        database = connection.engine.url.database
+        if (
+            not injected
+            and database is not None
+            and Path(database).resolve() == db_path.resolve()
+            and "alter table _alembic_tmp_review_deletion_artifacts "
+            "rename to review_deletion_artifacts"
+            in _normalize_sqlite_sql(statement)
+        ):
+            injected = True
+            raise InjectedMigrationFailure(manifest_corruption)
+
+    event.listen(Engine, "after_cursor_execute", fail_after_detach)
+    try:
+        with pytest.raises(InjectedMigrationFailure):
+            alembic_command.upgrade(config, "20260824_0024")
+    finally:
+        event.remove(Engine, "after_cursor_execute", fail_after_detach)
+    assert injected is True
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.begin() as connection:
+            manifest_sql = connection.scalar(
+                text(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'fcr_0024_recovery_manifest'",
+                ),
+            )
+            assert isinstance(manifest_sql, str)
+            connection.execute(text("DROP TABLE fcr_0024_recovery_manifest"))
+            if manifest_corruption == "forged_digest":
+                manifest_sql = re.sub(
+                    r"(source_schema_sha256 TEXT NOT NULL DEFAULT ')[0-9a-f]{64}'",
+                    rf"\g<1>{'f' * 64}'",
+                    manifest_sql,
+                )
+            elif manifest_corruption == "expired_revision":
+                manifest_sql = manifest_sql.replace(
+                    "'20260824_0024'",
+                    "'20260824_0000'",
+                    1,
+                )
+            else:
+                manifest_sql = manifest_sql.replace(
+                    "'artifact_detach_intent_fk'",
+                    "'unknown_stage'",
+                    1,
+                )
+            connection.execute(text(manifest_sql))
+    finally:
+        engine.dispose()
+
+    def snapshot() -> tuple[object, ...]:
+        snapshot_engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            with snapshot_engine.connect() as connection:
+                return (
+                    tuple(
+                        tuple(row)
+                        for row in connection.execute(
+                            text(
+                                "SELECT type, name, tbl_name, sql "
+                                "FROM sqlite_master "
+                                "WHERE name NOT LIKE 'sqlite_%' "
+                                "ORDER BY type, name",
+                            ),
+                        )
+                    ),
+                    connection.scalar(
+                        text("SELECT version_num FROM alembic_version"),
+                    ),
+                )
+        finally:
+            snapshot_engine.dispose()
+
+    before = snapshot()
+    with pytest.raises(RuntimeError, match=expected_error):
+        alembic_command.upgrade(config, "20260824_0024")
+    assert snapshot() == before
+
+
+def test_0024_sqlite_retry_after_manifest_clear_before_stamp_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    canonical_path = tmp_path / "task4-pre-stamp-canonical.db"
+    failed_path = tmp_path / "task4-pre-stamp-failed.db"
+
+    def prepare(db_path: Path) -> object:
+        _set_migration_env(db_path, tmp_path, monkeypatch)
+        config = _alembic_config(root)
+        alembic_command.upgrade(config, "20260824_0023")
+        engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            _install_c043_0023_sqlite_shape(engine)
+        finally:
+            engine.dispose()
+        return config
+
+    canonical_config = prepare(canonical_path)
+    alembic_command.upgrade(canonical_config, "20260824_0024")
+    canonical_engine = create_engine(f"sqlite:///{canonical_path}")
+    try:
+        canonical_inventory = _sqlite_task4_schema_inventory(canonical_engine)
+    finally:
+        canonical_engine.dispose()
+
+    failed_config = prepare(failed_path)
+    injected = False
+
+    class InjectedStampFailure(RuntimeError):
+        pass
+
+    def fail_before_stamp(
+        connection: Any,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        nonlocal injected
+        database = connection.engine.url.database
+        if (
+            not injected
+            and database is not None
+            and Path(database).resolve() == failed_path.resolve()
+            and _normalize_sqlite_sql(statement).startswith(
+                "update alembic_version set version_num=",
+            )
+        ):
+            injected = True
+            raise InjectedStampFailure("before 0024 stamp")
+
+    event.listen(Engine, "before_cursor_execute", fail_before_stamp)
+    try:
+        with pytest.raises(InjectedStampFailure):
+            alembic_command.upgrade(failed_config, "20260824_0024")
+    finally:
+        event.remove(Engine, "before_cursor_execute", fail_before_stamp)
+    assert injected is True
+
+    engine = create_engine(f"sqlite:///{failed_path}")
+    try:
+        inspector = inspect(engine)
+        table_names = set(inspector.get_table_names())
+        temporary_tables = {
+            table_name
+            for table_name in table_names
+            if table_name.startswith("_alembic_tmp_")
+        }
+        if temporary_tables:
+            assert "fcr_0024_recovery_manifest" in table_names
+        with engine.connect() as connection:
+            assert connection.scalar(
+                text("SELECT version_num FROM alembic_version"),
+            ) == "20260824_0023"
+    finally:
+        engine.dispose()
+
+    _set_migration_env(failed_path, tmp_path, monkeypatch)
+    alembic_command.upgrade(failed_config, "20260824_0024")
+    engine = create_engine(f"sqlite:///{failed_path}")
+    try:
+        assert _sqlite_task4_schema_inventory(engine) == canonical_inventory
+        assert "fcr_0024_recovery_manifest" not in inspect(
+            engine,
+        ).get_table_names()
+    finally:
+        engine.dispose()
 
 
 def test_0024_sqlite_unknown_alembic_temporary_table_fails_closed(
@@ -672,16 +991,10 @@ def test_0024_sqlite_known_temp_preflight_failure_changes_nothing(
             )
             connection.execute(
                 text(
-                    "INSERT INTO _alembic_tmp_review_deletion_artifacts "
-                    "SELECT * FROM review_deletion_artifacts",
-                ),
-            )
-            connection.execute(
-                text(
                     "UPDATE _alembic_tmp_review_deletion_artifacts "
-                    "SET id = 'artifact_temp_only' "
-                    "WHERE rowid = (SELECT max(rowid) FROM "
-                    "_alembic_tmp_review_deletion_artifacts)",
+                    "SET relative_logical_target = "
+                    "'files/file-same-id-different-content' "
+                    "WHERE id = 'artifact_c043_legacy'",
                 ),
             )
     finally:
@@ -730,7 +1043,7 @@ def test_0024_sqlite_known_temp_preflight_failure_changes_nothing(
             snapshot_engine.dispose()
 
     before = snapshot()
-    with pytest.raises(RuntimeError, match="rows absent from its source"):
+    with pytest.raises(RuntimeError):
         alembic_command.upgrade(config, "20260824_0024")
     assert snapshot() == before
 
