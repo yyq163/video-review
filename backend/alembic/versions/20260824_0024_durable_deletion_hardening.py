@@ -31,6 +31,9 @@ ISSUE_CHILD_FOREIGN_KEYS = (
 )
 ISSUE_CHILD_COLUMNS = ["issue_id", "project_ref_id", "review_item_id", "version_id"]
 ISSUE_IDENTITY_COLUMNS = ["id", "project_ref_id", "review_item_id", "version_id"]
+INTENT_CLAIM_CHECK = "ck_review_deletion_intents_cleanup_claim"
+ARTIFACT_SHA_CHECK = "ck_review_deletion_artifacts_sha256"
+ARTIFACT_NAMESPACE_CHECK = "ck_review_deletion_artifacts_kind_namespace"
 
 
 def _recreate_mode() -> str:
@@ -39,11 +42,29 @@ def _recreate_mode() -> str:
 
 def _replace_issue_child_foreign_keys(ondelete: str) -> None:
     for table_name, constraint_name in ISSUE_CHILD_FOREIGN_KEYS:
+        foreign_key = next(
+            (
+                candidate
+                for candidate in sa.inspect(op.get_bind()).get_foreign_keys(
+                    table_name,
+                )
+                if candidate.get("name") == constraint_name
+            ),
+            None,
+        )
+        current_ondelete = (
+            str((foreign_key.get("options") or {}).get("ondelete", "")).upper()
+            if foreign_key is not None
+            else ""
+        )
+        if current_ondelete == ondelete.upper():
+            continue
         with op.batch_alter_table(
             table_name,
             recreate=_recreate_mode(),
         ) as batch_op:
-            batch_op.drop_constraint(constraint_name, type_="foreignkey")
+            if foreign_key is not None:
+                batch_op.drop_constraint(constraint_name, type_="foreignkey")
             batch_op.create_foreign_key(
                 constraint_name,
                 "review_issues",
@@ -119,6 +140,7 @@ def _install_parent_bound_immutable_delete_triggers() -> None:
             f"CREATE TRIGGER {trigger_name} BEFORE DELETE ON {table_name} "
             "FOR EACH ROW EXECUTE FUNCTION fcr_allow_issue_child_parent_delete()",
         )
+    op.execute("DROP FUNCTION IF EXISTS fcr_allow_durable_business_delete()")
 
 
 def _restore_unconditional_immutable_delete_triggers() -> None:
@@ -139,6 +161,9 @@ def _install_artifact_insert_sha_guard() -> None:
     dialect = op.get_bind().dialect.name
     if dialect == "sqlite":
         op.execute(
+            "DROP TRIGGER IF EXISTS trg_review_deletion_artifacts_sha_insert",
+        )
+        op.execute(
             """
             CREATE TRIGGER trg_review_deletion_artifacts_sha_insert
             BEFORE INSERT ON review_deletion_artifacts
@@ -151,6 +176,10 @@ def _install_artifact_insert_sha_guard() -> None:
         return
     if dialect != "postgresql":
         return
+    op.execute(
+        "DROP TRIGGER IF EXISTS trg_review_deletion_artifacts_sha_insert "
+        "ON review_deletion_artifacts",
+    )
     op.execute(
         """
         CREATE OR REPLACE FUNCTION fcr_require_deletion_artifact_sha_insert()
@@ -201,6 +230,10 @@ def _install_intent_claim_guard() -> None:
         )
         for event in ("INSERT", "UPDATE"):
             op.execute(
+                "DROP TRIGGER IF EXISTS "
+                f"trg_review_deletion_intents_cleanup_claim_{event.lower()}",
+            )
+            op.execute(
                 f"""
                 CREATE TRIGGER trg_review_deletion_intents_cleanup_claim_{event.lower()}
                 BEFORE {event} ON review_deletion_intents
@@ -212,7 +245,7 @@ def _install_intent_claim_guard() -> None:
             )
         return
     op.create_check_constraint(
-        "ck_review_deletion_intents_cleanup_claim",
+        INTENT_CLAIM_CHECK,
         "review_deletion_intents",
         check_expression,
     )
@@ -234,33 +267,80 @@ def _drop_intent_claim_guard() -> None:
 
 
 def upgrade() -> None:
-    op.add_column(
-        "review_deletion_intents",
-        sa.Column("cleanup_claim_id", sa.String(length=64), nullable=True),
-    )
-    op.add_column(
-        "review_deletion_intents",
-        sa.Column(
-            "cleanup_claim_expires_at",
-            sa.DateTime(timezone=True),
-            nullable=True,
-        ),
-    )
+    intent_columns = {
+        column["name"]
+        for column in sa.inspect(op.get_bind()).get_columns(
+            "review_deletion_intents",
+        )
+    }
+    if "cleanup_claim_id" not in intent_columns:
+        op.add_column(
+            "review_deletion_intents",
+            sa.Column("cleanup_claim_id", sa.String(length=64), nullable=True),
+        )
+    if "cleanup_claim_expires_at" not in intent_columns:
+        op.add_column(
+            "review_deletion_intents",
+            sa.Column(
+                "cleanup_claim_expires_at",
+                sa.DateTime(timezone=True),
+                nullable=True,
+            ),
+        )
+    intent_checks = {
+        constraint["name"]
+        for constraint in sa.inspect(op.get_bind()).get_check_constraints(
+            "review_deletion_intents",
+        )
+    }
+    if (
+        INTENT_CLAIM_CHECK in intent_checks
+        and op.get_bind().dialect.name != "sqlite"
+    ):
+        with op.batch_alter_table(
+            "review_deletion_intents",
+            recreate=_recreate_mode(),
+        ) as batch_op:
+            batch_op.drop_constraint(INTENT_CLAIM_CHECK, type_="check")
     _install_intent_claim_guard()
 
+    artifact_inspector = sa.inspect(op.get_bind())
+    artifact_columns = {
+        column["name"]
+        for column in artifact_inspector.get_columns(
+            "review_deletion_artifacts",
+        )
+    }
+    artifact_checks = {
+        constraint["name"]
+        for constraint in artifact_inspector.get_check_constraints(
+            "review_deletion_artifacts",
+        )
+    }
     with op.batch_alter_table(
         "review_deletion_artifacts",
         recreate=_recreate_mode(),
     ) as batch_op:
-        batch_op.add_column(
-            sa.Column("expected_sha256", sa.String(length=64), nullable=True),
-        )
+        if "expected_sha256" not in artifact_columns:
+            batch_op.add_column(
+                sa.Column("expected_sha256", sa.String(length=64), nullable=True),
+            )
+        else:
+            batch_op.alter_column(
+                "expected_sha256",
+                existing_type=sa.String(length=64),
+                nullable=True,
+            )
+        if ARTIFACT_SHA_CHECK in artifact_checks:
+            batch_op.drop_constraint(ARTIFACT_SHA_CHECK, type_="check")
+        if ARTIFACT_NAMESPACE_CHECK in artifact_checks:
+            batch_op.drop_constraint(ARTIFACT_NAMESPACE_CHECK, type_="check")
         batch_op.create_check_constraint(
-            "ck_review_deletion_artifacts_sha256",
+            ARTIFACT_SHA_CHECK,
             "expected_sha256 IS NULL OR length(expected_sha256) = 64",
         )
         batch_op.create_check_constraint(
-            "ck_review_deletion_artifacts_kind_namespace",
+            ARTIFACT_NAMESPACE_CHECK,
             "(artifact_kind = 'project_package' "
             "AND relative_logical_target LIKE 'packages/%') "
             "OR (artifact_kind IN "

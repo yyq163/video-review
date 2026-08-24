@@ -951,8 +951,16 @@ def test_managed_directory_scans_rotate_past_100_referenced_entries(
         os.utime(path, (stale.timestamp(), stale.timestamp()))
     blocker_ids = {name if kind == "file" else name.removesuffix(".zip") for name in blocker_names}
     scan = _use_ordered_directory_scan(monkeypatch, maintenance, [*blocker_names, cleanable_name])
+    monkeypatch.setattr(
+        maintenance,
+        "acquire_storage_target_mutation_locks",
+        lambda *_args, **_kwargs: (),
+    )
 
     class ReferencedSession:
+        def rollback(self) -> None:
+            return None
+
         def scalars(self, _statement: object) -> list[object]:
             return []
 
@@ -960,6 +968,9 @@ def test_managed_directory_scans_rotate_past_100_referenced_entries(
             return object() if record_id in blocker_ids else None
 
         def scalar(self, _statement: object) -> None:
+            return None
+
+        def commit(self) -> None:
             return None
 
     session = cast(Session, ReferencedSession())
@@ -1012,6 +1023,9 @@ def test_managed_directory_cleanup_uses_scanned_root_after_path_replacement(
             yield pinned
 
     class EmptySession:
+        def rollback(self) -> None:
+            return None
+
         def scalars(self, _statement: object) -> list[object]:
             return []
 
@@ -1025,6 +1039,11 @@ def test_managed_directory_cleanup_uses_scanned_root_after_path_replacement(
             return None
 
     monkeypatch.setattr(maintenance, "_pin_regular_file_beneath", swap_before_pin)
+    monkeypatch.setattr(
+        maintenance,
+        "acquire_storage_target_mutation_locks",
+        lambda *_args, **_kwargs: (),
+    )
     session = cast(Session, EmptySession())
     assert maintenance._cleanup_orphan_managed_files(
         session,
@@ -1037,7 +1056,10 @@ def test_managed_directory_cleanup_uses_scanned_root_after_path_replacement(
     assert (root / file_id).read_bytes() == replacement_content
 
 
-def test_orphan_file_cleanup_preserves_upload_session_file_references(tmp_path: Path) -> None:
+def test_orphan_file_cleanup_preserves_upload_session_file_references(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import backend.app.maintenance_cleanup as maintenance
 
     root = tmp_path / "files"
@@ -1047,8 +1069,16 @@ def test_orphan_file_cleanup_preserves_upload_session_file_references(tmp_path: 
     target.write_bytes(b"active-finalization")
     stale = datetime.now(timezone.utc) - timedelta(days=2)
     os.utime(target, (stale.timestamp(), stale.timestamp()))
+    monkeypatch.setattr(
+        maintenance,
+        "acquire_storage_target_mutation_locks",
+        lambda *_args, **_kwargs: (),
+    )
 
     class UploadReferencedSession:
+        def rollback(self) -> None:
+            return None
+
         def scalars(self, _statement: object) -> list[object]:
             return []
 
@@ -1061,6 +1091,9 @@ def test_orphan_file_cleanup_preserves_upload_session_file_references(tmp_path: 
             assert "upload_sessions.file_id" in sql
             return "upl_active"
 
+        def commit(self) -> None:
+            return None
+
     session = cast(Session, UploadReferencedSession())
     assert maintenance._cleanup_orphan_managed_files(
         session,
@@ -1071,7 +1104,10 @@ def test_orphan_file_cleanup_preserves_upload_session_file_references(tmp_path: 
     assert target.read_bytes() == b"active-finalization"
 
 
-def test_orphan_media_derivative_is_eventually_removed(tmp_path: Path) -> None:
+def test_orphan_media_derivative_is_eventually_removed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import backend.app.maintenance_cleanup as maintenance
 
     root = tmp_path / "files"
@@ -1081,8 +1117,16 @@ def test_orphan_media_derivative_is_eventually_removed(tmp_path: Path) -> None:
     target.write_bytes(b"deterministic-uncommitted-derivative")
     stale = datetime.now(timezone.utc) - timedelta(days=2)
     os.utime(target, (stale.timestamp(), stale.timestamp()))
+    monkeypatch.setattr(
+        maintenance,
+        "acquire_storage_target_mutation_locks",
+        lambda *_args, **_kwargs: (),
+    )
 
     class EmptySession:
+        def rollback(self) -> None:
+            return None
+
         def scalars(self, _statement: object) -> list[object]:
             return []
 
@@ -1090,6 +1134,9 @@ def test_orphan_media_derivative_is_eventually_removed(tmp_path: Path) -> None:
             return None
 
         def scalar(self, _statement: object) -> None:
+            return None
+
+        def commit(self) -> None:
             return None
 
     session = cast(Session, EmptySession())
@@ -1109,8 +1156,9 @@ def test_orphan_media_derivative_is_eventually_removed(tmp_path: Path) -> None:
         ("playback_faststart", "apv-h264-v1"),
     ],
 )
-def test_orphan_media_derivative_cleanup_locks_and_preserves_active_task(
+def test_orphan_media_derivative_cleanup_preserves_active_task_without_business_row_lock(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     kind: str,
     playback_variant: str | None,
 ) -> None:
@@ -1130,8 +1178,16 @@ def test_orphan_media_derivative_cleanup_locks_and_preserves_active_task(
     os.utime(target, (stale.timestamp(), stale.timestamp()))
     lock_checked = False
     committed = False
+    monkeypatch.setattr(
+        maintenance,
+        "acquire_storage_target_mutation_locks",
+        lambda *_args, **_kwargs: (),
+    )
 
     class ActiveTaskSession:
+        def rollback(self) -> None:
+            return None
+
         def scalars(self, statement: object) -> list[object]:
             nonlocal lock_checked
             if "review_deletion_artifacts" in str(statement):
@@ -1156,7 +1212,7 @@ def test_orphan_media_derivative_cleanup_locks_and_preserves_active_task(
         datetime.now(timezone.utc),
         kind="file",
     ) == (0, 0)
-    assert lock_checked is True
+    assert lock_checked is False
     assert committed is True
     assert target.read_bytes() == b"recoverable-active-derivative"
 

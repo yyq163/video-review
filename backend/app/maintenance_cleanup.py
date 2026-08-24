@@ -51,6 +51,9 @@ from backend.app.safe_files import (
     unlink_regular_file,
 )
 from backend.app.settings import Settings, get_database_settings
+from backend.app.storage_mutation_locks import (
+    acquire_storage_target_mutation_locks,
+)
 from backend.app.upload_parts import (
     upload_identity_from_candidate_name,
     validated_upload_part_path,
@@ -915,6 +918,14 @@ def _cleanup_orphan_managed_files(
                 )
                 or (kind == "package" and PACKAGE_FILE_RE.fullmatch(entry.name))
             }
+            if not logical_targets:
+                return 0, 0
+            session.rollback()
+            acquire_storage_target_mutation_locks(
+                session,
+                get_database_settings(),
+                set(logical_targets.values()),
+            )
             protected_deletion_targets = set(
                 session.scalars(
                     select(ReviewDeletionArtifactModel.relative_logical_target)
@@ -936,7 +947,7 @@ def _cleanup_orphan_managed_files(
                     )
                     .with_for_update(),
                 ),
-            ) if logical_targets else set()
+            )
             active_derivative_ids: set[str] = set()
             if kind == "file" and any(DERIVATIVE_FILE_ID_RE.fullmatch(entry.name) for entry in entries):
                 active_derivative_ids = {
@@ -945,7 +956,6 @@ def _cleanup_orphan_managed_files(
                         select(MediaDerivativeTaskModel)
                         .where(MediaDerivativeTaskModel.status.in_(("queued", "running")))
                         .order_by(MediaDerivativeTaskModel.id)
-                        .with_for_update()
                     )
                     for output_file_id in _active_derivative_output_file_ids(
                         task.id,
@@ -993,9 +1003,9 @@ def _cleanup_orphan_managed_files(
                             removed += 1
                 except OSError:
                     failed += 1
-            if active_derivative_ids:
-                session.commit()
+            session.commit()
     except (OSError, ValueError):
+        session.rollback()
         return removed, failed + 1
     return removed, failed
 

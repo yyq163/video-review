@@ -22,6 +22,9 @@ from backend.app.modules.review_contracts.generated import (
 )
 from backend.app.safe_files import UnsafeFilePathError, contained_path, pin_regular_file
 from backend.app.settings import Settings
+from backend.app.storage_mutation_locks import (
+    acquire_storage_target_mutation_locks,
+)
 from backend.app.thumbnail_similarity import (
     reconcile_project_thumbnail_groups,
     thumbnail_variant_file_ids,
@@ -125,13 +128,21 @@ class DurableDeletionCoordinator:
         self._assert_no_active_finalization(scope)
         packages = self._packages(project.id)
         self._assert_cleanup_not_leased(scope, packages)
+        file_candidates = self._acquire_scope_storage_mutation_locks(
+            scope,
+            packages,
+        )
         intent = self._create_intent(
             command_type="DeleteProject",
             subject_type="project",
             project_ref_id=project.id,
             review_item_id=None,
         )
-        file_ids = self._capture_scope_files(intent, scope)
+        file_ids = self._capture_scope_files(
+            intent,
+            scope,
+            candidates=file_candidates,
+        )
         package_ids = self._capture_packages(intent, packages)
         self._delete_scope(
             project=project,
@@ -206,13 +217,21 @@ class DurableDeletionCoordinator:
                 set(scope.finalization_ids),
             )
         ]
+        file_candidates = self._acquire_scope_storage_mutation_locks(
+            scope,
+            deletable_packages,
+        )
         intent = self._create_intent(
             command_type=command_type,
             subject_type="review_item",
             project_ref_id=project.id,
             review_item_id=item.id,
         )
-        file_ids = self._capture_scope_files(intent, scope)
+        file_ids = self._capture_scope_files(
+            intent,
+            scope,
+            candidates=file_candidates,
+        )
         package_ids = self._capture_packages(intent, deletable_packages)
         self._delete_scope(
             project=project,
@@ -246,6 +265,15 @@ class DurableDeletionCoordinator:
             raise ReviewError("VALIDATION_ERROR", "批量删除分集必须二次确认")
         project = self._project(payload["project_ref_id"], for_update=True)
         self._assert_project_active(project)
+        batch_scope = self._scope(
+            project.id,
+            tuple(payload["review_item_ids"]),
+        )
+        batch_packages = self._packages(project.id)
+        self._acquire_scope_storage_mutation_locks(
+            batch_scope,
+            batch_packages,
+        )
         results: list[dict[str, Any]] = []
         for review_item_id in payload["review_item_ids"]:
             savepoint = self.session.begin_nested()
@@ -550,11 +578,10 @@ class DurableDeletionCoordinator:
         self.session.flush()
         return intent
 
-    def _capture_scope_files(
+    def _scope_file_candidates(
         self,
-        intent: ReviewDeletionIntentModel,
         scope: _DeletionScope,
-    ) -> set[str]:
+    ) -> dict[str, str]:
         candidates: dict[str, str] = {}
         if scope.version_ids:
             versions = list(
@@ -588,6 +615,31 @@ class DurableDeletionCoordinator:
                 if task.kind == "thumbnail":
                     for file_id in thumbnail_variant_file_ids(task.result_details):
                         candidates.setdefault(file_id, "thumbnail")
+        return candidates
+
+    def _acquire_scope_storage_mutation_locks(
+        self,
+        scope: _DeletionScope,
+        packages: list[FinalCutPackageSnapshotModel],
+    ) -> dict[str, str]:
+        candidates = self._scope_file_candidates(scope)
+        acquire_storage_target_mutation_locks(
+            self.session,
+            self.settings,
+            {
+                *(f"files/{file_id}" for file_id in candidates),
+                *(f"packages/{package.id}.zip" for package in packages),
+            },
+        )
+        return candidates
+
+    def _capture_scope_files(
+        self,
+        intent: ReviewDeletionIntentModel,
+        scope: _DeletionScope,
+        *,
+        candidates: dict[str, str],
+    ) -> set[str]:
         deletable: set[str] = set()
         for file_id, artifact_kind in candidates.items():
             if self._file_has_reference_outside_scope(file_id, scope):

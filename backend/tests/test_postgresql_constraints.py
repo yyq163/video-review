@@ -268,6 +268,214 @@ def _metadata_diffs(database_url: str) -> list[object]:
         engine.dispose()
 
 
+def _install_c043_0023_postgresql_shape(database_url: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE review_deletion_intents "
+                    "ADD COLUMN cleanup_claim_id varchar(64), "
+                    "ADD COLUMN cleanup_claim_expires_at timestamptz, "
+                    "ADD CONSTRAINT ck_review_deletion_intents_cleanup_claim "
+                    "CHECK ((status = 'cleaning' "
+                    "AND cleanup_claim_id IS NOT NULL "
+                    "AND cleanup_claim_expires_at IS NOT NULL) OR "
+                    "(status != 'cleaning' AND cleanup_claim_id IS NULL "
+                    "AND cleanup_claim_expires_at IS NULL))",
+                ),
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE review_deletion_artifacts "
+                    "ADD COLUMN expected_sha256 varchar(64) NOT NULL, "
+                    "ADD CONSTRAINT ck_review_deletion_artifacts_sha256 "
+                    "CHECK (length(expected_sha256) = 64)",
+                ),
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE OR REPLACE FUNCTION fcr_allow_durable_business_delete()
+                    RETURNS trigger AS $$
+                    BEGIN
+                      IF EXISTS (
+                        SELECT 1 FROM review_deletion_intents intent
+                        WHERE intent.status = 'pending'
+                          AND intent.project_ref_id_snapshot = OLD.project_ref_id
+                          AND (
+                            intent.subject_type = 'project'
+                            OR (
+                              intent.subject_type = 'review_item'
+                              AND intent.review_item_id_snapshot = OLD.review_item_id
+                            )
+                          )
+                      ) THEN
+                        RETURN OLD;
+                      END IF;
+                      RAISE EXCEPTION '% are immutable', TG_TABLE_NAME;
+                    END;
+                    $$ LANGUAGE plpgsql
+                    """,
+                ),
+            )
+            for table_name in ("issue_revisions", "annotation_sets"):
+                connection.execute(
+                    text(
+                        f"DROP TRIGGER IF EXISTS trg_{table_name}_no_delete "
+                        f"ON {table_name}",
+                    ),
+                )
+                connection.execute(
+                    text(
+                        f"CREATE TRIGGER trg_{table_name}_no_delete "
+                        f"BEFORE DELETE ON {table_name} FOR EACH ROW "
+                        "EXECUTE FUNCTION fcr_allow_durable_business_delete()",
+                    ),
+                )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO review_deletion_intents (
+                      id, command_type, operation_identity_hash, subject_type,
+                      project_ref_id_snapshot, review_item_id_snapshot,
+                      status, attempts, last_error_code, cleanup_claim_id,
+                      cleanup_claim_expires_at, completed_at,
+                      created_at, updated_at
+                    ) VALUES (
+                      'delete_c043_legacy', 'DeleteReviewItem', :identity,
+                      'review_item', 'project-c043', 'item-c043', 'pending', 0,
+                      NULL, NULL, NULL, NULL, now(), now()
+                    )
+                    """,
+                ),
+                {"identity": "c" * 64},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO review_deletion_artifacts (
+                      id, deletion_intent_id, artifact_kind,
+                      relative_logical_target, expected_device, expected_inode,
+                      expected_ctime_ns, expected_size, expected_sha256,
+                      status, attempts, last_error_code, deleted_at,
+                      created_at, updated_at
+                    ) VALUES (
+                      'artifact_c043_legacy', 'delete_c043_legacy',
+                      'original_media', 'files/file-c043-legacy', 1, 2, 3, 4,
+                      :sha256, 'pending', 0, NULL, NULL, now(), now()
+                    )
+                    """,
+                ),
+                {
+                    "sha256": hashlib.sha256(
+                        b"c043 legacy artifact",
+                    ).hexdigest(),
+                },
+            )
+    finally:
+        engine.dispose()
+
+
+def test_postgresql_0024_reconciles_c043_0023_shape_without_losing_rows() -> None:
+    database_url = _postgres_database_url()
+    database = _postgres_temp_database(database_url)
+    try:
+        _prepare_postgresql_schema(database.url, "20260824_0023")
+        _install_c043_0023_postgresql_shape(database.url)
+        _prepare_postgresql_schema(database.url, "20260824_0024")
+        engine = create_engine(database.url)
+        try:
+            inspector = inspect(engine)
+            intent_columns = {
+                column["name"]: column
+                for column in inspector.get_columns("review_deletion_intents")
+            }
+            artifact_columns = {
+                column["name"]: column
+                for column in inspector.get_columns("review_deletion_artifacts")
+            }
+            assert {
+                "cleanup_claim_id",
+                "cleanup_claim_expires_at",
+            } <= intent_columns.keys()
+            assert artifact_columns["expected_sha256"]["nullable"] is True
+            assert {
+                constraint["name"]
+                for constraint in inspector.get_check_constraints(
+                    "review_deletion_artifacts",
+                )
+            } >= {
+                "ck_review_deletion_artifacts_sha256",
+                "ck_review_deletion_artifacts_kind_namespace",
+            }
+            for table_name in ("issue_revisions", "annotation_sets"):
+                issue_fk = next(
+                    foreign_key
+                    for foreign_key in inspector.get_foreign_keys(table_name)
+                    if foreign_key["name"]
+                    == f"fk_{table_name}_issue_identity"
+                )
+                assert issue_fk["options"].get("ondelete") == "CASCADE"
+            with engine.connect() as connection:
+                intent_row = connection.execute(
+                    text(
+                        "SELECT status, cleanup_claim_id, "
+                        "cleanup_claim_expires_at "
+                        "FROM review_deletion_intents "
+                        "WHERE id = 'delete_c043_legacy'",
+                    ),
+                ).one()
+                artifact_row = connection.execute(
+                    text(
+                        "SELECT expected_sha256, relative_logical_target "
+                        "FROM review_deletion_artifacts "
+                        "WHERE id = 'artifact_c043_legacy'",
+                    ),
+                ).one()
+                trigger_rows = connection.execute(
+                    text(
+                        "SELECT trigger.tgname, procedure.proname "
+                        "FROM pg_trigger trigger "
+                        "JOIN pg_proc procedure ON procedure.oid = trigger.tgfoid "
+                        "WHERE NOT trigger.tgisinternal AND trigger.tgname IN ("
+                        "'trg_issue_revisions_no_delete', "
+                        "'trg_annotation_sets_no_delete', "
+                        "'trg_review_deletion_artifacts_sha_insert')",
+                    ),
+                ).all()
+                old_function = connection.scalar(
+                    text(
+                        "SELECT to_regprocedure("
+                        "'fcr_allow_durable_business_delete()')",
+                    ),
+                )
+            assert tuple(intent_row) == ("pending", None, None)
+            assert tuple(artifact_row) == (
+                hashlib.sha256(b"c043 legacy artifact").hexdigest(),
+                "files/file-c043-legacy",
+            )
+            trigger_functions = dict(trigger_rows)
+            assert trigger_functions == {
+                "trg_annotation_sets_no_delete": (
+                    "fcr_allow_issue_child_parent_delete"
+                ),
+                "trg_issue_revisions_no_delete": (
+                    "fcr_allow_issue_child_parent_delete"
+                ),
+                "trg_review_deletion_artifacts_sha_insert": (
+                    "fcr_require_deletion_artifact_sha_insert"
+                ),
+            }
+            assert old_function is None
+        finally:
+            engine.dispose()
+    finally:
+        os.environ["DATABASE_URL"] = database_url
+        get_settings.cache_clear()
+        _drop_postgres_temp_database(database)
+
+
 @pytest.mark.parametrize("command_type", ["CreateReviewItem", "FinalizeVersion"])
 def test_concurrent_identical_idempotency_reservations_replay_winner(command_type: str) -> None:
     database_url = _postgres_database_url()
@@ -2057,6 +2265,374 @@ def test_postgresql_replacement_identity_is_preserved_and_intent_stays_failed() 
         if path is not None:
             path.unlink(missing_ok=True)
         engine.dispose()
+
+
+def _is_postgresql_deletion_artifact_protection_query(statement: str) -> bool:
+    normalized = " ".join(statement.lower().split())
+    return (
+        normalized.startswith("select")
+        and "from review_deletion_artifacts" in normalized
+        and "relative_logical_target" in normalized
+    )
+
+
+def test_postgresql_delete_first_target_lock_blocks_regular_orphan_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.maintenance_cleanup import _cleanup_orphan_managed_files
+    from backend.app.modules.final_cut_review.infra.deletion import (
+        DurableDeletionCoordinator,
+    )
+
+    database_url = _postgres_database_url()
+    monkeypatch.setenv("STORAGE_ROOT", str(tmp_path / "storage"))
+    monkeypatch.setenv("PACKAGE_ROOT", str(tmp_path / "packages"))
+    get_settings.cache_clear()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url, pool_size=4, max_overflow=0)
+    PgSession = sessionmaker(bind=engine, expire_on_commit=False)
+    prefix = _suffix()
+    with PgSession() as seed:
+        project, item, _version_model, file_model = _seed_item(seed, prefix)
+    target = Path(file_model.storage_path)
+    os.utime(target, (1, 1), follow_symlinks=False)
+    deletion_at_capture = threading.Event()
+    release_deletion = threading.Event()
+    orphan_reached_query = threading.Event()
+    original_create_intent = DurableDeletionCoordinator._create_intent
+
+    def pause_deletion_capture(
+        coordinator: DurableDeletionCoordinator,
+        **kwargs: Any,
+    ) -> ReviewDeletionIntentModel:
+        deletion_at_capture.set()
+        if not release_deletion.wait(timeout=10):
+            raise TimeoutError("test did not release PostgreSQL deletion")
+        return original_create_intent(coordinator, **kwargs)
+
+    monkeypatch.setattr(
+        DurableDeletionCoordinator,
+        "_create_intent",
+        pause_deletion_capture,
+    )
+
+    def observe_query(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        if (
+            threading.current_thread().name == "pg-task4-orphan-second"
+            and _is_postgresql_deletion_artifact_protection_query(statement)
+        ):
+            orphan_reached_query.set()
+
+    event.listen(engine, "before_cursor_execute", observe_query)
+    deletion_results: list[dict[str, Any]] = []
+    deletion_errors: list[BaseException] = []
+    orphan_results: list[tuple[int, int]] = []
+    orphan_errors: list[BaseException] = []
+
+    def run_deletion() -> None:
+        try:
+            with PgSession() as session:
+                repository = SqlAlchemyReviewRepository(session, get_settings())
+                deletion_results.append(
+                    repository.execute(
+                        "DeleteReviewItem",
+                        {
+                            "project_ref_id": project.id,
+                            "review_item_id": item.id,
+                            "confirmed": True,
+                        },
+                        _postgres_delete_context(project.id, prefix),
+                        item.lock_version,
+                    ),
+                )
+                session.commit()
+        except BaseException as error:
+            deletion_errors.append(error)
+
+    def run_orphan() -> None:
+        try:
+            with PgSession() as session:
+                orphan_results.append(
+                    _cleanup_orphan_managed_files(
+                        session,
+                        get_settings().storage_root / "files",
+                        utcnow(),
+                        kind="file",
+                    ),
+                )
+        except BaseException as error:
+            orphan_errors.append(error)
+
+    deletion_thread = threading.Thread(
+        target=run_deletion,
+        name="pg-task4-delete-first",
+    )
+    orphan_thread = threading.Thread(
+        target=run_orphan,
+        name="pg-task4-orphan-second",
+    )
+    try:
+        deletion_thread.start()
+        assert deletion_at_capture.wait(timeout=10)
+        orphan_thread.start()
+        query_crossed_while_delete_held_target = orphan_reached_query.wait(
+            timeout=0.75,
+        )
+    finally:
+        release_deletion.set()
+        deletion_thread.join(timeout=15)
+        orphan_thread.join(timeout=15)
+        event.remove(engine, "before_cursor_execute", observe_query)
+
+    try:
+        assert not deletion_thread.is_alive()
+        assert not orphan_thread.is_alive()
+        assert not query_crossed_while_delete_held_target
+        assert deletion_errors == []
+        assert orphan_errors == []
+        assert deletion_results == [
+            {
+                "project_ref_id": project.id,
+                "review_item_id": item.id,
+                "outcome": "deleted",
+                "error_code": None,
+            },
+        ]
+        assert orphan_results == [(0, 0)]
+        assert target.is_file()
+        with PgSession() as observer:
+            intent = observer.scalar(
+                select(ReviewDeletionIntentModel).where(
+                    ReviewDeletionIntentModel.review_item_id_snapshot
+                    == item.id,
+                ),
+            )
+            assert intent is not None and intent.status == "pending"
+    finally:
+        with PgSession() as cleanup:
+            intent = cleanup.scalar(
+                select(ReviewDeletionIntentModel).where(
+                    ReviewDeletionIntentModel.review_item_id_snapshot
+                    == item.id,
+                ),
+            )
+            if intent is not None:
+                cleanup.delete(intent)
+            remaining_project = cleanup.get(ProjectRefModel, project.id)
+            if remaining_project is not None:
+                cleanup.delete(remaining_project)
+            cleanup.commit()
+        target.unlink(missing_ok=True)
+        engine.dispose()
+        get_settings.cache_clear()
+
+
+def test_postgresql_package_orphan_lock_blocks_project_delete_and_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.maintenance_cleanup import _cleanup_orphan_managed_files
+    from backend.app.modules.final_cut_review.infra.deletion import (
+        DurableDeletionCoordinator,
+    )
+
+    database_url = _postgres_database_url()
+    monkeypatch.setenv("STORAGE_ROOT", str(tmp_path / "storage"))
+    monkeypatch.setenv("PACKAGE_ROOT", str(tmp_path / "packages"))
+    get_settings.cache_clear()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url, pool_size=4, max_overflow=0)
+    PgSession = sessionmaker(bind=engine, expire_on_commit=False)
+    prefix = _suffix()
+    package_id = f"pkg_{uuid.uuid4().hex}"
+    package_content = b"postgres package target lock fixture"
+    package_path = get_settings().package_root / f"{package_id}.zip"
+    package_path.parent.mkdir(parents=True, exist_ok=True)
+    package_path.write_bytes(package_content)
+    with PgSession() as seed:
+        project, item, _version_model, file_model = _seed_item(seed, prefix)
+        seed.add(
+            FinalCutPackageSnapshotModel(
+                id=package_id,
+                project_ref_id=project.id,
+                status="ready",
+                package_filename=f"{package_id}.zip",
+                storage_path=str(package_path),
+                expires_at=utcnow() + timedelta(days=1),
+                total_bytes=len(package_content),
+                storage_bytes=len(package_content),
+                sha256=hashlib.sha256(package_content).hexdigest(),
+                build_attempts=0,
+                items=[],
+            ),
+        )
+        seed.commit()
+    original_file_path = Path(file_model.storage_path)
+    os.utime(package_path, (1, 1), follow_symlinks=False)
+    orphan_holds_query = threading.Event()
+    release_orphan = threading.Event()
+    deletion_at_capture = threading.Event()
+    original_create_intent = DurableDeletionCoordinator._create_intent
+
+    def observe_deletion_capture(
+        coordinator: DurableDeletionCoordinator,
+        **kwargs: Any,
+    ) -> ReviewDeletionIntentModel:
+        deletion_at_capture.set()
+        return original_create_intent(coordinator, **kwargs)
+
+    monkeypatch.setattr(
+        DurableDeletionCoordinator,
+        "_create_intent",
+        observe_deletion_capture,
+    )
+
+    def pause_query(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        if (
+            threading.current_thread().name == "pg-task4-package-orphan-first"
+            and _is_postgresql_deletion_artifact_protection_query(statement)
+        ):
+            orphan_holds_query.set()
+            if not release_orphan.wait(timeout=10):
+                raise TimeoutError("test did not release PostgreSQL package orphan")
+
+    event.listen(engine, "after_cursor_execute", pause_query)
+    orphan_results: list[tuple[int, int]] = []
+    orphan_errors: list[BaseException] = []
+    deletion_results: list[dict[str, Any]] = []
+    deletion_errors: list[BaseException] = []
+
+    def run_orphan() -> None:
+        try:
+            with PgSession() as session:
+                orphan_results.append(
+                    _cleanup_orphan_managed_files(
+                        session,
+                        get_settings().package_root,
+                        utcnow(),
+                        kind="package",
+                    ),
+                )
+        except BaseException as error:
+            orphan_errors.append(error)
+
+    def run_deletion() -> None:
+        try:
+            with PgSession() as session:
+                repository = SqlAlchemyReviewRepository(session, get_settings())
+                deletion_results.append(
+                    repository.execute(
+                        "DeleteProject",
+                        {
+                            "project_ref_id": project.id,
+                            "confirmed": True,
+                        },
+                        _postgres_delete_context(project.id, prefix),
+                        project.lock_version,
+                    ),
+                )
+                session.commit()
+        except BaseException as error:
+            deletion_errors.append(error)
+
+    orphan_thread = threading.Thread(
+        target=run_orphan,
+        name="pg-task4-package-orphan-first",
+    )
+    deletion_thread = threading.Thread(
+        target=run_deletion,
+        name="pg-task4-package-delete-second",
+    )
+    try:
+        orphan_thread.start()
+        assert orphan_holds_query.wait(timeout=10)
+        deletion_thread.start()
+        deletion_crossed_while_orphan_held_target = deletion_at_capture.wait(
+            timeout=0.75,
+        )
+    finally:
+        release_orphan.set()
+        orphan_thread.join(timeout=15)
+        deletion_thread.join(timeout=15)
+        event.remove(engine, "after_cursor_execute", pause_query)
+
+    try:
+        assert not orphan_thread.is_alive()
+        assert not deletion_thread.is_alive()
+        assert not deletion_crossed_while_orphan_held_target
+        assert orphan_errors == []
+        assert deletion_errors == []
+        assert orphan_results == [(0, 0)]
+        assert deletion_results == [
+            {
+                "project_ref_id": project.id,
+                "outcome": "deleted",
+                "error_code": None,
+            },
+        ]
+        assert package_path.is_file()
+
+        package_path.unlink()
+        replacement = b"postgres package replacement sha mismatch"
+        package_path.write_bytes(replacement)
+        os.utime(package_path, (1, 1), follow_symlinks=False)
+        with PgSession() as session:
+            assert _cleanup_orphan_managed_files(
+                session,
+                get_settings().package_root,
+                utcnow(),
+                kind="package",
+            ) == (0, 0)
+        assert package_path.read_bytes() == replacement
+        with PgSession() as observer:
+            intent = observer.scalar(
+                select(ReviewDeletionIntentModel).where(
+                    ReviewDeletionIntentModel.project_ref_id_snapshot
+                    == project.id,
+                    ReviewDeletionIntentModel.subject_type == "project",
+                ),
+            )
+            assert intent is not None and intent.status == "pending"
+            artifact = observer.scalar(
+                select(ReviewDeletionArtifactModel).where(
+                    ReviewDeletionArtifactModel.deletion_intent_id == intent.id,
+                    ReviewDeletionArtifactModel.artifact_kind
+                    == "project_package",
+                ),
+            )
+            assert artifact is not None
+            assert artifact.expected_sha256 != hashlib.sha256(replacement).hexdigest()
+    finally:
+        with PgSession() as cleanup:
+            intent = cleanup.scalar(
+                select(ReviewDeletionIntentModel).where(
+                    ReviewDeletionIntentModel.project_ref_id_snapshot
+                    == project.id,
+                    ReviewDeletionIntentModel.subject_type == "project",
+                ),
+            )
+            if intent is not None:
+                cleanup.delete(intent)
+                cleanup.commit()
+        package_path.unlink(missing_ok=True)
+        original_file_path.unlink(missing_ok=True)
+        engine.dispose()
+        get_settings.cache_clear()
 
 
 def test_postgresql_pending_delete_cleanup_isolates_persistent_file_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
