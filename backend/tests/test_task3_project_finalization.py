@@ -134,6 +134,172 @@ def _assert_allowed_concurrent_responses(responses: list[Any], *, successes: set
             }
 
 
+def _disable_sqlite_authority_guards(connection: Any) -> None:
+    connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+    connection.exec_driver_sql("PRAGMA ignore_check_constraints=ON")
+    trigger_names = list(
+        connection.scalars(
+            text(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND (name LIKE 'trg_review_items_%' "
+                "OR name LIKE 'trg_review_versions_%' "
+                "OR name LIKE 'trg_finalizations_%')"
+            )
+        )
+    )
+    for trigger_name in trigger_names:
+        connection.exec_driver_sql(f'DROP TRIGGER "{trigger_name}"')
+
+
+def _insert_orphan_active_finalization(
+    project_id: str,
+    item: dict[str, Any],
+    *,
+    suffix: str,
+) -> str:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FinalizationRecordModel,
+        ReviewVersionModel,
+    )
+
+    finalization_id = f"fin_orphan_{suffix}"
+    with SessionLocal.begin() as session:
+        version = session.get(ReviewVersionModel, item["current_version_id"])
+        assert version is not None
+        session.add(
+            FinalizationRecordModel(
+                id=finalization_id,
+                project_ref_id=project_id,
+                review_item_id=item["id"],
+                version_id=version.id,
+                version_no=version.version_no,
+                original_file_id=version.original_file_id,
+                original_filename=version.original_filename,
+                mime_type=version.mime_type,
+                file_size=version.file_size,
+                sha256=version.sha256,
+                duration_ms=version.duration_ms,
+                width=version.width,
+                height=version.height,
+                fps_num=version.fps_num,
+                fps_den=version.fps_den,
+                media_probe_version=version.media_probe_version,
+                status="active",
+            )
+        )
+    return finalization_id
+
+
+def _authority_business_snapshot(*project_ids: str) -> dict[str, Any]:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FinalCutPackageSnapshotModel,
+        FinalizationPackageInvalidationModel,
+        FinalizationRecordModel,
+        OutboxEventModel,
+        ProjectRefModel,
+        ReviewItemModel,
+    )
+
+    with SessionLocal() as session:
+        projects = list(
+            session.scalars(
+                select(ProjectRefModel)
+                .where(ProjectRefModel.id.in_(project_ids))
+                .order_by(ProjectRefModel.id)
+            )
+        )
+        items = list(
+            session.scalars(
+                select(ReviewItemModel)
+                .where(ReviewItemModel.project_ref_id.in_(project_ids))
+                .order_by(ReviewItemModel.project_ref_id, ReviewItemModel.id)
+            )
+        )
+        finalizations = list(
+            session.scalars(
+                select(FinalizationRecordModel)
+                .where(FinalizationRecordModel.project_ref_id.in_(project_ids))
+                .order_by(FinalizationRecordModel.project_ref_id, FinalizationRecordModel.id)
+            )
+        )
+        events = list(
+            session.scalars(
+                select(OutboxEventModel)
+                .where(OutboxEventModel.project_ref_id.in_(project_ids))
+                .order_by(OutboxEventModel.id)
+            )
+        )
+        packages = list(
+            session.scalars(
+                select(FinalCutPackageSnapshotModel)
+                .where(FinalCutPackageSnapshotModel.project_ref_id.in_(project_ids))
+                .order_by(FinalCutPackageSnapshotModel.id)
+            )
+        )
+        invalidations = list(
+            session.scalars(
+                select(FinalizationPackageInvalidationModel)
+                .where(FinalizationPackageInvalidationModel.project_ref_id.in_(project_ids))
+                .order_by(FinalizationPackageInvalidationModel.id)
+            )
+        )
+        return {
+            "projects": tuple(
+                (project.id, project.lock_version, project.updated_at)
+                for project in projects
+            ),
+            "items": tuple(
+                (
+                    item.project_ref_id,
+                    item.id,
+                    item.workflow_status,
+                    item.active_finalization_id,
+                    item.current_version_id,
+                    item.lock_version,
+                    item.updated_at,
+                )
+                for item in items
+            ),
+            "finalizations": tuple(
+                (
+                    row.project_ref_id,
+                    row.id,
+                    row.review_item_id,
+                    row.version_id,
+                    row.status,
+                    row.revoked_at,
+                )
+                for row in finalizations
+            ),
+            "events": tuple(
+                (
+                    row.event_id,
+                    row.event_type,
+                    row.aggregate_id,
+                    row.aggregate_version,
+                    row.finalization_id,
+                )
+                for row in events
+            ),
+            "packages": tuple(
+                (row.id, row.status, row.storage_reclaimed_at, row.updated_at)
+                for row in packages
+            ),
+            "invalidations": tuple(
+                (
+                    row.id,
+                    row.finalization_id,
+                    row.package_id,
+                    row.cleanup_status,
+                    row.cleanup_attempts,
+                )
+                for row in invalidations
+            ),
+        }
+
+
 def _seed_corrupt_project_finalization_authority(
     client: TestClient,
     corruption: str,
@@ -156,18 +322,7 @@ def _seed_corrupt_project_finalization_authority(
         )
 
     with database_module.engine.connect() as connection:
-        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
-        connection.exec_driver_sql("PRAGMA ignore_check_constraints=ON")
-        trigger_names = list(
-            connection.scalars(
-                text(
-                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
-                    "AND (name LIKE 'trg_review_items_%' OR name LIKE 'trg_finalizations_%')"
-                )
-            )
-        )
-        for trigger_name in trigger_names:
-            connection.exec_driver_sql(f'DROP TRIGGER "{trigger_name}"')
+        _disable_sqlite_authority_guards(connection)
 
         if corruption == "missing_pointer":
             connection.execute(
@@ -270,6 +425,198 @@ def test_project_commands_fail_closed_on_bidirectional_finalization_authority_co
         assert audit.failure_stage == "execution"
         assert audit.idempotency_key_hash == hashlib.sha256(command_id.encode()).hexdigest()
         assert command_id not in repr(vars(audit))
+
+
+def _seed_direct_authority_case(
+    client: TestClient,
+    authority_case: str,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    from backend.app.modules.final_cut_review.infra import database as database_module
+
+    if authority_case == "mixed_healthy_finalized_plus_pending_orphan":
+        project, items = _project_with_items(client, "TASK3DIRECTMIXEDORPHAN", 2)
+        finalize(client, project["project_ref_id"], items[0], if_match=items[0]["lock_version"])
+        _insert_orphan_active_finalization(
+            project["project_ref_id"],
+            items[1],
+            suffix="mixed_pending",
+        )
+        return project, (project["project_ref_id"],)
+
+    if authority_case == "mixed_bad_finalized_pointer_plus_pending_target":
+        project, items = _project_with_items(client, "TASK3DIRECTMIXEDPOINTER", 2)
+        with database_module.engine.connect() as connection:
+            _disable_sqlite_authority_guards(connection)
+            connection.execute(
+                text(
+                    "UPDATE review_items SET workflow_status = 'finalized', "
+                    "active_finalization_id = 'fin_missing_mixed_target' WHERE id = :item_id"
+                ),
+                {"item_id": items[0]["id"]},
+            )
+            connection.commit()
+        return project, (project["project_ref_id"],)
+
+    if authority_case == "same_item_old_noncurrent_version_pointer":
+        project, items = _project_with_items(client, "TASK3DIRECTOLDVERSION", 1)
+        finalize(client, project["project_ref_id"], items[0], if_match=items[0]["lock_version"])
+        new_file_id = upload_video(
+            client,
+            filename="task3-direct-current-v2.mp4",
+            seed=b"V2",
+        )
+        new_version_id = f"ver_direct_v2_{uuid.uuid4().hex}"
+        with database_module.engine.connect() as connection:
+            _disable_sqlite_authority_guards(connection)
+            connection.execute(
+                text("UPDATE review_versions SET is_current = 0 WHERE id = :old_version_id"),
+                {"old_version_id": items[0]["current_version_id"]},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO review_versions ("
+                    "id, project_ref_id, review_item_id, previous_version_id, version_no, version_label, is_current, "
+                    "original_file_id, original_filename, mime_type, file_size, sha256, duration_ms, width, height, "
+                    "fps_num, fps_den, media_probe_version, responsible_editor_id, responsible_editor_name_snapshot, "
+                    "playback_asset_id, thumbnail_asset_id, version_note, change_summary, lock_version, created_at"
+                    ") SELECT "
+                    ":new_version_id, old.project_ref_id, old.review_item_id, old.id, 2, 'V2', 1, "
+                    "file.id, file.original_filename, file.mime_type, file.file_size, file.sha256, file.duration_ms, "
+                    "file.width, file.height, file.fps_num, file.fps_den, file.media_probe_version, "
+                    "old.responsible_editor_id, old.responsible_editor_name_snapshot, file.id, NULL, NULL, NULL, 1, CURRENT_TIMESTAMP "
+                    "FROM review_versions old JOIN file_objects file ON file.id = :new_file_id "
+                    "WHERE old.id = :old_version_id"
+                ),
+                {
+                    "new_version_id": new_version_id,
+                    "new_file_id": new_file_id,
+                    "old_version_id": items[0]["current_version_id"],
+                },
+            )
+            connection.execute(
+                text("UPDATE review_items SET current_version_id = :version_id WHERE id = :item_id"),
+                {"version_id": new_version_id, "item_id": items[0]["id"]},
+            )
+            connection.commit()
+        return project, (project["project_ref_id"],)
+
+    if authority_case == "cross_project_pointer":
+        source_project, source_items = _project_with_items(client, "TASK3DIRECTCROSSSOURCE", 1)
+        source_finalization = finalize(
+            client,
+            source_project["project_ref_id"],
+            source_items[0],
+            if_match=source_items[0]["lock_version"],
+        )
+        target_project, target_items = _project_with_items(client, "TASK3DIRECTCROSSTARGET", 1)
+        with database_module.engine.connect() as connection:
+            _disable_sqlite_authority_guards(connection)
+            connection.execute(
+                text(
+                    "UPDATE review_items SET workflow_status = 'finalized', active_finalization_id = :pointer "
+                    "WHERE id = :item_id"
+                ),
+                {"pointer": source_finalization["id"], "item_id": target_items[0]["id"]},
+            )
+            connection.commit()
+        return target_project, (
+            source_project["project_ref_id"],
+            target_project["project_ref_id"],
+        )
+
+    if authority_case == "orphan_active_without_pointer":
+        project, items = _project_with_items(client, "TASK3DIRECTORPHAN", 1)
+        _insert_orphan_active_finalization(
+            project["project_ref_id"],
+            items[0],
+            suffix="explicit_reverse",
+        )
+        return project, (project["project_ref_id"],)
+
+    raise AssertionError(f"unknown direct authority case {authority_case}")
+
+
+@pytest.mark.parametrize(
+    "authority_case",
+    [
+        "mixed_healthy_finalized_plus_pending_orphan",
+        "mixed_bad_finalized_pointer_plus_pending_target",
+        "same_item_old_noncurrent_version_pointer",
+        "cross_project_pointer",
+        "orphan_active_without_pointer",
+    ],
+)
+@pytest.mark.parametrize(
+    ("command_type", "route_suffix"),
+    [
+        ("FinalizeProject", "finalize"),
+        ("RevokeProjectFinalization", "finalization/revoke"),
+    ],
+)
+def test_project_commands_directly_reject_mixed_version_cross_project_and_reverse_orphan_authority(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    authority_case: str,
+    command_type: str,
+    route_suffix: str,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        IdempotencyRecordModel,
+        OperationLogModel,
+    )
+
+    project, observed_project_ids = _seed_direct_authority_case(client, authority_case)
+    before = _authority_business_snapshot(*observed_project_ids)
+    if authority_case in {
+        "mixed_healthy_finalized_plus_pending_orphan",
+        "orphan_active_without_pointer",
+    }:
+        import backend.app.modules.final_cut_review.infra.repositories as repository_module
+
+        def reject_late_source_hash(*_args: Any, **_kwargs: Any) -> str:
+            raise AssertionError("authority validation must precede source hashing")
+
+        monkeypatch.setattr(repository_module, "regular_file_sha256", reject_late_source_hash)
+    command_id = f"task3-direct-{command_type.lower()}-{authority_case}"
+    request_id_header = str(uuid.uuid4())
+    request_id = request_id_header.replace("-", "")
+    _body, response = _project_command(
+        client,
+        project,
+        command_type,
+        route_suffix,
+        command_id=command_id,
+        extra_headers={"X-Request-ID": request_id_header},
+    )
+
+    assert response.status_code == 409, response.text
+    assert api_error(response)["code"] == "RESOURCE_STATE_CONFLICT"
+    assert _authority_business_snapshot(*observed_project_ids) == before
+    key_hash = hashlib.sha256(command_id.encode()).hexdigest()
+    with SessionLocal() as session:
+        assert session.get(IdempotencyRecordModel, command_id) is None
+        audits = list(
+            session.scalars(
+                select(OperationLogModel).where(
+                    OperationLogModel.request_id == request_id,
+                    OperationLogModel.command_type == command_type,
+                )
+            )
+        )
+        assert len(audits) == 1
+        audit = audits[0]
+        assert audit.result == "error"
+        assert audit.error_code == "RESOURCE_STATE_CONFLICT"
+        assert audit.failure_stage == "execution"
+        assert audit.idempotency_key_hash == key_hash
+        assert command_id not in repr(vars(audit))
+        assert session.scalar(
+            select(func.count()).select_from(OperationLogModel).where(
+                OperationLogModel.idempotency_key_hash == key_hash,
+                OperationLogModel.result.in_(("ok", "unknown")),
+            )
+        ) == 0
 
 
 def test_finalize_project_handles_mixed_then_all_finalized_as_atomic_idempotent_summary(
