@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -7,7 +8,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, select, text
 from sqlalchemy.orm import Session as OrmSession
 
 from .conftest import (
@@ -92,6 +93,183 @@ def _finalize_all(
     )
     assert response.status_code == 200, response.text
     return api_data(response)
+
+
+def _run_concurrent_requests(*requests: Any) -> list[Any]:
+    barrier = threading.Barrier(len(requests))
+    responses: list[Any] = []
+    errors: list[BaseException] = []
+    result_lock = threading.Lock()
+
+    def run(request: Any) -> None:
+        try:
+            barrier.wait(timeout=5)
+            response = request()
+            with result_lock:
+                responses.append(response)
+        except BaseException as exc:
+            with result_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(request,), daemon=True) for request in requests]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(not thread.is_alive() for thread in threads), "concurrent command did not terminate within 10 seconds"
+    assert errors == []
+    return responses
+
+
+def _assert_allowed_concurrent_responses(responses: list[Any], *, successes: set[int]) -> None:
+    assert sum(response.status_code == 200 for response in responses) in successes
+    assert all(response.status_code in {200, 409} for response in responses)
+    for response in responses:
+        if response.status_code == 409:
+            assert api_error(response)["code"] in {
+                "IDEMPOTENCY_CONFLICT",
+                "OPTIMISTIC_LOCK_CONFLICT",
+                "RESOURCE_STATE_CONFLICT",
+                "REVIEW_ITEM_FINALIZED",
+            }
+
+
+def _seed_corrupt_project_finalization_authority(
+    client: TestClient,
+    corruption: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    from backend.app.modules.final_cut_review.infra import database as database_module
+
+    item_count = 2 if corruption == "cross_item_pointer" else 1
+    project, items = _project_with_items(
+        client,
+        f"TASK3AUTHORITY{corruption.upper()}",
+        item_count,
+    )
+    finalization: dict[str, Any] | None = None
+    if corruption in {"revoked_pointer", "cross_item_pointer", "nonfinalized_active"}:
+        finalization = finalize(
+            client,
+            project["project_ref_id"],
+            items[0],
+            if_match=items[0]["lock_version"],
+        )
+
+    with database_module.engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.exec_driver_sql("PRAGMA ignore_check_constraints=ON")
+        trigger_names = list(
+            connection.scalars(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                    "AND (name LIKE 'trg_review_items_%' OR name LIKE 'trg_finalizations_%')"
+                )
+            )
+        )
+        for trigger_name in trigger_names:
+            connection.exec_driver_sql(f'DROP TRIGGER "{trigger_name}"')
+
+        if corruption == "missing_pointer":
+            connection.execute(
+                text(
+                    "UPDATE review_items SET workflow_status = 'finalized', active_finalization_id = NULL "
+                    "WHERE id = :item_id"
+                ),
+                {"item_id": items[0]["id"]},
+            )
+        elif corruption == "wrong_pointer":
+            connection.execute(
+                text(
+                    "UPDATE review_items SET workflow_status = 'finalized', active_finalization_id = :pointer "
+                    "WHERE id = :item_id"
+                ),
+                {"pointer": "fin_missing_authority", "item_id": items[0]["id"]},
+            )
+        elif corruption == "revoked_pointer":
+            assert finalization is not None
+            connection.execute(
+                text(
+                    "UPDATE finalizations SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP "
+                    "WHERE id = :finalization_id"
+                ),
+                {"finalization_id": finalization["id"]},
+            )
+        elif corruption == "cross_item_pointer":
+            assert finalization is not None
+            connection.execute(
+                text(
+                    "UPDATE review_items SET workflow_status = 'finalized', active_finalization_id = :pointer "
+                    "WHERE id = :item_id"
+                ),
+                {"pointer": finalization["id"], "item_id": items[1]["id"]},
+            )
+        elif corruption == "nonfinalized_active":
+            connection.execute(
+                text(
+                    "UPDATE review_items SET workflow_status = 'in_review' "
+                    "WHERE id = :item_id"
+                ),
+                {"item_id": items[0]["id"]},
+            )
+        else:
+            raise AssertionError(f"unknown corruption fixture {corruption}")
+        connection.commit()
+    return project, items
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "wrong_pointer",
+        "missing_pointer",
+        "revoked_pointer",
+        "cross_item_pointer",
+        "nonfinalized_active",
+    ],
+)
+@pytest.mark.parametrize(
+    ("command_type", "route_suffix"),
+    [
+        ("FinalizeProject", "finalize"),
+        ("RevokeProjectFinalization", "finalization/revoke"),
+    ],
+)
+def test_project_commands_fail_closed_on_bidirectional_finalization_authority_corruption(
+    client: TestClient,
+    corruption: str,
+    command_type: str,
+    route_suffix: str,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        IdempotencyRecordModel,
+        OperationLogModel,
+    )
+
+    project, _items = _seed_corrupt_project_finalization_authority(client, corruption)
+    command_id = f"task3-authority-{command_type.lower()}-{corruption}"
+    _body, response = _project_command(
+        client,
+        project,
+        command_type,
+        route_suffix,
+        command_id=command_id,
+    )
+
+    assert response.status_code == 409, response.text
+    assert api_error(response)["code"] == "RESOURCE_STATE_CONFLICT"
+    request_id = response.json()["error"]["request_id"]
+    with SessionLocal() as session:
+        assert session.get(IdempotencyRecordModel, command_id) is None
+        audit = session.scalars(
+            select(OperationLogModel).where(OperationLogModel.request_id == request_id)
+        ).one()
+        assert audit.command_type == command_type
+        assert audit.result == "error"
+        assert audit.error_code == "RESOURCE_STATE_CONFLICT"
+        assert audit.failure_stage == "execution"
+        assert audit.idempotency_key_hash == hashlib.sha256(command_id.encode()).hexdigest()
+        assert command_id not in repr(vars(audit))
 
 
 def test_finalize_project_handles_mixed_then_all_finalized_as_atomic_idempotent_summary(
@@ -181,6 +359,7 @@ def test_finalize_project_fault_on_later_item_rolls_back_all_business_side_effec
     from backend.app.modules.final_cut_review.infra.database import SessionLocal
     from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
         FinalizationRecordModel,
+        IdempotencyRecordModel,
         OperationLogModel,
         OutboxEventModel,
         ProjectRefModel,
@@ -199,7 +378,7 @@ def test_finalize_project_fault_on_later_item_rolls_back_all_business_side_effec
         return original_sha256(*args, **kwargs)
 
     monkeypatch.setattr(repository_module, "regular_file_sha256", reject_second_source)
-    _body, response = _project_command(
+    body, response = _project_command(
         client,
         project,
         "FinalizeProject",
@@ -231,12 +410,15 @@ def test_finalize_project_fault_on_later_item_rolls_back_all_business_side_effec
             )
         ) == 0
         assert session.get(ProjectRefModel, project["project_ref_id"]).lock_version == project["lock_version"]
+        assert session.get(IdempotencyRecordModel, body["command_id"]) is None
         audit = session.scalars(
             select(OperationLogModel).where(OperationLogModel.request_id == request_id)
         ).one()
         assert audit.command_type == "FinalizeProject"
         assert audit.result == "error"
         assert audit.failure_stage == "execution"
+        assert audit.idempotency_key_hash == hashlib.sha256(body["command_id"].encode()).hexdigest()
+        assert body["command_id"] not in repr(vars(audit))
 
 
 def test_finalize_project_requires_project_if_match_and_project_scope_permission(
@@ -405,6 +587,237 @@ def test_finalize_project_concurrent_identical_command_does_not_duplicate(
             )
         ) == 2
         assert session.get(ProjectRefModel, project["project_ref_id"]).lock_version == project["lock_version"] + 1
+
+
+def test_sqlite_project_finalize_and_single_finalize_with_distinct_keys_terminate_without_duplicates(
+    client: TestClient,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FinalizationRecordModel,
+        OutboxEventModel,
+        ProjectRefModel,
+    )
+
+    project, items = _project_with_items(client, "TASK3RACEFINALIZE", 2)
+    project_body = command(
+        "FinalizeProject",
+        {"project_ref_id": project["project_ref_id"], "confirmed": True},
+        command_id="task3-race-project-finalize",
+    )
+    single_body = command(
+        "FinalizeVersion",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": items[0]["id"],
+            "version_id": items[0]["current_version_id"],
+            "confirmed": True,
+        },
+        command_id="task3-race-single-finalize",
+    )
+    responses = _run_concurrent_requests(
+        lambda: client.post(
+            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalize",
+            json=project_body,
+            headers={
+                "Idempotency-Key": project_body["command_id"],
+                "If-Match": str(project["lock_version"]),
+            },
+        ),
+        lambda: client.post(
+            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{items[0]['id']}/versions/{items[0]['current_version_id']}/finalize",
+            json=single_body,
+            headers={
+                "Idempotency-Key": single_body["command_id"],
+                "If-Match": str(items[0]["lock_version"]),
+            },
+        ),
+    )
+    _assert_allowed_concurrent_responses(responses, successes={1, 2})
+
+    with SessionLocal() as session:
+        finalizations = list(
+            session.scalars(
+                select(FinalizationRecordModel).where(
+                    FinalizationRecordModel.project_ref_id == project["project_ref_id"]
+                )
+            )
+        )
+        assert len(finalizations) == 2
+        assert len({finalization.review_item_id for finalization in finalizations}) == 2
+        assert {finalization.status for finalization in finalizations} == {"active"}
+        assert session.scalar(
+            select(func.count()).select_from(OutboxEventModel).where(
+                OutboxEventModel.project_ref_id == project["project_ref_id"],
+                OutboxEventModel.event_type == "review.version.finalized",
+            )
+        ) == 2
+        project_row = session.get(ProjectRefModel, project["project_ref_id"])
+        assert project_row is not None and project_row.lock_version == project["lock_version"] + 1
+
+
+def test_sqlite_project_revoke_and_single_revoke_with_distinct_keys_terminate_without_duplicate_invalidations(
+    client: TestClient,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FinalCutPackageSnapshotModel,
+        FinalizationPackageInvalidationModel,
+        FinalizationRecordModel,
+        OutboxEventModel,
+        ProjectRefModel,
+    )
+
+    project, _items = _project_with_items(client, "TASK3RACEREVOKE", 2)
+    finalized = _finalize_all(client, project, command_id="task3-race-revoke-seed")
+    package, _package_command = prepare_ready_package(client, project["project_ref_id"])
+    first_item = finalized["items"][0]
+    project_body = command(
+        "RevokeProjectFinalization",
+        {"project_ref_id": project["project_ref_id"], "confirmed": True},
+        command_id="task3-race-project-revoke",
+    )
+    single_body = command(
+        "RevokeFinalization",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": first_item["id"],
+            "confirmed": True,
+        },
+        command_id="task3-race-single-revoke",
+    )
+    responses = _run_concurrent_requests(
+        lambda: client.post(
+            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalization/revoke",
+            json=project_body,
+            headers={
+                "Idempotency-Key": project_body["command_id"],
+                "If-Match": str(finalized["project"]["lock_version"]),
+            },
+        ),
+        lambda: client.post(
+            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/items/{first_item['id']}/finalization/revoke",
+            json=single_body,
+            headers={
+                "Idempotency-Key": single_body["command_id"],
+                "If-Match": str(first_item["lock_version"]),
+            },
+        ),
+    )
+    _assert_allowed_concurrent_responses(responses, successes={1, 2})
+
+    with SessionLocal() as session:
+        assert set(
+            session.scalars(
+                select(FinalizationRecordModel.status).where(
+                    FinalizationRecordModel.project_ref_id == project["project_ref_id"]
+                )
+            )
+        ) == {"revoked"}
+        invalidations = list(
+            session.scalars(
+                select(FinalizationPackageInvalidationModel).where(
+                    FinalizationPackageInvalidationModel.package_id == package["id"]
+                )
+            )
+        )
+        assert len(invalidations) == 2
+        assert len({(row.finalization_id, row.package_id) for row in invalidations}) == 2
+        assert session.scalar(
+            select(func.count()).select_from(OutboxEventModel).where(
+                OutboxEventModel.project_ref_id == project["project_ref_id"],
+                OutboxEventModel.event_type == "review.finalization.revoked",
+            )
+        ) == 2
+        package_row = session.get(FinalCutPackageSnapshotModel, package["id"])
+        assert package_row is not None and package_row.status == "invalidated"
+        project_row = session.get(ProjectRefModel, project["project_ref_id"])
+        assert project_row is not None
+        assert project_row.lock_version == finalized["project"]["lock_version"] + 1
+
+
+def test_sqlite_project_finalize_and_project_revoke_with_distinct_keys_leave_uniform_project_state(
+    client: TestClient,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FinalizationRecordModel,
+        IdempotencyRecordModel,
+        OutboxEventModel,
+        ProjectRefModel,
+        ReviewItemModel,
+    )
+
+    project, items = _project_with_items(client, "TASK3RACEPROJECT", 2)
+    finalize(client, project["project_ref_id"], items[0], if_match=items[0]["lock_version"])
+    finalize_body = command(
+        "FinalizeProject",
+        {"project_ref_id": project["project_ref_id"], "confirmed": True},
+        command_id="task3-race-project-finalize-project",
+    )
+    revoke_body = command(
+        "RevokeProjectFinalization",
+        {"project_ref_id": project["project_ref_id"], "confirmed": True},
+        command_id="task3-race-project-revoke-project",
+    )
+    responses = _run_concurrent_requests(
+        lambda: client.post(
+            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalize",
+            json=finalize_body,
+            headers={
+                "Idempotency-Key": finalize_body["command_id"],
+                "If-Match": str(project["lock_version"]),
+            },
+        ),
+        lambda: client.post(
+            f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalization/revoke",
+            json=revoke_body,
+            headers={
+                "Idempotency-Key": revoke_body["command_id"],
+                "If-Match": str(project["lock_version"]),
+            },
+        ),
+    )
+    _assert_allowed_concurrent_responses(responses, successes={1})
+
+    with SessionLocal() as session:
+        active_count = session.scalar(
+            select(func.count()).select_from(FinalizationRecordModel).where(
+                FinalizationRecordModel.project_ref_id == project["project_ref_id"],
+                FinalizationRecordModel.status == "active",
+            )
+        )
+        assert active_count in {0, 2}
+        finalized_item_count = session.scalar(
+            select(func.count()).select_from(ReviewItemModel).where(
+                ReviewItemModel.project_ref_id == project["project_ref_id"],
+                ReviewItemModel.workflow_status == "finalized",
+            )
+        )
+        assert finalized_item_count == active_count
+        assert session.scalar(
+            select(func.count()).select_from(OutboxEventModel).where(
+                OutboxEventModel.project_ref_id == project["project_ref_id"],
+                OutboxEventModel.event_type == "review.version.finalized",
+            )
+        ) == (2 if active_count == 2 else 1)
+        assert session.scalar(
+            select(func.count()).select_from(OutboxEventModel).where(
+                OutboxEventModel.project_ref_id == project["project_ref_id"],
+                OutboxEventModel.event_type == "review.finalization.revoked",
+            )
+        ) == (1 if active_count == 0 else 0)
+        project_row = session.get(ProjectRefModel, project["project_ref_id"])
+        assert project_row is not None and project_row.lock_version == project["lock_version"] + 1
+        records = list(
+            session.scalars(
+                select(IdempotencyRecordModel).where(
+                    IdempotencyRecordModel.key.in_((finalize_body["command_id"], revoke_body["command_id"]))
+                )
+            )
+        )
+        assert len(records) == 1
+        assert records[0].status_code == 200
 
 
 def test_finalize_project_lost_commit_ack_replays_committed_summary_without_duplicate(
@@ -616,6 +1029,139 @@ def test_revoke_project_finalization_invalidates_all_package_members_atomically_
         ) == 3
 
 
+def test_revoke_project_finalization_lost_commit_ack_replays_identical_summary_without_duplicate_side_effects(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.modules.final_cut_review.infra.database import SessionLocal
+    from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
+        FinalCutPackageSnapshotModel,
+        FinalizationPackageInvalidationModel,
+        FinalizationRecordModel,
+        IdempotencyRecordModel,
+        OperationLogModel,
+        OutboxEventModel,
+        ProjectRefModel,
+    )
+
+    project, _items = _project_with_items(client, "TASK3REVOKEACK", 2)
+    finalized = _finalize_all(
+        client,
+        project,
+        command_id="task3-revoke-ack-finalize",
+    )
+    package, _package_command = prepare_ready_package(client, project["project_ref_id"])
+    original_commit = OrmSession.commit
+    raised = False
+
+    def commit_then_raise(session: OrmSession) -> None:
+        nonlocal raised
+        original_commit(session)
+        if not raised:
+            raised = True
+            raise RuntimeError("synthetic lost project revocation acknowledgement")
+
+    monkeypatch.setattr(OrmSession, "commit", commit_then_raise)
+    body = command(
+        "RevokeProjectFinalization",
+        {"project_ref_id": project["project_ref_id"], "confirmed": True},
+        command_id=f"task3-revoke-ack-{uuid.uuid4().hex}",
+    )
+    route = f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalization/revoke"
+    with TestClient(client.app, headers=principal_headers(), raise_server_exceptions=False) as no_raise:
+        response = no_raise.post(
+            route,
+            json=body,
+            headers={
+                "Idempotency-Key": body["command_id"],
+                "If-Match": str(finalized["project"]["lock_version"]),
+            },
+        )
+        assert response.status_code == 500
+        assert raised is True
+
+        with SessionLocal() as session:
+            record = session.get(IdempotencyRecordModel, body["command_id"])
+            assert record is not None and record.status_code == 200
+            committed_summary = record.response_json
+            assert session.scalar(
+                select(func.count()).select_from(FinalizationRecordModel).where(
+                    FinalizationRecordModel.project_ref_id == project["project_ref_id"],
+                    FinalizationRecordModel.status == "revoked",
+                )
+            ) == 2
+            assert session.scalar(
+                select(func.count()).select_from(OutboxEventModel).where(
+                    OutboxEventModel.project_ref_id == project["project_ref_id"],
+                    OutboxEventModel.event_type == "review.finalization.revoked",
+                )
+            ) == 2
+            assert session.scalar(
+                select(func.count()).select_from(FinalizationPackageInvalidationModel).where(
+                    FinalizationPackageInvalidationModel.package_id == package["id"]
+                )
+            ) == 2
+            package_row = session.get(FinalCutPackageSnapshotModel, package["id"])
+            assert package_row is not None and package_row.status == "invalidated"
+            project_row = session.get(ProjectRefModel, project["project_ref_id"])
+            assert project_row is not None
+            assert project_row.lock_version == finalized["project"]["lock_version"] + 1
+            audits = list(
+                session.scalars(
+                    select(OperationLogModel).where(
+                        OperationLogModel.command_type == "RevokeProjectFinalization",
+                        OperationLogModel.idempotency_key_hash == hashlib.sha256(body["command_id"].encode()).hexdigest(),
+                    )
+                )
+            )
+            assert [audit.result for audit in audits] == ["ok"]
+
+        monkeypatch.setattr(OrmSession, "commit", original_commit)
+        replay = no_raise.post(
+            route,
+            json=body,
+            headers={
+                "Idempotency-Key": body["command_id"],
+                "If-Match": str(finalized["project"]["lock_version"]),
+            },
+        )
+        assert replay.status_code == 200, replay.text
+        assert api_data(replay) == committed_summary
+
+    with SessionLocal() as session:
+        assert session.scalar(
+            select(func.count()).select_from(FinalizationRecordModel).where(
+                FinalizationRecordModel.project_ref_id == project["project_ref_id"],
+                FinalizationRecordModel.status == "revoked",
+            )
+        ) == 2
+        assert session.scalar(
+            select(func.count()).select_from(OutboxEventModel).where(
+                OutboxEventModel.project_ref_id == project["project_ref_id"],
+                OutboxEventModel.event_type == "review.finalization.revoked",
+            )
+        ) == 2
+        assert session.scalar(
+            select(func.count()).select_from(FinalizationPackageInvalidationModel).where(
+                FinalizationPackageInvalidationModel.package_id == package["id"]
+            )
+        ) == 2
+        package_row = session.get(FinalCutPackageSnapshotModel, package["id"])
+        assert package_row is not None and package_row.status == "invalidated"
+        project_row = session.get(ProjectRefModel, project["project_ref_id"])
+        assert project_row is not None
+        assert project_row.lock_version == finalized["project"]["lock_version"] + 1
+        audits = list(
+            session.scalars(
+                select(OperationLogModel).where(
+                    OperationLogModel.command_type == "RevokeProjectFinalization",
+                    OperationLogModel.idempotency_key_hash == hashlib.sha256(body["command_id"].encode()).hexdigest(),
+                )
+            )
+        )
+        assert [audit.result for audit in audits] == ["ok", "ok"]
+
+
 @pytest.mark.parametrize("item_count", [0, 1])
 def test_revoke_project_finalization_without_finalized_targets_is_safe_summary_noop(
     client: TestClient,
@@ -648,6 +1194,8 @@ def test_revoke_project_finalization_later_database_fault_rolls_back_items_packa
         FinalCutPackageSnapshotModel,
         FinalizationPackageInvalidationModel,
         FinalizationRecordModel,
+        IdempotencyRecordModel,
+        OperationLogModel,
         OutboxEventModel,
         ProjectRefModel,
         ReviewItemModel,
@@ -682,6 +1230,8 @@ def test_revoke_project_finalization_later_database_fault_rolls_back_items_packa
         {"project_ref_id": project["project_ref_id"], "confirmed": True},
         command_id="task3-revoke-rollback",
     )
+    request_id_header = "00000000-0000-4000-8000-000000000301"
+    request_id = request_id_header.replace("-", "")
     with pytest.raises(RuntimeError, match="synthetic second project revoke event failure"):
         client.post(
             f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}/finalization/revoke",
@@ -689,6 +1239,7 @@ def test_revoke_project_finalization_later_database_fault_rolls_back_items_packa
             headers={
                 "Idempotency-Key": body["command_id"],
                 "If-Match": str(finalized["project"]["lock_version"]),
+                "X-Request-ID": request_id_header,
             },
         )
 
@@ -722,6 +1273,15 @@ def test_revoke_project_finalization_later_database_fault_rolls_back_items_packa
             )
         ) == 0
         assert session.get(ProjectRefModel, project["project_ref_id"]).lock_version == finalized["project"]["lock_version"]
+        assert session.get(IdempotencyRecordModel, body["command_id"]) is None
+        audit = session.scalars(
+            select(OperationLogModel).where(OperationLogModel.request_id == request_id)
+        ).one()
+        assert audit.command_type == "RevokeProjectFinalization"
+        assert audit.result == "error"
+        assert audit.failure_stage == "execution"
+        assert audit.idempotency_key_hash == hashlib.sha256(body["command_id"].encode()).hexdigest()
+        assert body["command_id"] not in repr(vars(audit))
 
 
 def test_revoke_project_finalization_physical_package_cleanup_failure_stays_failed_without_database_rollback(

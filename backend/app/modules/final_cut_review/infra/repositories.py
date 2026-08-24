@@ -652,12 +652,16 @@ class SqlAlchemyReviewRepository:
                 return None
         else:
             try:
-                with self.session.begin_nested():
-                    self.session.add(IdempotencyRecordModel(**values))
-                    self.session.flush()
+                # SQLite starts a SAVEPOINT as the outermost database
+                # transaction when no write has occurred yet; releasing that
+                # SAVEPOINT would make a status=102 reservation survive a
+                # later business rollback.  Keep the reservation in the real
+                # command transaction and reset only on a competing key.
+                self.session.add(IdempotencyRecordModel(**values))
+                self.session.flush()
                 return None
             except IntegrityError:
-                pass
+                self.session.rollback()
 
         self.session.expire_all()
         existing = self.session.get(IdempotencyRecordModel, key, populate_existing=True)
@@ -2247,6 +2251,56 @@ class SqlAlchemyReviewRepository:
             )
         )
 
+    def _locked_project_finalization_authority(
+        self,
+        project: ProjectRefModel,
+        items: list[ReviewItemModel],
+    ) -> dict[str, FinalizationRecordModel]:
+        finalizations = list(
+            self.session.scalars(
+                select(FinalizationRecordModel)
+                .where(FinalizationRecordModel.project_ref_id == project.id)
+                .order_by(
+                    FinalizationRecordModel.review_item_id,
+                    FinalizationRecordModel.id,
+                )
+                .with_for_update()
+            )
+        )
+        finalizations_by_id = {finalization.id: finalization for finalization in finalizations}
+        items_by_id = {item.id: item for item in items}
+        active_by_id: dict[str, FinalizationRecordModel] = {}
+        for item in items:
+            is_finalized = item.workflow_status == "finalized"
+            has_active_pointer = item.active_finalization_id is not None
+            if is_finalized != has_active_pointer:
+                raise ReviewError("RESOURCE_STATE_CONFLICT", "项目定稿状态与权威记录不一致")
+            if item.active_finalization_id is None:
+                continue
+            finalization = finalizations_by_id.get(item.active_finalization_id)
+            if (
+                finalization is None
+                or finalization.status != "active"
+                or finalization.project_ref_id != project.id
+                or finalization.review_item_id != item.id
+                or finalization.version_id != item.current_version_id
+            ):
+                raise ReviewError("RESOURCE_STATE_CONFLICT", "项目定稿状态与权威记录不一致")
+            active_by_id[finalization.id] = finalization
+
+        for finalization in finalizations:
+            if finalization.status != "active":
+                continue
+            item = items_by_id.get(finalization.review_item_id)
+            if (
+                item is None
+                or item.workflow_status != "finalized"
+                or item.active_finalization_id != finalization.id
+                or item.current_version_id != finalization.version_id
+            ):
+                raise ReviewError("RESOURCE_STATE_CONFLICT", "项目定稿状态与权威记录不一致")
+        return active_by_id
+
     def _finalize_locked_item(
         self,
         project: ProjectRefModel,
@@ -2351,6 +2405,7 @@ class SqlAlchemyReviewRepository:
         self._assert_project_active(project)
         self._expect_lock(project, expected_version)
         items = self._locked_project_items(project.id)
+        self._locked_project_finalization_authority(project, items)
         targets = [item for item in items if item.workflow_status != "finalized"]
         if not targets:
             return self.get_project_summary(project.id)
@@ -2500,35 +2555,10 @@ class SqlAlchemyReviewRepository:
         self._assert_project_active(project)
         self._expect_lock(project, expected_version)
         items = self._locked_project_items(project.id)
+        finalizations_by_id = self._locked_project_finalization_authority(project, items)
         targets = [item for item in items if item.workflow_status == "finalized"]
         if not targets:
             return self.get_project_summary(project.id)
-        if any(item.active_finalization_id is None for item in targets):
-            raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿指针与权威记录不一致")
-
-        active_ids = [item.active_finalization_id for item in targets if item.active_finalization_id is not None]
-        finalizations = list(
-            self.session.scalars(
-                select(FinalizationRecordModel)
-                .where(
-                    FinalizationRecordModel.project_ref_id == project.id,
-                    FinalizationRecordModel.id.in_(active_ids),
-                    FinalizationRecordModel.status == "active",
-                )
-                .order_by(
-                    FinalizationRecordModel.review_item_id,
-                    FinalizationRecordModel.id,
-                )
-                .with_for_update()
-            )
-        )
-        finalizations_by_id = {finalization.id: finalization for finalization in finalizations}
-        if len(finalizations_by_id) != len(targets):
-            raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿指针与权威记录不一致")
-        for item in targets:
-            finalization = finalizations_by_id.get(item.active_finalization_id or "")
-            if finalization is None or finalization.review_item_id != item.id:
-                raise ReviewError("RESOURCE_STATE_CONFLICT", "定稿指针与权威记录不一致")
 
         packages = self._locked_project_packages(project.id)
         now = utcnow()
