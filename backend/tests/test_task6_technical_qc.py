@@ -34,6 +34,7 @@ from .test_postgresql_constraints import (
     _postgres_temp_database,
     _prepare_postgresql_schema,
 )
+from .test_api_contract_runtime import create_issue, finalize
 
 
 def _technical_qc() -> Any:
@@ -540,6 +541,228 @@ def test_persisted_finding_identity_is_ack_idempotent_and_body_contains_all_inte
     assert "120 ms" in body
     assert "pblack=100" in body
     assert "scene_score=13.2" in body
+
+
+def test_automatic_finding_reuses_manual_issue_workflow_transition(
+    client: Any,
+) -> None:
+    _project, item, db, claim = _claim_single_ready_task(
+        client,
+        "TASK6-AUTO-WORKFLOW",
+    )
+    qc = _technical_qc()
+    models = importlib.import_module(
+        "backend.app.modules.final_cut_review.infra.sqlalchemy_models",
+    )
+    with db.SessionLocal() as session:
+        before = session.get(models.ReviewItemModel, item["id"])
+        assert before is not None
+        assert before.workflow_status == "pending_review"
+        initial_lock_version = before.lock_version
+
+    interval = qc.QcInterval(
+        start_frame=5,
+        end_frame=5,
+        start_ms=200,
+        end_ms=240,
+        reason_codes=("black_frame",),
+        values={"pblack": 100.0},
+    )
+    with db.SessionLocal.begin() as session:
+        issue_ids = qc.persist_technical_qc_findings(session, claim, [interval])
+
+    assert len(issue_ids) == 1
+    with db.SessionLocal() as session:
+        transitioned = session.get(models.ReviewItemModel, item["id"])
+        assert transitioned is not None
+        assert transitioned.workflow_status == "changes_requested"
+        assert transitioned.lock_version == initial_lock_version + 1
+        transitioned_lock_version = transitioned.lock_version
+
+    with db.SessionLocal.begin() as session:
+        assert qc.persist_technical_qc_findings(session, claim, [interval]) == issue_ids
+
+    with db.SessionLocal() as session:
+        retried = session.get(models.ReviewItemModel, item["id"])
+        assert retried is not None
+        assert retried.workflow_status == "changes_requested"
+        assert retried.lock_version == transitioned_lock_version
+
+
+def test_superseded_claim_does_not_create_issue_or_change_current_version_state(
+    client: Any,
+) -> None:
+    project, item, db, claim = _claim_single_ready_task(client, "TASK6-STALE-VERSION")
+    create_issue(client, project["project_ref_id"], item, content="request V2")
+    item_for_upload = api_data(
+        client.get(
+            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
+            f"/items/{item['id']}"
+        )
+    )
+    new_file = upload_video(client, filename="v2.mp4", seed=b"2")
+    upload = command(
+        "UploadReviewVersion",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "original_file_id": new_file,
+            "change_summary": "v2",
+        },
+    )
+    uploaded = client.post(
+        f"/api/v1/final-cut-review/edit/projects/{project['project_ref_id']}"
+        f"/items/{item['id']}/versions",
+        json=upload,
+        headers={
+            "Idempotency-Key": upload["command_id"],
+            "If-Match": str(item_for_upload["lock_version"]),
+        },
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    current = api_data(
+        client.get(
+            f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
+            f"/items/{item['id']}"
+        )
+    )
+    assert current["current_version_id"] != claim.version_id
+    assert current["workflow_status"] == "pending_review"
+
+    interval = _technical_qc().QcInterval(
+        start_frame=5,
+        end_frame=5,
+        start_ms=200,
+        end_ms=240,
+        reason_codes=("black_frame",),
+        values={"pblack": 100.0},
+    )
+    with db.SessionLocal.begin() as session:
+        assert _technical_qc().persist_technical_qc_findings(
+            session,
+            claim,
+            [interval],
+        ) == []
+
+    models = importlib.import_module(
+        "backend.app.modules.final_cut_review.infra.sqlalchemy_models",
+    )
+    with db.SessionLocal() as session:
+        authority = session.get(models.ReviewItemModel, item["id"])
+        issue_count = len(
+            list(
+                session.scalars(
+                    select(models.ReviewIssueModel).where(
+                        models.ReviewIssueModel.review_item_id == item["id"]
+                    )
+                )
+            )
+        )
+    assert authority is not None
+    assert authority.workflow_status == "pending_review"
+    assert authority.current_version_id == current["current_version_id"]
+    assert authority.lock_version == current["lock_version"]
+    assert issue_count == 1
+
+
+def test_finalized_claim_completes_without_late_issue_or_retryable_failure(
+    client: Any,
+) -> None:
+    project, item, db, claim = _claim_single_ready_task(client, "TASK6-FINALIZED-RACE")
+    finalize(client, project["project_ref_id"], item)
+    interval = _technical_qc().QcInterval(
+        start_frame=5,
+        end_frame=5,
+        start_ms=200,
+        end_ms=240,
+        reason_codes=("black_frame",),
+        values={"pblack": 100.0},
+    )
+    with db.SessionLocal.begin() as session:
+        assert _technical_qc().persist_technical_qc_findings(
+            session,
+            claim,
+            [interval],
+        ) == []
+        assert _technical_qc().complete_technical_qc_task(
+            session,
+            claim.task_id,
+            claim.claim_id,
+        )
+
+    models = importlib.import_module(
+        "backend.app.modules.final_cut_review.infra.sqlalchemy_models",
+    )
+    with db.SessionLocal() as session:
+        authority = session.get(models.ReviewItemModel, item["id"])
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+        issues = list(
+            session.scalars(
+                select(models.ReviewIssueModel).where(
+                    models.ReviewIssueModel.review_item_id == item["id"]
+                )
+            )
+        )
+    assert authority is not None and authority.workflow_status == "finalized"
+    assert task is not None and task.status == "complete" and task.error_code is None
+    assert issues == []
+
+
+def test_automatic_issue_emits_manual_flow_events_and_system_audit_once(
+    client: Any,
+) -> None:
+    _project, item, db, claim = _claim_single_ready_task(client, "TASK6-AUTO-EVENT")
+    qc = _technical_qc()
+    interval = qc.QcInterval(
+        start_frame=5,
+        end_frame=5,
+        start_ms=200,
+        end_ms=240,
+        reason_codes=("black_frame",),
+        values={"pblack": 100.0},
+    )
+    with db.SessionLocal.begin() as session:
+        issue_ids = qc.persist_technical_qc_findings(session, claim, [interval])
+    with db.SessionLocal.begin() as session:
+        assert qc.persist_technical_qc_findings(session, claim, [interval]) == issue_ids
+
+    models = importlib.import_module(
+        "backend.app.modules.final_cut_review.infra.sqlalchemy_models",
+    )
+    with db.SessionLocal() as session:
+        issue_events = list(
+            session.scalars(
+                select(models.OutboxEventModel).where(
+                    models.OutboxEventModel.event_type == "review.issue.created",
+                    models.OutboxEventModel.issue_id.in_(issue_ids),
+                )
+            )
+        )
+        session_events = list(
+            session.scalars(
+                select(models.OutboxEventModel).where(
+                    models.OutboxEventModel.event_type == "review.session.started",
+                    models.OutboxEventModel.review_item_id == item["id"],
+                    models.OutboxEventModel.version_id == claim.version_id,
+                )
+            )
+        )
+        audit_rows = list(
+            session.scalars(
+                select(models.OperationLogModel).where(
+                    models.OperationLogModel.principal_kind == "system",
+                    models.OperationLogModel.principal_id == "technical-qc-worker",
+                    models.OperationLogModel.resource_id.in_(issue_ids),
+                )
+            )
+        )
+    assert len(issue_events) == len(issue_ids) == 1
+    assert len(session_events) == 1
+    assert len(audit_rows) == 1
+    assert issue_events[0].metadata_json["principal_id"] == "technical-qc-worker"
+    assert audit_rows[0].command_type == "CreateReviewIssue"
+    assert audit_rows[0].capability == "review.issue.create"
+    assert audit_rows[0].result == "ok"
 
 
 def test_automatic_issues_reuse_edit_ignore_delete_and_do_not_block_finalization(

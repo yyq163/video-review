@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 import yaml  # type: ignore[import-untyped]
 from alembic import command as alembic_command
-from sqlalchemy import create_engine, insert, inspect, select
+from sqlalchemy import create_engine, insert, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from .conftest import create_item, create_project, create_project_item, upload_video
@@ -196,6 +196,241 @@ def test_0027_real_postgresql_upgrade_downgrade_upgrade() -> None:
             engine.dispose()
         alembic_command.downgrade(config, "20260825_0026")
         alembic_command.upgrade(config, "20260825_0027")
+    finally:
+        if previous_database_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous_database_url
+        get_settings.cache_clear()
+        _drop_postgres_temp_database(temporary)
+
+
+def test_0028_reconciles_only_active_items_with_unresolved_current_issues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "task6-0028-workflow-reconcile.db"
+    _set_migration_env(db_path, tmp_path, monkeypatch)
+    config = _alembic_config(root)
+    alembic_command.upgrade(config, "20260825_0027")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.begin() as connection:
+            for suffix, item_status, issue_status, is_deleted in (
+                ("unresolved", "pending_review", "unresolved", False),
+                ("resolved", "pending_review", "resolved", False),
+                ("deleted", "in_review", "unresolved", True),
+            ):
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO project_refs (
+                            id, project_code, project_name, description, source,
+                            external_project_id, lifecycle_status, deleted_at,
+                            fps_num, fps_den, lock_version, created_at, updated_at
+                        ) VALUES (
+                            :project_id, :project_code, :project_name, '', 'local',
+                            NULL, 'active', NULL, 25, 1, 1,
+                            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {
+                        "project_id": f"prj_0028_{suffix}",
+                        "project_code": f"P-0028-{suffix}",
+                        "project_name": f"0028 {suffix}",
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO file_objects (
+                            id, original_filename, mime_type, file_size, sha256,
+                            storage_path, owner_principal_id, owner_principal_kind,
+                            duration_ms, width, height, fps_num, fps_den,
+                            media_probe_version, created_at
+                        ) VALUES (
+                            :file_id, '0028.mp4', 'video/mp4', 16, :sha256,
+                            :storage_path, 'migration-test', 'system',
+                            1000, 64, 64, 25, 1, 'migration-test', CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {
+                        "file_id": f"file_0028_{suffix}",
+                        "sha256": suffix[0] * 64,
+                        "storage_path": f"files/file_0028_{suffix}",
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO review_items (
+                            id, project_ref_id, item_code, episode_no, title,
+                            workflow_status, current_version_id,
+                            current_version_is_current, active_finalization_id,
+                            lock_version, created_at, updated_at
+                        ) VALUES (
+                            :item_id, :project_id, :item_code, 1, 'Episode',
+                            :item_status, NULL, 1, NULL, 1,
+                            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {
+                        "item_id": f"item_0028_{suffix}",
+                        "project_id": f"prj_0028_{suffix}",
+                        "item_code": f"EP-0028-{suffix}",
+                        "item_status": item_status,
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO review_versions (
+                            id, project_ref_id, review_item_id, previous_version_id,
+                            version_no, version_label, is_current, original_file_id,
+                            original_filename, mime_type, file_size, sha256,
+                            duration_ms, width, height, fps_num, fps_den,
+                            media_probe_version, responsible_editor_id,
+                            responsible_editor_name_snapshot, playback_asset_id,
+                            thumbnail_asset_id, version_note, change_summary,
+                            lock_version, created_at
+                        ) VALUES (
+                            :version_id, :project_id, :item_id, NULL,
+                            1, 'V1', 1, :file_id,
+                            '0028.mp4', 'video/mp4', 16, :sha256,
+                            1000, 64, 64, 25, 1,
+                            'migration-test', NULL, NULL, :file_id,
+                            NULL, NULL, NULL, 1, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {
+                        "version_id": f"ver_0028_{suffix}",
+                        "project_id": f"prj_0028_{suffix}",
+                        "item_id": f"item_0028_{suffix}",
+                        "file_id": f"file_0028_{suffix}",
+                        "sha256": suffix[0] * 64,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "UPDATE review_items SET current_version_id = :version_id "
+                        "WHERE id = :item_id"
+                    ),
+                    {
+                        "version_id": f"ver_0028_{suffix}",
+                        "item_id": f"item_0028_{suffix}",
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO review_issues (
+                            id, project_ref_id, review_item_id, version_id, issue_no,
+                            status, current_revision_id, timestamp_ms, frame_number,
+                            lock_version, deleted_at, created_at, updated_at
+                        ) VALUES (
+                            :issue_id, :project_id, :item_id, :version_id, 1,
+                            :issue_status, :revision_id, 0, 0, 1,
+                            CASE WHEN :is_deleted THEN CURRENT_TIMESTAMP ELSE NULL END,
+                            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {
+                        "issue_id": f"iss_0028_{suffix}",
+                        "project_id": f"prj_0028_{suffix}",
+                        "item_id": f"item_0028_{suffix}",
+                        "version_id": f"ver_0028_{suffix}",
+                        "issue_status": issue_status,
+                        "revision_id": f"rev_0028_{suffix}",
+                        "is_deleted": is_deleted,
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO issue_revisions (
+                            id, project_ref_id, review_item_id, version_id, issue_id,
+                            revision_no, content, annotation_set_id, created_at
+                        ) VALUES (
+                            :revision_id, :project_id, :item_id, :version_id,
+                            :issue_id, 1, 'migration finding', NULL, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {
+                        "revision_id": f"rev_0028_{suffix}",
+                        "project_id": f"prj_0028_{suffix}",
+                        "item_id": f"item_0028_{suffix}",
+                        "version_id": f"ver_0028_{suffix}",
+                        "issue_id": f"iss_0028_{suffix}",
+                    },
+                )
+    finally:
+        engine.dispose()
+
+    alembic_command.upgrade(config, "20260825_0028")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            rows = dict(
+                connection.execute(
+                    text(
+                        "SELECT id, workflow_status || ':' || lock_version "
+                        "FROM review_items ORDER BY id"
+                    )
+                ).all()
+            )
+        assert rows == {
+            "item_0028_deleted": "in_review:1",
+            "item_0028_resolved": "pending_review:1",
+            "item_0028_unresolved": "changes_requested:2",
+        }
+    finally:
+        engine.dispose()
+
+    alembic_command.downgrade(config, "20260825_0027")
+    alembic_command.upgrade(config, "20260825_0028")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT workflow_status, lock_version FROM review_items "
+                    "WHERE id = 'item_0028_unresolved'"
+                )
+            ).one() == ("changes_requested", 2)
+    finally:
+        engine.dispose()
+
+
+def test_0028_real_postgresql_upgrade_downgrade_upgrade() -> None:
+    database_url = _postgres_database_url()
+    temporary = _postgres_temp_database(database_url)
+    previous_database_url = os.environ.get("DATABASE_URL")
+    from backend.app.settings import get_settings
+
+    try:
+        _prepare_postgresql_schema(temporary.url, "20260825_0027")
+        os.environ["DATABASE_URL"] = temporary.url
+        get_settings.cache_clear()
+        config = _alembic_config(Path(__file__).resolve().parents[2])
+        alembic_command.upgrade(config, "20260825_0028")
+        engine = create_engine(temporary.url)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one() == "20260825_0028"
+        finally:
+            engine.dispose()
+        alembic_command.downgrade(config, "20260825_0027")
+        alembic_command.upgrade(config, "20260825_0028")
     finally:
         if previous_database_url is None:
             os.environ.pop("DATABASE_URL", None)

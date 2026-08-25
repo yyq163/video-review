@@ -87,6 +87,7 @@ from .sqlalchemy_models import (
     UploadSessionModel,
     utcnow,
 )
+from .issue_workflow import sync_item_workflow_for_current_issues
 
 POST_COMMIT_FILE_DELETIONS_KEY = "final_cut_review_post_commit_file_deletions"
 POST_COMMIT_PACKAGE_DELETIONS_KEY = "final_cut_review_post_commit_package_deletions"
@@ -1986,9 +1987,32 @@ class SqlAlchemyReviewRepository:
         self.session.add(revision)
         self.session.flush()
         self._sync_item_workflow_for_current_issues(item)
+        self.record_review_issue_created(
+            context,
+            item,
+            issue,
+            started_review=started_review,
+        )
+        return self.issue_dto(issue)
+
+    def record_review_issue_created(
+        self,
+        context: ExecutionContext,
+        item: ReviewItemModel,
+        issue: ReviewIssueModel,
+        *,
+        started_review: bool,
+    ) -> None:
         if started_review:
             self._event(
-                "review.session.started", context, item.project_ref_id, "review_item", item.id, item.lock_version, review_item_id=item.id, version_id=version.id
+                "review.session.started",
+                context,
+                item.project_ref_id,
+                "review_item",
+                item.id,
+                item.lock_version,
+                review_item_id=item.id,
+                version_id=issue.version_id,
             )
         self._event(
             "review.issue.created",
@@ -2001,31 +2025,9 @@ class SqlAlchemyReviewRepository:
             version_id=issue.version_id,
             issue_id=issue.id,
         )
-        return self.issue_dto(issue)
 
     def _sync_item_workflow_for_current_issues(self, item: ReviewItemModel) -> None:
-        """Synchronize the authoritative item state while holding the item row lock."""
-        if item.workflow_status == "finalized":
-            raise ReviewError("REVIEW_ITEM_FINALIZED", "已定稿条目不可修改意见状态")
-        current_version_id = item.current_version_id
-        if not current_version_id:
-            raise ReviewError("RESOURCE_STATE_CONFLICT", "审阅条目缺少当前版本")
-        unresolved = int(
-            self.session.scalar(
-                select(func.count())
-                .select_from(ReviewIssueModel)
-                .where(
-                    ReviewIssueModel.review_item_id == item.id,
-                    ReviewIssueModel.version_id == current_version_id,
-                    ReviewIssueModel.status == "unresolved",
-                    ReviewIssueModel.deleted_at.is_(None),
-                )
-            )
-            or 0
-        )
-        item.workflow_status = "changes_requested" if unresolved > 0 else "in_review"
-        item.lock_version += 1
-        item.updated_at = utcnow()
+        sync_item_workflow_for_current_issues(self.session, item)
 
     def _create_annotation_if_present(self, issue: ReviewIssueModel, annotation: dict[str, Any] | None) -> str | None:
         if not annotation:

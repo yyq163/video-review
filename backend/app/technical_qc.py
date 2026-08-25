@@ -24,7 +24,18 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.app.modules.final_cut_review.application.context import (
+    ExecutionContext,
+    PrincipalRef,
+    WriteGuardState,
+)
 from backend.app.modules.final_cut_review.infra import database as database_module
+from backend.app.modules.final_cut_review.infra.issue_workflow import (
+    sync_item_workflow_for_current_issues,
+)
+from backend.app.modules.final_cut_review.infra.repositories import (
+    SqlAlchemyReviewRepository,
+)
 from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     FileObjectModel,
     MediaDerivativeTaskModel,
@@ -37,7 +48,7 @@ from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     TechnicalQcTaskModel,
 )
 from backend.app.safe_files import UnsafeFilePathError, pin_regular_file
-from backend.app.settings import Settings, get_database_settings
+from backend.app.settings import Settings, get_database_settings, get_settings
 
 
 RULE_VERSION = "technical-qc-v1"
@@ -831,8 +842,15 @@ def persist_technical_qc_findings(
     )
     if item is None:
         return []
+    if (
+        item.current_version_id != claim.version_id
+        or item.workflow_status == "finalized"
+    ):
+        return []
 
     issue_ids: list[str] = []
+    created_issues: list[ReviewIssueModel] = []
+    started_review = item.workflow_status == "pending_review"
     for interval in merge_overlapping_intervals(intervals):
         identity_hash = _finding_identity(claim, interval)
         existing = session.scalar(
@@ -899,6 +917,35 @@ def persist_technical_qc_findings(
         )
         session.flush()
         issue_ids.append(issue_id)
+        created_issues.append(issue)
+    if created_issues:
+        sync_item_workflow_for_current_issues(session, item)
+        context = ExecutionContext(
+            entry_source="review",
+            request_id=claim.claim_id,
+            principal=PrincipalRef(
+                kind="system",
+                id="technical-qc-worker",
+                project_ref_ids=(claim.project_ref_id,),
+            ),
+            write_guard=WriteGuardState(mode="none", verified=True),
+        )
+        repository = SqlAlchemyReviewRepository(session, get_settings())
+        for index, issue in enumerate(created_issues):
+            repository.record_review_issue_created(
+                context,
+                item,
+                issue,
+                started_review=started_review and index == 0,
+            )
+            repository.add_operation_log(
+                context,
+                "review.issue.create",
+                "ok",
+                command_type="CreateReviewIssue",
+                resource_type="review_issue",
+                resource_id=issue.id,
+            )
     return issue_ids
 
 
