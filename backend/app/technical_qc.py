@@ -2034,6 +2034,11 @@ def _process_technical_qc_claim(
             on_fatal(exc)
         raise
     except TechnicalQcError as exc:
+        if (
+            exc.code == "TECHNICAL_QC_SCAN_CANCELLED"
+            and (_WORKER_STOP.is_set() or _WORKER_FATAL.is_set())
+        ):
+            return "skipped"
         with _technical_qc_session(runtime_binding) as session:
             recorded = fail_technical_qc_task(
                 session,
@@ -2130,11 +2135,12 @@ def process_technical_qc_batch(
     if not claims:
         return counts
     submitted = len(claims)
-    with ThreadPoolExecutor(
+    executor = ThreadPoolExecutor(
         max_workers=concurrency,
         thread_name_prefix="technical-qc-worker",
-    ) as executor:
-        futures: dict[Future[str], TechnicalQcClaim] = {}
+    )
+    futures: dict[Future[str], TechnicalQcClaim] = {}
+    try:
         for claim in claims:
             _raise_if_technical_qc_worker_fatal()
             if _WORKER_STOP.is_set():
@@ -2150,7 +2156,16 @@ def process_technical_qc_batch(
                 )
             ] = claim
         while futures:
-            done, _pending = wait(tuple(futures), return_when=FIRST_COMPLETED)
+            done, _pending = wait(
+                tuple(futures),
+                timeout=PROCESS_POLL_SECONDS,
+                return_when=FIRST_COMPLETED,
+            )
+            _raise_if_technical_qc_worker_fatal()
+            if _WORKER_STOP.is_set():
+                break
+            if not done:
+                continue
             for future in done:
                 futures.pop(future, None)
                 try:
@@ -2187,6 +2202,13 @@ def process_technical_qc_batch(
                 )
                 futures[future] = claim
                 submitted += 1
+    finally:
+        fatal_shutdown = _WORKER_FATAL.is_set()
+        stopping = _WORKER_STOP.is_set() or fatal_shutdown
+        if stopping:
+            for future in futures:
+                future.cancel()
+        executor.shutdown(wait=not fatal_shutdown, cancel_futures=stopping)
     return counts
 
 

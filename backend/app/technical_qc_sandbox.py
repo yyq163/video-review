@@ -46,6 +46,7 @@ MAX_REQUEST_BYTES = 16 * 1024
 MAX_REPLY_BYTES = 16 * 1024 * 1024
 MAX_INTERVALS = 10_000
 MAX_MEDIA_DURATION_MS = 7 * 24 * 60 * 60 * 1_000
+MAX_SCAN_CONNECTIONS = 8
 SOCKET_POLL_SECONDS = 0.1
 INITIAL_REQUEST_TIMEOUT_SECONDS = 0.25
 HEALTH_REQUEST_TIMEOUT_SECONDS = 0.15
@@ -54,6 +55,7 @@ _STOP = threading.Event()
 _FATAL = threading.Event()
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_CONNECTIONS: set[socket.socket] = set()
+_SCAN_REQUEST_DEADLINES: dict[socket.socket, float] = {}
 _STATUS_PATH: Path | None = None
 _VALUE_KEYS = frozenset({"pblack", "yavg", "scene_score", "frame_count", "duration_ms"})
 _ERROR_RETRYABILITY = {
@@ -71,17 +73,21 @@ _ERROR_RETRYABILITY = {
 }
 
 
-def _mark_fatal(_error: TechnicalQcFatalError) -> None:
-    _FATAL.set()
-    _STOP.set()
-    if _STATUS_PATH is not None:
-        _atomic_worker_state(_STATUS_PATH, "fatal")
+def _shutdown_scan_connections() -> None:
     with _ACTIVE_LOCK:
         for connection in tuple(_ACTIVE_CONNECTIONS):
             try:
                 connection.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+
+
+def _mark_fatal(_error: TechnicalQcFatalError) -> None:
+    _FATAL.set()
+    _STOP.set()
+    if _STATUS_PATH is not None:
+        _atomic_worker_state(_STATUS_PATH, "fatal")
+    _shutdown_scan_connections()
 
 
 def _json_line(payload: dict[str, Any]) -> bytes:
@@ -348,11 +354,17 @@ def sandbox_health_socket_path(socket_path: Path) -> Path:
 
 def _handle_connection(connection: socket.socket) -> None:
     with connection:
-        with _ACTIVE_LOCK:
-            _ACTIVE_CONNECTIONS.add(connection)
         descriptor = -1
         try:
-            connection.settimeout(INITIAL_REQUEST_TIMEOUT_SECONDS)
+            with _ACTIVE_LOCK:
+                request_deadline = _SCAN_REQUEST_DEADLINES.get(
+                    connection,
+                    time.monotonic() + INITIAL_REQUEST_TIMEOUT_SECONDS,
+                )
+            remaining = request_deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            connection.settimeout(remaining)
             request, descriptor = _receive_request_and_fd(connection)
             connection.settimeout(None)
             reply = _default_handler(request, descriptor, connection)
@@ -374,8 +386,20 @@ def _handle_connection(connection: socket.socket) -> None:
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
-            with _ACTIVE_LOCK:
-                _ACTIVE_CONNECTIONS.discard(connection)
+
+
+def _run_scan_connection(
+    connection: socket.socket,
+    capacity: threading.BoundedSemaphore,
+) -> None:
+    try:
+        _handle_connection(connection)
+    finally:
+        with _ACTIVE_LOCK:
+            _ACTIVE_CONNECTIONS.discard(connection)
+            _SCAN_REQUEST_DEADLINES.pop(connection, None)
+        connection.close()
+        capacity.release()
 
 
 def _serve_health_connections(listener: socket.socket) -> None:
@@ -457,17 +481,13 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
     _FATAL.clear()
     status_path = socket_path.with_name("sandbox.status")
     health_socket_path = sandbox_health_socket_path(socket_path)
+    scan_capacity = threading.BoundedSemaphore(MAX_SCAN_CONNECTIONS)
     _STATUS_PATH = status_path
 
     def stop(_signum: int, _frame: Any) -> None:
         _STOP.set()
         _atomic_worker_state(status_path, "stopping")
-        with _ACTIVE_LOCK:
-            for connection in tuple(_ACTIVE_CONNECTIONS):
-                try:
-                    connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
+        _shutdown_scan_connections()
 
     previous_term = signal.signal(signal.SIGTERM, stop)
     previous_int = signal.signal(signal.SIGINT, stop)
@@ -496,9 +516,47 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
                         connection, _ = listener.accept()
                     except TimeoutError:
                         continue
-                    executor.submit(_handle_connection, connection)
+                    except OSError:
+                        if _STOP.is_set():
+                            break
+                        _mark_fatal(
+                            TechnicalQcFatalError(
+                                "TECHNICAL_QC_SCAN_FAILED",
+                                retryable=False,
+                            ),
+                        )
+                        break
+                    if not scan_capacity.acquire(blocking=False):
+                        connection.close()
+                        continue
+                    with _ACTIVE_LOCK:
+                        _ACTIVE_CONNECTIONS.add(connection)
+                        _SCAN_REQUEST_DEADLINES[connection] = (
+                            time.monotonic() + INITIAL_REQUEST_TIMEOUT_SECONDS
+                        )
+                    try:
+                        executor.submit(
+                            _run_scan_connection,
+                            connection,
+                            scan_capacity,
+                        )
+                    except (OSError, RuntimeError):
+                        with _ACTIVE_LOCK:
+                            _ACTIVE_CONNECTIONS.discard(connection)
+                            _SCAN_REQUEST_DEADLINES.pop(connection, None)
+                        connection.close()
+                        scan_capacity.release()
+                        if not _STOP.is_set():
+                            _mark_fatal(
+                                TechnicalQcFatalError(
+                                    "TECHNICAL_QC_SCAN_FAILED",
+                                    retryable=False,
+                                ),
+                            )
+                        break
             finally:
                 _STOP.set()
+                _shutdown_scan_connections()
                 health_thread.join(timeout=1)
                 if health_thread.is_alive():
                     _FATAL.set()
