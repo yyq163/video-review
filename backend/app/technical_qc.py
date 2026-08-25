@@ -69,6 +69,7 @@ PROCESS_POLL_SECONDS = 0.02
 WORKER_HEARTBEAT_REFRESH_SECONDS = 30.0
 _WORKER_STOP = threading.Event()
 _WORKER_FATAL = threading.Event()
+_WORKER_FATAL_STATUS_WRITE_FAILED = threading.Event()
 _WORKER_STATE_LOCK = threading.RLock()
 
 
@@ -2292,18 +2293,29 @@ def run_technical_qc_worker_loop(
     with _WORKER_STATE_LOCK:
         _WORKER_STOP.clear()
         _WORKER_FATAL.clear()
+        _WORKER_FATAL_STATUS_WRITE_FAILED.clear()
+    hard_exit_requested = threading.Event()
+
+    def force_fatal_exit() -> None:
+        if hard_exit is not None and not hard_exit_requested.is_set():
+            hard_exit_requested.set()
+            hard_exit(70)
 
     def record_service_event() -> None:
         if not _WORKER_STOP.is_set() and not _WORKER_FATAL.is_set():
             _atomic_worker_state(heartbeat_path, str(time.time_ns()))
 
     def mark_fatal(_error: TechnicalQcFatalError) -> None:
-        with _WORKER_STATE_LOCK:
-            _WORKER_FATAL.set()
-            _WORKER_STOP.set()
-            _atomic_worker_state(status_path, "fatal")
-        if hard_exit is not None:
-            hard_exit(70)
+        try:
+            with _WORKER_STATE_LOCK:
+                _WORKER_FATAL.set()
+                _WORKER_STOP.set()
+                try:
+                    _atomic_worker_state(status_path, "fatal")
+                except OSError:
+                    _WORKER_FATAL_STATUS_WRITE_FAILED.set()
+        finally:
+            force_fatal_exit()
 
     def stop_worker(_signum: int, _frame: Any) -> None:
         with _WORKER_STATE_LOCK:
@@ -2344,12 +2356,20 @@ def run_technical_qc_worker_loop(
     finally:
         with _WORKER_STATE_LOCK:
             fatal_exit = _WORKER_FATAL.is_set()
-            _atomic_worker_state(
-                status_path,
-                "fatal" if fatal_exit else "stopped",
-            )
+            try:
+                _atomic_worker_state(
+                    status_path,
+                    "fatal" if fatal_exit else "stopped",
+                )
+            except OSError:
+                if fatal_exit:
+                    _WORKER_FATAL_STATUS_WRITE_FAILED.set()
+                else:
+                    raise
             if not fatal_exit:
                 _WORKER_STOP.clear()
+        if fatal_exit:
+            force_fatal_exit()
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
 

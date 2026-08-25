@@ -99,8 +99,14 @@ def _mark_fatal(_error: TechnicalQcFatalError) -> None:
         _FATAL.set()
         _STOP.set()
         if _STATUS_PATH is not None:
-            _atomic_worker_state(_STATUS_PATH, "fatal")
-    _shutdown_scan_connections()
+            try:
+                _atomic_worker_state(_STATUS_PATH, "fatal")
+            except OSError:
+                pass
+    try:
+        _shutdown_scan_connections()
+    except (OSError, MemoryError):
+        pass
 
 
 def _json_line(payload: dict[str, Any]) -> bytes:
@@ -421,9 +427,12 @@ def _serve_health_connections(listener: socket.socket) -> None:
         selector = selectors.DefaultSelector()
         listener.setblocking(False)
         selector.register(listener, selectors.EVENT_READ)
-    except OSError:
+    except (OSError, MemoryError):
         if selector is not None:
-            selector.close()
+            try:
+                selector.close()
+            except (OSError, MemoryError):
+                pass
         _mark_fatal(
             TechnicalQcFatalError(
                 "TECHNICAL_QC_SCAN_FAILED",
@@ -434,18 +443,35 @@ def _serve_health_connections(listener: socket.socket) -> None:
     pending: dict[socket.socket, float] = {}
 
     def close_pending(connection: socket.socket) -> None:
+        resource_error = False
         try:
             selector.unregister(connection)
+        except (OSError, MemoryError):
+            resource_error = True
         except (KeyError, ValueError):
             pass
-        pending.pop(connection, None)
-        connection.close()
+        finally:
+            try:
+                pending.pop(connection, None)
+            except MemoryError:
+                resource_error = True
+            try:
+                connection.close()
+            except OSError:
+                resource_error = True
+        if resource_error:
+            _mark_fatal(
+                TechnicalQcFatalError(
+                    "TECHNICAL_QC_SCAN_FAILED",
+                    retryable=False,
+                ),
+            )
 
     try:
         while not _STOP.is_set():
             try:
                 selected = selector.select(SOCKET_POLL_SECONDS)
-            except OSError:
+            except (OSError, MemoryError):
                 _mark_fatal(
                     TechnicalQcFatalError(
                         "TECHNICAL_QC_SCAN_FAILED",
@@ -460,7 +486,7 @@ def _serve_health_connections(listener: socket.socket) -> None:
                             connection, _ = listener.accept()
                         except BlockingIOError:
                             break
-                        except OSError:
+                        except (OSError, MemoryError):
                             _mark_fatal(
                                 TechnicalQcFatalError(
                                     "TECHNICAL_QC_SCAN_FAILED",
@@ -469,23 +495,37 @@ def _serve_health_connections(listener: socket.socket) -> None:
                             )
                             return
                         if len(pending) >= MAX_PENDING_HEALTH_CONNECTIONS:
-                            connection.close()
+                            try:
+                                connection.close()
+                            except OSError:
+                                _mark_fatal(
+                                    TechnicalQcFatalError(
+                                        "TECHNICAL_QC_SCAN_FAILED",
+                                        retryable=False,
+                                    ),
+                                )
+                                return
                             continue
-                        connection.setblocking(False)
+                        try:
+                            connection.setblocking(False)
+                        except (OSError, MemoryError):
+                            try:
+                                connection.close()
+                            finally:
+                                _mark_fatal(
+                                    TechnicalQcFatalError(
+                                        "TECHNICAL_QC_SCAN_FAILED",
+                                        retryable=False,
+                                    ),
+                                )
+                            return
                         pending[connection] = (
                             time.monotonic() + HEALTH_REQUEST_TIMEOUT_SECONDS
                         )
                         try:
                             selector.register(connection, selectors.EVENT_READ)
-                        except OSError:
-                            pending.pop(connection, None)
-                            connection.close()
-                            _mark_fatal(
-                                TechnicalQcFatalError(
-                                    "TECHNICAL_QC_SCAN_FAILED",
-                                    retryable=False,
-                                ),
-                            )
+                        except (OSError, MemoryError):
+                            close_pending(connection)
                             return
                     continue
                 connection = key.fileobj
@@ -521,10 +561,25 @@ def _serve_health_connections(listener: socket.socket) -> None:
             for connection, deadline in tuple(pending.items()):
                 if now >= deadline:
                     close_pending(connection)
+    except (OSError, MemoryError):
+        _mark_fatal(
+            TechnicalQcFatalError(
+                "TECHNICAL_QC_SCAN_FAILED",
+                retryable=False,
+            ),
+        )
     finally:
         for connection in tuple(pending):
             close_pending(connection)
-        selector.close()
+        try:
+            selector.close()
+        except (OSError, MemoryError):
+            _mark_fatal(
+                TechnicalQcFatalError(
+                    "TECHNICAL_QC_SCAN_FAILED",
+                    retryable=False,
+                ),
+            )
 
 
 def serve_forever(socket_path: Path, *, concurrency: int) -> None:
