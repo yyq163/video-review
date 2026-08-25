@@ -112,11 +112,11 @@ def _mark_fatal(_error: TechnicalQcFatalError) -> None:
         if _STATUS_PATH is not None:
             try:
                 _atomic_worker_state(_STATUS_PATH, "fatal")
-            except OSError:
+            except Exception:
                 pass
     try:
         _shutdown_scan_connections()
-    except (OSError, MemoryError):
+    except Exception:
         pass
 
 
@@ -713,17 +713,17 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
             for cleanup_path in (socket_path, health_socket_path):
                 try:
                     cleanup_path.unlink(missing_ok=True)
-                except OSError:
+                except Exception:
                     pass
             try:
                 with _STATE_LOCK:
                     _atomic_worker_state(status_path, "fatal")
-            except OSError:
+            except Exception:
                 pass
             try:
                 signal.signal(signal.SIGTERM, previous_term)
                 signal.signal(signal.SIGINT, previous_int)
-            except (OSError, RuntimeError, ValueError):
+            except Exception:
                 pass
             raise SystemExit(70)
         socket_path.unlink(missing_ok=True)
