@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import errno
 import fcntl
 import json
 import math
@@ -83,6 +84,16 @@ _ERROR_RETRYABILITY = {
     "TECHNICAL_QC_LEASE_LOST": False,
     "TECHNICAL_QC_INCOMPLETE_SCAN": True,
 }
+_FATAL_HEALTH_ERRNOS = frozenset(
+    {
+        errno.EIO,
+        errno.EMFILE,
+        errno.ENFILE,
+        errno.ENOMEM,
+        errno.ENOSPC,
+        errno.ENOBUFS,
+    },
+)
 
 
 def _shutdown_scan_connections() -> None:
@@ -111,6 +122,10 @@ def _mark_fatal(_error: TechnicalQcFatalError) -> None:
 
 def _json_line(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def _is_fatal_health_os_error(error: OSError) -> bool:
+    return error.errno in _FATAL_HEALTH_ERRNOS
 
 
 def _receive_request_and_fd(
@@ -553,7 +568,15 @@ def _serve_health_connections(listener: socket.socket) -> None:
                             },
                         ),
                     )
-                except (OSError, TechnicalQcError):
+                except OSError as exc:
+                    if _is_fatal_health_os_error(exc):
+                        _mark_fatal(
+                            TechnicalQcFatalError(
+                                "TECHNICAL_QC_SCAN_FAILED",
+                                retryable=False,
+                            ),
+                        )
+                except TechnicalQcError:
                     pass
                 finally:
                     close_pending(connection)
@@ -685,13 +708,28 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
                 _atomic_worker_state(status_path, "fatal")
             raise SystemExit(70)
     finally:
+        fatal_exit = _FATAL.is_set()
+        if fatal_exit:
+            for cleanup_path in (socket_path, health_socket_path):
+                try:
+                    cleanup_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            try:
+                with _STATE_LOCK:
+                    _atomic_worker_state(status_path, "fatal")
+            except OSError:
+                pass
+            try:
+                signal.signal(signal.SIGTERM, previous_term)
+                signal.signal(signal.SIGINT, previous_int)
+            except (OSError, RuntimeError, ValueError):
+                pass
+            raise SystemExit(70)
         socket_path.unlink(missing_ok=True)
         health_socket_path.unlink(missing_ok=True)
         with _STATE_LOCK:
-            if _FATAL.is_set():
-                _atomic_worker_state(status_path, "fatal")
-            else:
-                _atomic_worker_state(status_path, "stopped")
+            _atomic_worker_state(status_path, "stopped")
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
 
