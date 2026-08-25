@@ -227,7 +227,11 @@
 }
 
 .fj-review-technical-qc-tooltip {
-  background: var(--fj-review-panel);
+  background-color: #171a1c;
+  background-image: linear-gradient(
+    var(--fj-review-surface, #171a1c),
+    var(--fj-review-surface, #171a1c)
+  );
   border: 1px solid var(--fj-review-line);
   border-radius: 8px;
   box-shadow: var(--fj-review-shadow);
@@ -977,7 +981,6 @@
 }
 
 .fj-review-item-timecode {
-  color: var(--fj-review-muted);
   display: block;
   font-variant-numeric: tabular-nums;
   justify-self: start;
@@ -2243,7 +2246,20 @@
 }
 
 .fj-review-inline-upload-editor {
+  align-items: end;
+  display: grid;
+  gap: 6px;
   grid-area: editor;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.fj-review-inline-upload-editor label {
+  min-width: 0;
+}
+
+.fj-review-inline-upload-editor > button {
+  min-height: 44px;
+  padding-inline: 9px;
 }
 
 .fj-review-inline-upload-note {
@@ -2435,15 +2451,24 @@
   top: 0;
 }
 
-.fj-review-episode-duration.is-short {
+.fj-review-duration.is-short,
+.fj-review-item-timecode.is-short,
+.fj-review-episode-duration.is-short,
+.fj-review-decision-metadata > div.is-short dd {
   color: var(--fj-review-red);
 }
 
-.fj-review-episode-duration.is-warning {
+.fj-review-duration.is-warning,
+.fj-review-item-timecode.is-warning,
+.fj-review-episode-duration.is-warning,
+.fj-review-decision-metadata > div.is-warning dd {
   color: var(--fj-review-yellow);
 }
 
-.fj-review-episode-duration.is-standard {
+.fj-review-duration.is-standard,
+.fj-review-item-timecode.is-standard,
+.fj-review-episode-duration.is-standard,
+.fj-review-decision-metadata > div.is-standard dd {
   color: var(--fj-review-text);
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { ReviewItemDTO, UploadSessionDTO } from '../contracts-generated/backend-contract';
@@ -24,7 +24,8 @@ describe('review workspace append-version confirmation', () => {
     const reviewApi = runtime.getApi('review');
 
     const first = renderEditWorkspace(runtime);
-    expect(await screen.findByRole('button', { name: '确认追加 V3' })).toBeEnabled();
+    const initialAppend = await screen.findByRole('button', { name: '确认追加 V3' });
+    await waitFor(() => expect(initialAppend).toBeEnabled());
     first.unmount();
     first.queryClient.clear();
 
@@ -87,7 +88,7 @@ describe('review workspace append-version confirmation', () => {
     await userEvent.click(screen.getByRole('button', { name: '我已核对版本列表，刷新后允许继续追加' }));
     await waitFor(() => expect(getWorkspace.mock.calls.length).toBeGreaterThan(callsBeforeConfirmation));
     await waitFor(() => expect(screen.queryByTestId('append-version-confirmation-required')).not.toBeInTheDocument());
-    expect(screen.getByRole('button', { name: '确认追加 V3' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: '确认追加 V3' })).toBeEnabled());
     expect(isAppendVersionConfirmationRequired(PROJECT_REF_ID, REVIEW_ITEM_ID)).toBe(false);
 
     reloaded.unmount();
@@ -119,6 +120,74 @@ function renderEditWorkspace(runtime: ReviewRuntime) {
   );
   return { ...result, queryClient };
 }
+
+describe('review workspace legacy frame-rate and editor-directory gates', () => {
+  it('does not mount V2+ file selection before a legacy project frame rate is locked', async () => {
+    const runtime = createReviewRuntime();
+    const api = runtime.getApi('edit');
+    const getWorkspace = api.getWorkspace.bind(api);
+    vi.spyOn(api, 'getWorkspace').mockImplementation(async (...args) => {
+      const workspace = await getWorkspace(...args);
+      return {
+        ...workspace,
+        project: { ...workspace.project, frameRate: null },
+      };
+    });
+    const probe = vi.spyOn(runtime.mediaMetadata, 'probe');
+
+    const rendered = renderEditWorkspace(runtime);
+
+    expect(await screen.findByTestId('append-version-frame-rate-required')).toHaveTextContent(
+      '锁定项目帧率',
+    );
+    expect(screen.queryByTestId('append-version-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('append-version-file')).not.toBeInTheDocument();
+    expect(probe).not.toHaveBeenCalled();
+
+    rendered.unmount();
+    rendered.queryClient.clear();
+    runtime.dispose();
+  });
+
+  it('surfaces the V2+ editor-directory failure with retry instead of a required-field error', async () => {
+    const runtime = createReviewRuntime();
+    const api = runtime.getApi('edit');
+    const listResponsibleEditors = vi
+      .spyOn(api, 'listResponsibleEditors')
+      .mockRejectedValue(new DOMException('catalog unavailable', 'AbortError'));
+    const rendered = renderEditWorkspace(runtime);
+
+    const error = await screen.findByTestId('append-responsible-editors-error');
+    expect(error).toHaveTextContent('责任剪辑师目录加载失败，请稍后重试。');
+    expect(screen.queryByText('责任剪辑师必填')).not.toBeInTheDocument();
+    const callsBeforeRetry = listResponsibleEditors.mock.calls.length;
+    await userEvent.click(screen.getByRole('button', { name: '重试责任剪辑师目录' }));
+    await waitFor(() => expect(listResponsibleEditors.mock.calls.length).toBeGreaterThan(callsBeforeRetry));
+
+    rendered.unmount();
+    rendered.queryClient.clear();
+    runtime.dispose();
+  });
+
+  it('reuses the shared editor manager beside V2+ while preserving the current version snapshot', async () => {
+    const runtime = createReviewRuntime();
+    const rendered = renderEditWorkspace(runtime);
+
+    expect(await screen.findByTestId('decision-editor')).toHaveTextContent('剪辑师甲');
+    await userEvent.click(screen.getByRole('button', { name: '编辑责任剪辑师' }));
+    const dialog = await screen.findByRole('dialog', { name: '编辑责任剪辑师' });
+    await userEvent.clear(within(dialog).getByLabelText('责任剪辑师显示名称'));
+    await userEvent.type(within(dialog).getByLabelText('责任剪辑师显示名称'), '剪辑师甲改名');
+    await userEvent.click(within(dialog).getByRole('button', { name: '保存责任剪辑师' }));
+
+    await waitFor(() => expect(screen.getByLabelText('责任剪辑师')).toHaveDisplayValue('剪辑师甲改名'));
+    expect(screen.getByTestId('decision-editor')).toHaveTextContent('剪辑师甲');
+
+    rendered.unmount();
+    rendered.queryClient.clear();
+    runtime.dispose();
+  });
+});
 
 function reviewItem(): ReviewItemDTO {
   return {

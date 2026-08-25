@@ -89,6 +89,7 @@ export interface ReviewProjectSummary {
 }
 
 export interface TechnicalQcRunningEpisode {
+  readonly reviewItemId: ReviewItemId;
   readonly episodeNo: number | null;
   readonly processedMs: number;
   readonly totalMs: number;

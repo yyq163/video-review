@@ -7,7 +7,8 @@ export function TechnicalQcProgressIndicator(props: {
   const [open, setOpen] = useState(false);
   const episodes = [...props.episodes].sort((left, right) =>
     (left.episodeNo === null ? 1 : 0) - (right.episodeNo === null ? 1 : 0)
-    || (left.episodeNo ?? 0) - (right.episodeNo ?? 0));
+    || (left.episodeNo ?? 0) - (right.episodeNo ?? 0)
+    || left.reviewItemId.localeCompare(right.reviewItemId));
   if (!episodes.length) return null;
 
   return (
@@ -28,8 +29,8 @@ export function TechnicalQcProgressIndicator(props: {
         <span className="fj-review-technical-qc-tooltip" role="tooltip">
           <strong>正在审查：</strong>
           <span className="fj-review-technical-qc-list">
-            {episodes.map((episode, index) => {
-              const episodeKey = episode.episodeNo ?? `unassigned-${index}`;
+            {episodes.map((episode) => {
+              const episodeKey = episode.reviewItemId;
               const processedMs = Math.min(
                 Math.max(0, episode.processedMs),
                 episode.totalMs,

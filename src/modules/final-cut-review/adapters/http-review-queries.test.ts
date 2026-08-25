@@ -401,8 +401,8 @@ describe('HttpReviewQueries technical QC progress', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       data: {
         episodes: [
-          { episode_no: 2, processed_ms: 250, total_ms: 1_000 },
-          { episode_no: 1, processed_ms: 500, total_ms: 2_000 },
+          { review_item_id: 'item-2', episode_no: 2, processed_ms: 250, total_ms: 1_000 },
+          { review_item_id: 'item-1', episode_no: 1, processed_ms: 500, total_ms: 2_000 },
         ],
       },
       meta: { request_id: 'technical-qc-progress', contract_version: '1.0' },
@@ -421,12 +421,13 @@ describe('HttpReviewQueries technical QC progress', () => {
     );
     expect(progress).toEqual({
       episodes: [
-        { episodeNo: 2, processedMs: 250, totalMs: 1_000 },
-        { episodeNo: 1, processedMs: 500, totalMs: 2_000 },
+        { reviewItemId: 'item-2', episodeNo: 2, processedMs: 250, totalMs: 1_000 },
+        { reviewItemId: 'item-1', episodeNo: 1, processedMs: 500, totalMs: 2_000 },
       ],
     });
     expect(Object.keys(progress)).toEqual(['episodes']);
     expect(Object.keys(progress.episodes[0])).toEqual([
+      'reviewItemId',
       'episodeNo',
       'processedMs',
       'totalMs',

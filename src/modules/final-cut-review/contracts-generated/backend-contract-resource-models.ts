@@ -56,6 +56,7 @@ export interface ProjectSummaryDTO {
 }
 
 export interface TechnicalQcRunningEpisodeDTO {
+  review_item_id: string;
   episode_no: number | null;
   processed_ms: number;
   total_ms: number;

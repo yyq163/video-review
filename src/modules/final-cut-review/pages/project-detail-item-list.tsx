@@ -13,7 +13,11 @@ import type {
 } from '../contracts/types';
 import { formatEpisodeDisplayValue, type ReviewEpisodeGroup } from '../core/episode-dedupe';
 import type { ReviewProjectSummaryItem } from '../ports';
-import { formatTimestampTimecode } from '../core/timecode';
+import {
+  formatReviewDurationSeconds,
+  formatReviewDurationTimecode,
+  reviewDurationBandClass,
+} from '../core/duration';
 
 export type ProjectDetailMetadataEpisodeGroup = ReviewEpisodeGroup<ReviewProjectSummaryItem>;
 
@@ -443,6 +447,11 @@ export function ProjectDetailItemList({
         const cleanupPending = item.revocationCleanupStatus === 'pending';
         const cleanupFailed = item.revocationCleanupStatus === 'failed';
         const isFinalized = item.status === 'finalized' && item.finalization?.status === 'active';
+        const durationBand = reviewDurationBandClass(item.currentVersion.durationMs);
+        const durationFrameRate = projectFrameRate ?? {
+          fpsNum: item.currentVersion.fpsNum,
+          fpsDen: item.currentVersion.fpsDen,
+        };
         const deleteReason = deleteUnavailableReason(
           item,
           itemActionPending,
@@ -494,16 +503,22 @@ export function ProjectDetailItemList({
               <div className="fj-review-item-summary-text">
                 <strong>第 {formatEpisodeDisplayValue(item.episode)} 集</strong>
                 <span>
-                  {item.title} · {item.currentVersion.versionLabel} · {Math.round(item.currentVersion.durationMs / 1000)} 秒 · {Math.round(item.currentVersion.fileSize / 1024 / 1024)} MiB
+                  {item.title} · {item.currentVersion.versionLabel} ·{' '}
+                  <span
+                    className={`fj-review-duration ${durationBand}`}
+                    data-testid={`item-row-duration-${item.reviewItemId}`}
+                  >
+                    {formatReviewDurationSeconds(item.currentVersion.durationMs)}
+                  </span>{' '}
+                  · {Math.round(item.currentVersion.fileSize / 1024 / 1024)} MiB
                 </span>
                 <code
-                  className="fj-review-item-timecode"
+                  className={`fj-review-item-timecode ${durationBand}`}
                   data-testid={`item-row-timecode-${item.reviewItemId}`}
                 >
-                  {formatTimestampTimecode(
+                  {formatReviewDurationTimecode(
                     item.currentVersion.durationMs,
-                    projectFrameRate?.fpsNum ?? item.currentVersion.fpsNum,
-                    projectFrameRate?.fpsDen ?? item.currentVersion.fpsDen,
+                    durationFrameRate,
                   )}
                 </code>
               </div>

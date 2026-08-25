@@ -236,7 +236,8 @@ describe('DecisionBar component', () => {
     expect(screen.getByTestId('decision-fps')).toHaveTextContent('25/1 fps');
     expect(screen.getByTestId('decision-resolution')).toHaveTextContent('1280 × 720');
     expect(screen.getByTestId('decision-average-bitrate')).toHaveTextContent('Mbps');
-    expect(screen.getByTestId('decision-duration')).toHaveTextContent('00:00:00');
+    expect(screen.getByTestId('decision-duration')).toHaveTextContent('00:00:00:12');
+    expect(screen.getByTestId('decision-duration')).toHaveClass('is-short');
     expect(screen.getByTestId('decision-editor')).toHaveTextContent('剪辑师甲');
     expect(screen.queryByText('当前版本可定稿')).not.toBeInTheDocument();
     expect(screen.queryByText('V2', { selector: '.fj-review-decision-bar strong' })).not.toBeInTheDocument();
@@ -1971,6 +1972,33 @@ describe('ProjectDetailPage archive workflow', () => {
 });
 
 describe('AppendVersionPanel component', () => {
+  it('keeps the adjacent editor directory actions and distinguishes a catalog failure from missing input', async () => {
+    const onEditResponsibleEditor = vi.fn();
+    const onRetryResponsibleEditors = vi.fn();
+    render(
+      <AppendVersionPanel
+        nextLabel="V2"
+        onEditResponsibleEditor={onEditResponsibleEditor}
+        onRetryResponsibleEditors={onRetryResponsibleEditors}
+        onSubmit={vi.fn()}
+        responsibleEditors={[]}
+        responsibleEditorsError
+      />,
+    );
+
+    const editorSelect = screen.getByLabelText('责任剪辑师');
+    const edit = screen.getByRole('button', { name: '编辑责任剪辑师' });
+    expectBefore(editorSelect, edit);
+    await userEvent.click(edit);
+    expect(onEditResponsibleEditor).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('append-responsible-editors-error')).toHaveTextContent(
+      '责任剪辑师目录加载失败，请稍后重试。',
+    );
+    await userEvent.click(screen.getByRole('button', { name: '重试责任剪辑师目录' }));
+    expect(onRetryResponsibleEditors).toHaveBeenCalledOnce();
+    expect(screen.queryByText('责任剪辑师必填')).not.toBeInTheDocument();
+  });
+
   it('blocks V1 creation when no original file is selected', () => {
     const onSubmit = vi.fn();
     render(<CreateItemUploadPanel onSubmit={onSubmit} />);
@@ -2942,7 +2970,8 @@ describe('ReviewWorkspacePage issue playback', () => {
       return originalGetWorkspace(...args);
     });
 
-    expect(await screen.findByRole('button', { name: '确认追加 V3' })).toBeEnabled();
+    const appendButton = await screen.findByRole('button', { name: '确认追加 V3' });
+    await waitFor(() => expect(appendButton).toBeEnabled());
     await userEvent.upload(
       screen.getByTestId('append-version-file'),
       new File(['v3'], '第003集.mp4', { type: 'video/mp4' }),

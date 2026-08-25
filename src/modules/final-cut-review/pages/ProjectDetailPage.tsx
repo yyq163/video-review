@@ -31,6 +31,7 @@ import {
 } from '../adapters/http-review-finalization-operation';
 import { ProjectDetailItemList, type ProjectDetailMetadataEpisodeGroup } from './project-detail-item-list';
 import { TechnicalQcProgressIndicator } from '../components/TechnicalQcProgressIndicator';
+import { ResponsibleEditorManagerModal } from '../components/ResponsibleEditorManagerModal';
 
 function revocationSuccessMessage(
   item: Pick<ReviewItem, 'episode'>,
@@ -63,8 +64,6 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
   const [bulkActionsHost, setBulkActionsHost] = useState<HTMLSpanElement | null>(null);
   const [v1UploadOpen, setV1UploadOpen] = useState(false);
   const [editorManagerOpen, setEditorManagerOpen] = useState(false);
-  const [editingEditorId, setEditingEditorId] = useState<string | null>(null);
-  const [editorDisplayName, setEditorDisplayName] = useState('');
   const [legacyFrameRate, setLegacyFrameRate] = useState('25/1');
   const v1ListRefreshSequenceRef = useRef(0);
   const thumbnailAuthorityRefreshRef = useRef<Promise<unknown> | null>(null);
@@ -480,28 +479,6 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     }
   };
 
-  const saveResponsibleEditor = async () => {
-    setProjectActionError(null);
-    try {
-      const current = responsibleEditors.data?.find(
-        (editor) => editor.responsibleEditorId === editingEditorId,
-      );
-      if (current) {
-        await mutations.renameResponsibleEditor.mutateAsync({
-          responsibleEditorId: current.responsibleEditorId,
-          displayName: editorDisplayName,
-          lockVersion: current.lockVersion,
-        });
-      } else {
-        await mutations.createResponsibleEditor.mutateAsync({ displayName: editorDisplayName });
-      }
-      setEditorManagerOpen(false);
-      setProjectActionMessage('责任剪辑师目录已更新。');
-    } catch (caught) {
-      setProjectActionError(actionError(caught));
-    }
-  };
-
   const deleteReviewItem = async (item: ReviewProjectSummaryItem) => {
     setProjectActionError(null);
     setProjectActionMessage(null);
@@ -781,18 +758,24 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
           <section className="fj-review-readonly-notice" data-testid="legacy-frame-rate-lock">
             <strong>上传 V1 前请人工锁定项目帧率</strong>
             <span>老项目不会从既有视频自动推断或追溯锁定帧率。</span>
-            <label>
-              <span>项目帧率</span>
-              <select aria-label="待锁定项目帧率" value={legacyFrameRate} onChange={(event) => setLegacyFrameRate(event.target.value)}>
-                <option value="24000/1001">24000/1001</option><option value="24/1">24</option>
-                <option value="25/1">25</option><option value="30000/1001">30000/1001</option>
-                <option value="30/1">30</option><option value="50/1">50</option>
-                <option value="60000/1001">60000/1001</option><option value="60/1">60</option>
-              </select>
-            </label>
-            <button className="fj-review-primary" disabled={mutations.lockProjectFrameRate.isPending} onClick={() => void lockLegacyFrameRate()} type="button">
-              {mutations.lockProjectFrameRate.isPending ? '锁定中...' : '锁定项目帧率'}
-            </button>
+            {props.entryMode === 'edit' ? (
+              <>
+                <label>
+                  <span>项目帧率</span>
+                  <select aria-label="待锁定项目帧率" value={legacyFrameRate} onChange={(event) => setLegacyFrameRate(event.target.value)}>
+                    <option value="24000/1001">24000/1001</option><option value="24/1">24</option>
+                    <option value="25/1">25</option><option value="30000/1001">30000/1001</option>
+                    <option value="30/1">30</option><option value="50/1">50</option>
+                    <option value="60000/1001">60000/1001</option><option value="60/1">60</option>
+                  </select>
+                </label>
+                <button className="fj-review-primary" disabled={mutations.lockProjectFrameRate.isPending} onClick={() => void lockLegacyFrameRate()} type="button">
+                  {mutations.lockProjectFrameRate.isPending ? '锁定中...' : '锁定项目帧率'}
+                </button>
+              </>
+            ) : (
+              <span>审阅入口仅显示当前状态；请由剪辑入口完成一次性锁定。</span>
+            )}
           </section>
         ) : (
           <CapabilityGate entryMode={props.entryMode} capability="review.item.create">
@@ -815,9 +798,6 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
                 responsibleEditors={responsibleEditors.data ?? []}
                 responsibleEditorsError={responsibleEditors.isError}
                 onEditResponsibleEditor={() => {
-                  const first = responsibleEditors.data?.[0] ?? null;
-                  setEditingEditorId(first?.responsibleEditorId ?? null);
-                  setEditorDisplayName(first?.displayName ?? '');
                   setEditorManagerOpen(true);
                 }}
               onSubmit={async (input, onProgress) => {
@@ -890,36 +870,28 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
               }}
               />
             </CenteredModal>
-            <CenteredModal
-              onClose={() => setEditorManagerOpen(false)}
-              open={editorManagerOpen}
-              pending={mutations.createResponsibleEditor.isPending || mutations.renameResponsibleEditor.isPending}
-              testId="responsible-editor-modal"
-              title="编辑责任剪辑师"
-            >
-              <label>
-                <span>待编辑责任剪辑师</span>
-                <select
-                  aria-label="待编辑责任剪辑师"
-                  value={editingEditorId ?? ''}
-                  onChange={(event) => {
-                    const editor = responsibleEditors.data?.find((candidate) => candidate.responsibleEditorId === event.target.value) ?? null;
-                    setEditingEditorId(editor?.responsibleEditorId ?? null);
-                    setEditorDisplayName(editor?.displayName ?? '');
-                  }}
-                >
-                  <option value="">新建责任剪辑师</option>
-                  {(responsibleEditors.data ?? []).map((editor) => (
-                    <option key={editor.responsibleEditorId} value={editor.responsibleEditorId}>{editor.displayName}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>显示名称</span>
-                <input aria-label="责任剪辑师显示名称" value={editorDisplayName} onChange={(event) => setEditorDisplayName(event.target.value)} />
-              </label>
-              <button className="fj-review-primary" disabled={!editorDisplayName.trim()} onClick={() => void saveResponsibleEditor()} type="button">保存责任剪辑师</button>
-            </CenteredModal>
+            {editorManagerOpen ? (
+              <ResponsibleEditorManagerModal
+                editors={responsibleEditors.data ?? []}
+                onClose={() => setEditorManagerOpen(false)}
+                onSave={async (editor, displayName) => {
+                  setProjectActionError(null);
+                  if (editor) {
+                    await mutations.renameResponsibleEditor.mutateAsync({
+                      responsibleEditorId: editor.responsibleEditorId,
+                      displayName,
+                      lockVersion: editor.lockVersion,
+                    });
+                  } else {
+                    await mutations.createResponsibleEditor.mutateAsync({ displayName });
+                  }
+                  setProjectActionMessage('责任剪辑师目录已更新。');
+                  setEditorManagerOpen(false);
+                }}
+                open
+                pending={mutations.createResponsibleEditor.isPending || mutations.renameResponsibleEditor.isPending}
+              />
+            ) : null}
           </CapabilityGate>
         )}
         <span className="fj-review-project-bulk-actions-host" ref={setBulkActionsHost} />

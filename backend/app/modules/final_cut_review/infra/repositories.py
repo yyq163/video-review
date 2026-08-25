@@ -4048,6 +4048,7 @@ class SqlAlchemyReviewRepository:
         self._assert_project_visible(project)
         rows = self.session.execute(
             select(
+                TechnicalQcTaskModel.review_item_id,
                 ReviewItemModel.episode_no,
                 TechnicalQcTaskModel.processed_ms,
                 TechnicalQcTaskModel.total_ms,
@@ -4071,11 +4072,12 @@ class SqlAlchemyReviewRepository:
         return TechnicalQcProgressDTO(
             episodes=[
                 TechnicalQcRunningEpisodeDTO(
+                    review_item_id=review_item_id,
                     episode_no=episode_no,
                     processed_ms=int(processed_ms),
                     total_ms=int(total_ms),
                 )
-                for episode_no, processed_ms, total_ms in rows
+                for review_item_id, episode_no, processed_ms, total_ms in rows
             ],
         ).model_dump(mode="json")
 

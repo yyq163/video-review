@@ -2702,9 +2702,10 @@ components:
             $ref: "#/components/schemas/ProjectSummaryItemDTO"
     TechnicalQcRunningEpisodeDTO:
       type: object
-      required: [episode_no, processed_ms, total_ms]
+      required: [review_item_id, episode_no, processed_ms, total_ms]
       additionalProperties: false
       properties:
+        review_item_id: {type: string}
         episode_no:
           anyOf:
             - type: integer

@@ -19,8 +19,8 @@ describe('ProjectDetailPage technical QC progress', () => {
       technicalQcProgressByProject: {
         prj_seed_final_cut: {
           episodes: [
-            { episodeNo: 2, processedMs: 400, totalMs: 1_000 },
-            { episodeNo: 1, processedMs: 300, totalMs: 1_000 },
+            { reviewItemId: 'item-2', episodeNo: 2, processedMs: 400, totalMs: 1_000 },
+            { reviewItemId: 'item-1', episodeNo: 1, processedMs: 300, totalMs: 1_000 },
           ],
         },
       },

@@ -611,6 +611,10 @@ export function AppendVersionPanel(props: {
   mediaMetadata?: MediaMetadataPort;
   projectFrameRate?: ReviewFrameRate | null;
   responsibleEditors?: ResponsibleEditor[];
+  responsibleEditorsLoading?: boolean;
+  responsibleEditorsError?: boolean;
+  onEditResponsibleEditor?(): void;
+  onRetryResponsibleEditors?(): void;
   onSubmit(input: {
     file: File;
     versionNote: string;
@@ -654,6 +658,14 @@ export function AppendVersionPanel(props: {
           setFileError(FILE_REQUIRED_MESSAGE);
           return;
         }
+        if (props.responsibleEditorsLoading) {
+          setSubmissionError('责任剪辑师目录加载中，请稍候。');
+          return;
+        }
+        if (props.responsibleEditorsError) {
+          setSubmissionError(RESPONSIBLE_EDITOR_CATALOG_ERROR);
+          return;
+        }
         if (props.responsibleEditors !== undefined && !effectiveResponsibleEditorId) {
           setSubmissionError('责任剪辑师必填。');
           return;
@@ -688,20 +700,34 @@ export function AppendVersionPanel(props: {
         <span>填写版本元数据后上传新版本。</span>
       </div>
       {props.responsibleEditors !== undefined ? (
-        <label className="fj-review-inline-upload-editor">
-          <span>责任剪辑师</span>
-          <select
-            aria-label="责任剪辑师"
-            disabled={props.pending || props.responsibleEditors.length === 0}
-            value={effectiveResponsibleEditorId}
-            onChange={(event) => setResponsibleEditorId(event.target.value)}
-          >
-            {props.responsibleEditors.length === 0 ? <option value="">未设置</option> : null}
-            {props.responsibleEditors.map((editor) => (
-              <option key={editor.responsibleEditorId} value={editor.responsibleEditorId}>{editor.displayName}</option>
-            ))}
-          </select>
-        </label>
+        <div className="fj-review-inline-upload-editor">
+          <label>
+            <span>责任剪辑师</span>
+            <select
+              aria-label="责任剪辑师"
+              disabled={props.pending || props.responsibleEditorsLoading || props.responsibleEditorsError || props.responsibleEditors.length === 0}
+              value={effectiveResponsibleEditorId}
+              onChange={(event) => setResponsibleEditorId(event.target.value)}
+            >
+              {props.responsibleEditorsLoading ? <option value="">目录加载中...</option> : null}
+              {!props.responsibleEditorsLoading && props.responsibleEditors.length === 0 ? <option value="">未设置</option> : null}
+              {props.responsibleEditors.map((editor) => (
+                <option key={editor.responsibleEditorId} value={editor.responsibleEditorId}>{editor.displayName}</option>
+              ))}
+            </select>
+          </label>
+          {props.onEditResponsibleEditor ? (
+            <button
+              aria-label="编辑责任剪辑师"
+              className="fj-review-secondary"
+              disabled={props.pending}
+              onClick={props.onEditResponsibleEditor}
+              type="button"
+            >
+              编辑
+            </button>
+          ) : null}
+        </div>
       ) : null}
       <label className="fj-review-inline-upload-file">
         <span>原始视频文件</span>
@@ -766,11 +792,26 @@ export function AppendVersionPanel(props: {
         />
       </label>
       {fileError ? <span className="fj-review-form-error fj-review-inline-upload-file-error" data-testid="append-version-file-error" id={APPEND_VERSION_FILE_ERROR_ID} role="alert">{fileError}</span> : null}
+      {props.responsibleEditorsError ? (
+        <span
+          className="fj-review-form-error fj-review-inline-upload-file-error"
+          data-testid="append-responsible-editors-error"
+          role="alert"
+        >
+          {RESPONSIBLE_EDITOR_CATALOG_ERROR}
+          {props.onRetryResponsibleEditors ? (
+            <button className="fj-review-secondary" onClick={props.onRetryResponsibleEditors} type="button">
+              重试责任剪辑师目录
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+      {props.responsibleEditorsLoading ? <span className="fj-review-media-preflight" role="status">责任剪辑师目录加载中</span> : null}
       {mediaProbePending ? <span className="fj-review-media-preflight" role="status">媒体预检中</span> : null}
       {mediaProbeError ? <span className="fj-review-form-error" role="alert">{mediaProbeError}</span> : null}
       {submissionError ? <span className="fj-review-form-error" id={APPEND_VERSION_SUBMISSION_ERROR_ID} role="alert">{submissionError}</span> : null}
       <UploadProgressView progress={props.progress} />
-      <button className="fj-review-secondary fj-review-inline-upload-submit" disabled={props.pending || mediaProbePending} type="submit">
+      <button className="fj-review-secondary fj-review-inline-upload-submit" disabled={props.pending || mediaProbePending || props.responsibleEditorsLoading || props.responsibleEditorsError} type="submit">
         {props.pending ? '上传中...' : `确认追加 ${props.nextLabel}`}
       </button>
     </form>

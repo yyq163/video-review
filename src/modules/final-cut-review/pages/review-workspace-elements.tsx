@@ -3,6 +3,7 @@ import type { EntryMode, FinalizationRevocation } from '../contracts/types';
 import type { EpisodeReviewItem } from '../core/episode-dedupe';
 import { reviewStatusLabel, StatusBadge } from '../components/shared';
 import { FinalizedRevokeControl, type FinalizedRevokeUiState } from '../components/FinalizedRevokeControl';
+import { floorReviewDurationSeconds, reviewDurationBandClass } from '../core/duration';
 
 function scrollEpisodeIntoView(node: HTMLButtonElement | undefined) {
   if (typeof node?.scrollIntoView !== 'function') return;
@@ -99,12 +100,9 @@ export function EpisodeStrip(props: {
           const unresolvedCount = props.unresolvedCounts[item.reviewItemId] ?? 0;
           const currentVersionLabel = props.currentVersionLabels[item.reviewItemId] ?? '-';
           const currentFileName = props.currentFileNames[item.reviewItemId] ?? '-';
-          const durationSeconds = Math.floor(Math.max(0, props.currentDurationsMs?.[item.reviewItemId] ?? 0) / 1000);
-          const durationClass = durationSeconds < 51
-            ? 'is-short'
-            : durationSeconds < 61
-              ? 'is-warning'
-              : 'is-standard';
+          const durationMs = props.currentDurationsMs?.[item.reviewItemId] ?? 0;
+          const durationSeconds = floorReviewDurationSeconds(durationMs);
+          const durationClass = reviewDurationBandClass(durationMs);
           const selected = item.reviewItemId === props.currentItemId;
           const storedRevokeState = revokeUiStates[item.reviewItemId];
           const externallyUncertain = props.revocationUncertainIds.has(

@@ -103,6 +103,26 @@ describe('project and review item metadata editing', () => {
     dispose();
   });
 
+  it('shows legacy frame-rate guidance without an executable lock action in review entry', async () => {
+    const dispose = renderDetail('review', (runtime) => {
+      const api = runtime.getApi('review');
+      const getProjectSummary = api.getProjectSummary.bind(api);
+      vi.spyOn(api, 'getProjectSummary').mockImplementation(async (...args) => {
+        const summary = await getProjectSummary(...args);
+        return {
+          ...summary,
+          project: { ...summary.project, frameRate: null },
+        };
+      });
+    });
+
+    const notice = await screen.findByTestId('legacy-frame-rate-lock');
+    expect(notice).toHaveTextContent('上传 V1 前请人工锁定项目帧率');
+    expect(within(notice).queryByRole('button', { name: '锁定项目帧率' })).not.toBeInTheDocument();
+    expect(within(notice).queryByLabelText('待锁定项目帧率')).not.toBeInTheDocument();
+    dispose();
+  });
+
   afterEach(() => {
     cleanup();
     window.localStorage.clear();

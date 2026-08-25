@@ -32,6 +32,7 @@ export class HttpReviewQueries {
     );
     return {
       episodes: progress.episodes.map((episode) => ({
+        reviewItemId: episode.review_item_id,
         episodeNo: episode.episode_no,
         processedMs: episode.processed_ms,
         totalMs: episode.total_ms,

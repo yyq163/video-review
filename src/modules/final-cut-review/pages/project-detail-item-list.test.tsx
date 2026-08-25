@@ -174,6 +174,28 @@ describe('ProjectDetailItemList summary rendering', () => {
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
 
+  it.each([
+    [50_999, '50 秒', '00:00:50:24', 'is-short'],
+    [51_000, '51 秒', '00:00:51:00', 'is-warning'],
+    [60_999, '60 秒', '00:01:00:24', 'is-warning'],
+    [61_000, '61 秒', '00:01:01:00', 'is-standard'],
+  ])('floors %i ms and applies one duration band to decimal metadata and timecode', (durationMs, decimal, timecode, band) => {
+    const item = summaryItem(`duration-${durationMs}`, {
+      currentVersion: {
+        ...summaryItem('base').currentVersion,
+        durationMs,
+        fpsNum: 25,
+        fpsDen: 1,
+      },
+    });
+    renderList({ items: [item] });
+
+    expect(screen.getByTestId(`item-row-duration-${item.reviewItemId}`)).toHaveTextContent(decimal);
+    expect(screen.getByTestId(`item-row-duration-${item.reviewItemId}`)).toHaveClass(band);
+    expect(screen.getByTestId(`item-row-timecode-${item.reviewItemId}`)).toHaveTextContent(timecode);
+    expect(screen.getByTestId(`item-row-timecode-${item.reviewItemId}`)).toHaveClass(band);
+  });
+
   it('shows explicit pending and failed thumbnail states without inventing a media URL', () => {
     const pending = summaryItem('pending', {
       episode: '8',

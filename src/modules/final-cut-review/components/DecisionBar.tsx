@@ -1,13 +1,6 @@
-import type { EntryMode, FinalizationRecord, ReviewIssue, ReviewVersion } from '../contracts/types';
+import type { EntryMode, FinalizationRecord, ReviewFrameRate, ReviewIssue, ReviewVersion } from '../contracts/types';
+import { formatReviewDurationTimecode, reviewDurationBandClass } from '../core/duration';
 import { CapabilityGate, IconText } from './shared';
-
-function formatBase60Duration(durationMs: number): string {
-  const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':');
-}
 
 function formatAverageBitrate(size: number, durationMs: number): string {
   if (!Number.isFinite(size) || !Number.isFinite(durationMs) || size <= 0 || durationMs <= 0) return '—';
@@ -21,6 +14,7 @@ export function DecisionBar(props: {
   issues: ReviewIssue[];
   finalization: FinalizationRecord | null;
   isCurrentVersion: boolean;
+  projectFrameRate?: ReviewFrameRate | null;
   readonlyReason?: string;
   pending?: boolean;
   onFinalize(): void;
@@ -30,6 +24,11 @@ export function DecisionBar(props: {
     props.finalization?.status !== 'revoked' &&
     props.finalization?.versionId === props.version.versionId;
   const isReadonly = Boolean(props.readonlyReason);
+  const durationFrameRate = props.projectFrameRate ?? {
+    fpsNum: props.version.fpsNum,
+    fpsDen: props.version.fpsDen,
+  };
+  const durationBand = reviewDurationBandClass(props.version.durationMs);
 
   return (
     <section className="fj-review-decision-bar" data-testid="decision-bar">
@@ -38,7 +37,7 @@ export function DecisionBar(props: {
           <div data-testid="decision-fps"><dt>帧率</dt><dd>{props.version.fpsNum}/{props.version.fpsDen} fps</dd></div>
           <div data-testid="decision-resolution"><dt>分辨率</dt><dd>{props.version.width} × {props.version.height}</dd></div>
           <div data-testid="decision-average-bitrate"><dt>平均码率</dt><dd>{formatAverageBitrate(props.version.size, props.version.durationMs)}</dd></div>
-          <div data-testid="decision-duration"><dt>时长</dt><dd>{formatBase60Duration(props.version.durationMs)}</dd></div>
+          <div className={durationBand} data-testid="decision-duration"><dt>时长</dt><dd>{formatReviewDurationTimecode(props.version.durationMs, durationFrameRate)}</dd></div>
           <div data-testid="decision-editor"><dt>责任剪辑师</dt><dd>{props.version.responsibleEditorNameSnapshot ?? '未记录'}</dd></div>
         </dl>
       </div>

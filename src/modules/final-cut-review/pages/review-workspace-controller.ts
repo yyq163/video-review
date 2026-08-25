@@ -118,12 +118,16 @@ export function useReviewWorkspaceController(
       : data.currentVersion.status === 'finalized'
         ? '定稿冻结后意见区只读。'
         : undefined);
-  const canAppendVersion =
+  const appendVersionEligibleBeforeFrameRate =
     props.entryMode === 'edit' &&
     !readonlyReason &&
     isSelectedCurrent &&
     data.item.status !== 'finalized' &&
     data.currentIssues.length > 0;
+  const appendVersionFrameRateRequired =
+    appendVersionEligibleBeforeFrameRate && !data.project.frameRate;
+  const canAppendVersion =
+    appendVersionEligibleBeforeFrameRate && Boolean(data.project.frameRate);
   const nextLabel = `V${data.versions.length + 1}`;
   const currentIssues = useMemo(() => {
     if (
@@ -418,6 +422,7 @@ export function useReviewWorkspaceController(
     issuePanelReadonlyReason,
     issueStatusReadonlyReason,
     canAppendVersion,
+    appendVersionFrameRateRequired,
     nextLabel,
     authoritativeCurrentVersion,
     currentIssues,
@@ -431,6 +436,9 @@ export function useReviewWorkspaceController(
     episodeCurrentFileNames: episodeCurrentVersionMetadata.fileNames,
     episodeCurrentDurationsMs: episodeCurrentVersionMetadata.durationsMs,
     responsibleEditors: responsibleEditors.data ?? [],
+    responsibleEditorsLoading: responsibleEditors.isLoading,
+    responsibleEditorsError: responsibleEditors.isError,
+    retryResponsibleEditors: responsibleEditors.refetch,
     mediaMetadata,
     revocationUncertainIds,
     revokeEpisodeFinalization,

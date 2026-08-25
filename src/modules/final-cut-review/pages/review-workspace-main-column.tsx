@@ -1,14 +1,16 @@
-import { forwardRef } from 'react';
+import { forwardRef, useState } from 'react';
 import { CapabilityGate } from '../components/shared';
 import { AppendVersionPanel } from '../components/UploadPanel';
 import { ReviewPlayer, type ReviewPlayerHandle } from '../components/ReviewPlayer';
 import { DecisionBar } from '../components/DecisionBar';
 import type { ReviewWorkspaceController } from './review-workspace-controller';
 import { EpisodeStrip } from './review-workspace-elements';
+import { ResponsibleEditorManagerModal } from '../components/ResponsibleEditorManagerModal';
 
 export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { controller: ReviewWorkspaceController }>(
   function ReviewWorkspaceMainColumn({ controller }, playerRef) {
     const { actions, data, mutations, playback, props } = controller;
+    const [editorManagerOpen, setEditorManagerOpen] = useState(false);
     return (
       <div className="fj-review-main-column">
         <div className="fj-review-workspace-head">
@@ -76,11 +78,22 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
           issues={controller.selectedVersionIssues}
           finalization={data.activeFinalization}
           isCurrentVersion={controller.isSelectedCurrent}
+          projectFrameRate={data.project.frameRate}
           readonlyReason={controller.readonlyReason}
           pending={controller.pending}
           onFinalize={actions.finalize}
           onDownload={actions.download}
         />
+        {controller.appendVersionFrameRateRequired ? (
+          <section
+            className="fj-review-readonly-notice"
+            data-testid="append-version-frame-rate-required"
+            role="alert"
+          >
+            <strong>追加版本前请先锁定项目帧率</strong>
+            <span>返回项目详情完成一次性锁定后，才会显示 V2 及后续版本的文件选择和上传入口。</span>
+          </section>
+        ) : null}
         {controller.canAppendVersion && controller.appendVersionConfirmationRequired ? (
           <section className="fj-review-readonly-notice" data-testid="append-version-confirmation-required" role="alert">
             {controller.appendVersionProtectionState === 'storage-unavailable' ? (
@@ -120,10 +133,34 @@ export const ReviewWorkspaceMainColumn = forwardRef<ReviewPlayerHandle, { contro
               progress={controller.uploadProgress}
               projectFrameRate={data.project.frameRate ?? null}
               responsibleEditors={controller.responsibleEditors}
+              responsibleEditorsLoading={controller.responsibleEditorsLoading}
+              responsibleEditorsError={controller.responsibleEditorsError}
+              onEditResponsibleEditor={() => setEditorManagerOpen(true)}
+              onRetryResponsibleEditors={() => void controller.retryResponsibleEditors()}
               onSubmit={actions.appendVersion}
             />
           </CapabilityGate>
         )}
+        {editorManagerOpen ? (
+          <ResponsibleEditorManagerModal
+            editors={controller.responsibleEditors}
+            onClose={() => setEditorManagerOpen(false)}
+            onSave={async (editor, displayName) => {
+              if (editor) {
+                await mutations.renameResponsibleEditor.mutateAsync({
+                  responsibleEditorId: editor.responsibleEditorId,
+                  displayName,
+                  lockVersion: editor.lockVersion,
+                });
+              } else {
+                await mutations.createResponsibleEditor.mutateAsync({ displayName });
+              }
+              setEditorManagerOpen(false);
+            }}
+            open
+            pending={mutations.createResponsibleEditor.isPending || mutations.renameResponsibleEditor.isPending}
+          />
+        ) : null}
         <div className="fj-review-episode-strip-slot">
           <EpisodeStrip
             entryMode={props.entryMode}

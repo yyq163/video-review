@@ -488,6 +488,7 @@ class ProjectSummaryDTO(ContractModel):
 
 
 class TechnicalQcRunningEpisodeDTO(ContractModel):
+    review_item_id: str
     episode_no: int | None
     processed_ms: int = Field(ge=0)
     total_ms: int = Field(ge=1)

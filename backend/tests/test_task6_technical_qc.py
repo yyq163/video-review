@@ -431,7 +431,7 @@ def test_progress_query_is_project_scoped_sorted_and_removes_completed_rows(clie
             episode_no=episode,
         )
     qc = _technical_qc()
-    now = datetime(2026, 8, 25, 2, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     with db.SessionLocal.begin() as session:
         qc.discover_ready_technical_qc_tasks(session)
         claims = qc.claim_technical_qc_tasks(
@@ -460,7 +460,13 @@ def test_progress_query_is_project_scoped_sorted_and_removes_completed_rows(clie
     assert response.status_code == 200, response.text
     episodes = api_data(response)["episodes"]
     assert [episode["episode_no"] for episode in episodes] == [1, 2]
-    assert all(set(episode) == {"episode_no", "processed_ms", "total_ms"} for episode in episodes)
+    assert [episode["review_item_id"] for episode in episodes] == [
+        claim.review_item_id for claim in project_claims
+    ]
+    assert all(
+        set(episode) == {"review_item_id", "episode_no", "processed_ms", "total_ms"}
+        for episode in episodes
+    )
     assert all(episode["processed_ms"] <= episode["total_ms"] for episode in episodes)
 
     completed = project_claims[0]
