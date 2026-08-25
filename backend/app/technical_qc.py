@@ -69,6 +69,7 @@ PROCESS_POLL_SECONDS = 0.02
 WORKER_HEARTBEAT_REFRESH_SECONDS = 30.0
 _WORKER_STOP = threading.Event()
 _WORKER_FATAL = threading.Event()
+_WORKER_STATE_LOCK = threading.RLock()
 
 
 class TechnicalQcError(RuntimeError):
@@ -80,6 +81,12 @@ class TechnicalQcError(RuntimeError):
 
 class TechnicalQcFatalError(TechnicalQcError):
     pass
+
+
+def _set_technical_qc_worker_fatal() -> None:
+    with _WORKER_STATE_LOCK:
+        _WORKER_FATAL.set()
+        _WORKER_STOP.set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1990,8 +1997,7 @@ def _process_technical_qc_claim(
         record_service_event()
 
     def mark_fatal(error: TechnicalQcFatalError) -> None:
-        _WORKER_FATAL.set()
-        _WORKER_STOP.set()
+        _set_technical_qc_worker_fatal()
         if on_fatal is not None:
             on_fatal(error)
 
@@ -2028,8 +2034,7 @@ def _process_technical_qc_claim(
         record_service_event()
         return "complete"
     except TechnicalQcFatalError as exc:
-        _WORKER_FATAL.set()
-        _WORKER_STOP.set()
+        _set_technical_qc_worker_fatal()
         if on_fatal is not None:
             on_fatal(exc)
         raise
@@ -2069,12 +2074,13 @@ def _process_technical_qc_claim(
 
 
 def _raise_if_technical_qc_worker_fatal() -> None:
-    if _WORKER_FATAL.is_set():
-        _WORKER_STOP.set()
-        raise TechnicalQcFatalError(
-            "TECHNICAL_QC_REAP_FAILED",
-            retryable=False,
-        )
+    with _WORKER_STATE_LOCK:
+        if _WORKER_FATAL.is_set():
+            _WORKER_STOP.set()
+            raise TechnicalQcFatalError(
+                "TECHNICAL_QC_REAP_FAILED",
+                retryable=False,
+            )
 
 
 def process_technical_qc_batch(
@@ -2171,8 +2177,7 @@ def process_technical_qc_batch(
                 try:
                     status = future.result()
                 except TechnicalQcFatalError as exc:
-                    _WORKER_FATAL.set()
-                    _WORKER_STOP.set()
+                    _set_technical_qc_worker_fatal()
                     if on_fatal is not None:
                         on_fatal(exc)
                     for pending in futures:
@@ -2280,25 +2285,31 @@ def run_technical_qc_worker_loop(
     *,
     heartbeat_path: Path = Path("/tmp/fj-technical-qc-worker-heartbeat"),
     status_path: Path = Path("/tmp/fj-technical-qc-worker-status"),
+    hard_exit: Callable[[int], Any] | None = None,
 ) -> None:
     if not 1 <= interval_seconds <= 86_400:
         raise ValueError("technical QC worker interval is outside the supported range")
-    _WORKER_STOP.clear()
-    _WORKER_FATAL.clear()
+    with _WORKER_STATE_LOCK:
+        _WORKER_STOP.clear()
+        _WORKER_FATAL.clear()
 
     def record_service_event() -> None:
         if not _WORKER_STOP.is_set() and not _WORKER_FATAL.is_set():
             _atomic_worker_state(heartbeat_path, str(time.time_ns()))
 
     def mark_fatal(_error: TechnicalQcFatalError) -> None:
-        _WORKER_FATAL.set()
-        _WORKER_STOP.set()
-        _atomic_worker_state(status_path, "fatal")
+        with _WORKER_STATE_LOCK:
+            _WORKER_FATAL.set()
+            _WORKER_STOP.set()
+            _atomic_worker_state(status_path, "fatal")
+        if hard_exit is not None:
+            hard_exit(70)
 
     def stop_worker(_signum: int, _frame: Any) -> None:
-        _WORKER_STOP.set()
-        if not _WORKER_FATAL.is_set():
-            _atomic_worker_state(status_path, "stopping")
+        with _WORKER_STATE_LOCK:
+            _WORKER_STOP.set()
+            if not _WORKER_FATAL.is_set():
+                _atomic_worker_state(status_path, "stopping")
 
     previous_term = signal.signal(signal.SIGTERM, stop_worker)
     previous_int = signal.signal(signal.SIGINT, stop_worker)
@@ -2331,13 +2342,14 @@ def run_technical_qc_worker_loop(
                 record_service_event()
             _raise_if_technical_qc_worker_fatal()
     finally:
-        fatal_exit = _WORKER_FATAL.is_set()
-        _atomic_worker_state(
-            status_path,
-            "fatal" if fatal_exit else "stopped",
-        )
-        if not fatal_exit:
-            _WORKER_STOP.clear()
+        with _WORKER_STATE_LOCK:
+            fatal_exit = _WORKER_FATAL.is_set()
+            _atomic_worker_state(
+                status_path,
+                "fatal" if fatal_exit else "stopped",
+            )
+            if not fatal_exit:
+                _WORKER_STOP.clear()
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
 
@@ -2360,7 +2372,7 @@ def main() -> int:
     if args.command == "once":
         print(json.dumps(process_pending_technical_qc(), sort_keys=True), flush=True)
         return 0
-    run_technical_qc_worker_loop(args.interval_seconds)
+    run_technical_qc_worker_loop(args.interval_seconds, hard_exit=os._exit)
     return 0
 
 

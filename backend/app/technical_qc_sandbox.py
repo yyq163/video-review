@@ -46,13 +46,25 @@ MAX_REQUEST_BYTES = 16 * 1024
 MAX_REPLY_BYTES = 16 * 1024 * 1024
 MAX_INTERVALS = 10_000
 MAX_MEDIA_DURATION_MS = 7 * 24 * 60 * 60 * 1_000
+SANDBOX_NOFILE_LIMIT = 64
+SANDBOX_BASE_FD_RESERVE = 8  # stdio, two listeners, selector, state write, runtime
+MAX_SANDBOX_CONCURRENCY = 8
+ACTIVE_SCAN_EXTRA_FDS = 4  # received media FD, dup handle, stdout/stderr pipes
 MAX_SCAN_CONNECTIONS = 8
 SOCKET_POLL_SECONDS = 0.1
 INITIAL_REQUEST_TIMEOUT_SECONDS = 0.25
 HEALTH_REQUEST_TIMEOUT_SECONDS = 0.15
-MAX_PENDING_HEALTH_CONNECTIONS = 32
+MAX_PENDING_HEALTH_CONNECTIONS = 4
+SANDBOX_FD_BUDGET = (
+    SANDBOX_BASE_FD_RESERVE
+    + MAX_SCAN_CONNECTIONS
+    + MAX_SANDBOX_CONCURRENCY * ACTIVE_SCAN_EXTRA_FDS
+    + MAX_PENDING_HEALTH_CONNECTIONS
+)
+assert SANDBOX_NOFILE_LIMIT - SANDBOX_FD_BUDGET >= 8
 _STOP = threading.Event()
 _FATAL = threading.Event()
+_STATE_LOCK = threading.RLock()
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_CONNECTIONS: set[socket.socket] = set()
 _SCAN_REQUEST_DEADLINES: dict[socket.socket, float] = {}
@@ -83,10 +95,11 @@ def _shutdown_scan_connections() -> None:
 
 
 def _mark_fatal(_error: TechnicalQcFatalError) -> None:
-    _FATAL.set()
-    _STOP.set()
-    if _STATUS_PATH is not None:
-        _atomic_worker_state(_STATUS_PATH, "fatal")
+    with _STATE_LOCK:
+        _FATAL.set()
+        _STOP.set()
+        if _STATUS_PATH is not None:
+            _atomic_worker_state(_STATUS_PATH, "fatal")
     _shutdown_scan_connections()
 
 
@@ -403,10 +416,22 @@ def _run_scan_connection(
 
 
 def _serve_health_connections(listener: socket.socket) -> None:
-    selector = selectors.DefaultSelector()
+    selector: selectors.BaseSelector | None = None
+    try:
+        selector = selectors.DefaultSelector()
+        listener.setblocking(False)
+        selector.register(listener, selectors.EVENT_READ)
+    except OSError:
+        if selector is not None:
+            selector.close()
+        _mark_fatal(
+            TechnicalQcFatalError(
+                "TECHNICAL_QC_SCAN_FAILED",
+                retryable=False,
+            ),
+        )
+        return
     pending: dict[socket.socket, float] = {}
-    listener.setblocking(False)
-    selector.register(listener, selectors.EVENT_READ)
 
     def close_pending(connection: socket.socket) -> None:
         try:
@@ -418,13 +443,31 @@ def _serve_health_connections(listener: socket.socket) -> None:
 
     try:
         while not _STOP.is_set():
-            for key, _events in selector.select(SOCKET_POLL_SECONDS):
+            try:
+                selected = selector.select(SOCKET_POLL_SECONDS)
+            except OSError:
+                _mark_fatal(
+                    TechnicalQcFatalError(
+                        "TECHNICAL_QC_SCAN_FAILED",
+                        retryable=False,
+                    ),
+                )
+                return
+            for key, _events in selected:
                 if key.fileobj is listener:
                     while True:
                         try:
                             connection, _ = listener.accept()
                         except BlockingIOError:
                             break
+                        except OSError:
+                            _mark_fatal(
+                                TechnicalQcFatalError(
+                                    "TECHNICAL_QC_SCAN_FAILED",
+                                    retryable=False,
+                                ),
+                            )
+                            return
                         if len(pending) >= MAX_PENDING_HEALTH_CONNECTIONS:
                             connection.close()
                             continue
@@ -432,7 +475,18 @@ def _serve_health_connections(listener: socket.socket) -> None:
                         pending[connection] = (
                             time.monotonic() + HEALTH_REQUEST_TIMEOUT_SECONDS
                         )
-                        selector.register(connection, selectors.EVENT_READ)
+                        try:
+                            selector.register(connection, selectors.EVENT_READ)
+                        except OSError:
+                            pending.pop(connection, None)
+                            connection.close()
+                            _mark_fatal(
+                                TechnicalQcFatalError(
+                                    "TECHNICAL_QC_SCAN_FAILED",
+                                    retryable=False,
+                                ),
+                            )
+                            return
                     continue
                 connection = key.fileobj
                 if not isinstance(connection, socket.socket):
@@ -475,24 +529,28 @@ def _serve_health_connections(listener: socket.socket) -> None:
 
 def serve_forever(socket_path: Path, *, concurrency: int) -> None:
     global _STATUS_PATH
-    if not 1 <= concurrency <= 8:
+    if not 1 <= concurrency <= MAX_SANDBOX_CONCURRENCY:
         raise ValueError("sandbox concurrency is outside the supported range")
-    _STOP.clear()
-    _FATAL.clear()
+    with _STATE_LOCK:
+        _STOP.clear()
+        _FATAL.clear()
     status_path = socket_path.with_name("sandbox.status")
     health_socket_path = sandbox_health_socket_path(socket_path)
     scan_capacity = threading.BoundedSemaphore(MAX_SCAN_CONNECTIONS)
     _STATUS_PATH = status_path
 
     def stop(_signum: int, _frame: Any) -> None:
-        _STOP.set()
-        _atomic_worker_state(status_path, "stopping")
+        with _STATE_LOCK:
+            _STOP.set()
+            if not _FATAL.is_set():
+                _atomic_worker_state(status_path, "stopping")
         _shutdown_scan_connections()
 
     previous_term = signal.signal(signal.SIGTERM, stop)
     previous_int = signal.signal(signal.SIGINT, stop)
     try:
-        _atomic_worker_state(status_path, "starting")
+        with _STATE_LOCK:
+            _atomic_worker_state(status_path, "starting")
         with (
             _prepare_listener(socket_path) as listener,
             _prepare_listener(health_socket_path) as health_listener,
@@ -509,7 +567,9 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
             )
             health_thread.start()
             try:
-                _atomic_worker_state(status_path, "ready")
+                with _STATE_LOCK:
+                    if not _FATAL.is_set():
+                        _atomic_worker_state(status_path, "ready")
                 listener.settimeout(SOCKET_POLL_SECONDS)
                 while not _STOP.is_set():
                     try:
@@ -559,16 +619,24 @@ def serve_forever(socket_path: Path, *, concurrency: int) -> None:
                 _shutdown_scan_connections()
                 health_thread.join(timeout=1)
                 if health_thread.is_alive():
-                    _FATAL.set()
-                    _atomic_worker_state(status_path, "fatal")
+                    _mark_fatal(
+                        TechnicalQcFatalError(
+                            "TECHNICAL_QC_SCAN_FAILED",
+                            retryable=False,
+                        ),
+                    )
         if _FATAL.is_set():
-            _atomic_worker_state(status_path, "fatal")
+            with _STATE_LOCK:
+                _atomic_worker_state(status_path, "fatal")
             raise SystemExit(70)
     finally:
         socket_path.unlink(missing_ok=True)
         health_socket_path.unlink(missing_ok=True)
-        if not _FATAL.is_set():
-            _atomic_worker_state(status_path, "stopped")
+        with _STATE_LOCK:
+            if _FATAL.is_set():
+                _atomic_worker_state(status_path, "fatal")
+            else:
+                _atomic_worker_state(status_path, "stopped")
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
 
@@ -592,40 +660,46 @@ def sandbox_healthcheck(socket_path: Path, *, timeout_seconds: float = 1.0) -> b
             return False
     except OSError:
         return False
-    request_id = uuid.uuid4().hex
     deadline = time.monotonic() + timeout_seconds
-    response = bytearray()
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(timeout_seconds)
-            connection.connect(str(sandbox_health_socket_path(socket_path)))
-            connection.sendall(
-                _json_line({"type": "health", "request_id": request_id}),
-            )
-            while b"\n" not in response:
+    while time.monotonic() < deadline:
+        request_id = uuid.uuid4().hex
+        response = bytearray()
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
                 connection.settimeout(remaining)
-                chunk = connection.recv(MAX_REQUEST_BYTES + 1 - len(response))
-                if not chunk:
-                    return False
-                response.extend(chunk)
-                if len(response) > MAX_REQUEST_BYTES:
-                    return False
-    except (OSError, TimeoutError):
-        return False
-    if not response.endswith(b"\n") or response.count(b"\n") != 1:
-        return False
-    try:
-        payload = json.loads(response)
-    except json.JSONDecodeError:
-        return False
-    return payload == {
-        "type": "health",
-        "request_id": request_id,
-        "status": "ready",
-    }
+                connection.connect(str(sandbox_health_socket_path(socket_path)))
+                connection.sendall(
+                    _json_line({"type": "health", "request_id": request_id}),
+                )
+                while b"\n" not in response:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                    connection.settimeout(remaining)
+                    chunk = connection.recv(MAX_REQUEST_BYTES + 1 - len(response))
+                    if not chunk:
+                        break
+                    response.extend(chunk)
+                    if len(response) > MAX_REQUEST_BYTES:
+                        break
+        except (OSError, TimeoutError):
+            pass
+        if response.endswith(b"\n") and response.count(b"\n") == 1:
+            try:
+                payload = json.loads(response)
+            except json.JSONDecodeError:
+                payload = None
+            if payload == {
+                "type": "health",
+                "request_id": request_id,
+                "status": "ready",
+            }:
+                return True
+        time.sleep(0.01)
+    return False
 
 
 def _threshold_payload(thresholds: TechnicalQcThresholds) -> dict[str, int]:
@@ -918,7 +992,7 @@ def scan_via_sandbox(
 
 def _bounded_concurrency(value: str) -> int:
     parsed = int(value)
-    if not 1 <= parsed <= 8:
+    if not 1 <= parsed <= MAX_SANDBOX_CONCURRENCY:
         raise argparse.ArgumentTypeError("concurrency must be between 1 and 8")
     return parsed
 
