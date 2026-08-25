@@ -10,6 +10,11 @@ existing Caddy service, record its exact identity and current config, provision
 the secret through its service manager (not a command-line argument), validate
 the candidate config, and prepare rollback to the prior config.
 
+When Caddy serves the built frontend, its enforced `script-src` must preserve
+the build's narrow `'wasm-unsafe-eval'` source for the self-hosted MediaInfo
+module and must not enable general `'unsafe-eval'`. After reload, run the live
+frontend security-header gate documented in the repository README.
+
 FastAPI remains the authorization authority. For an authorized playback asset
 it may return `X-Accel-Redirect: /_protected_media/<opaque_file_id>`. NGINX's
 matching location is `internal`, maps only a bounded opaque identifier into the

@@ -195,6 +195,16 @@ meta 不支持的 `frame-ancestors 'none'`。正式静态宿主或反向代理�
 构建产物 `meta`、防嵌入头和必需指令；`security:frontend-headers` 可对现有 `dist` 单独复验。
 Vite 开发服务器仅为 React Refresh 预加载脚本额外允许 inline script；该开发例外不会进入生产构建或预览响应。
 
+生产静态宿主的 `script-src` 必须保留构建策略中的 `'wasm-unsafe-eval'`，供自托管 MediaInfo WASM 编译/实例化；
+不得用权限更宽的通用 `'unsafe-eval'` 替代。部署或热更新后必须把无凭据的真实页面 URL 传给同一门禁，核对
+构建 meta 与 live HTTP header 均保留该能力：
+
+```bash
+VITE_FINAL_CUT_REVIEW_API_BASE_URL=http://192.0.2.10:18171 \
+FCR_DEPLOYED_FRONTEND_URL=http://192.0.2.10:18171/ \
+  npm run security:frontend-headers
+```
+
 真实代理、后端和 PostgreSQL 可用后，另用独立 profile 跑 V1/V2/V3 自动化联调；两个变量只指向本地运行地址和非敏感一次性视频，不得写入仓库或 evidence：
 
 ```bash
