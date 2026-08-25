@@ -1,3 +1,5 @@
+import { JSDOM } from 'jsdom';
+
 const requiredPolicySources = new Map([
   ['default-src', ["'self'"]],
   ['base-uri', ["'self'"]],
@@ -6,6 +8,30 @@ const requiredPolicySources = new Map([
   ['form-action', ["'self'"]],
 ]);
 const maxHtmlBytes = 1024 * 1024;
+const forbiddenExecutableOverrides = new Set([
+  'script-src-elem',
+  'script-src-attr',
+  'worker-src',
+  'child-src',
+]);
+
+export function extractSingleCspMeta(html, label) {
+  const dom = new JSDOM(html);
+  try {
+    const policies = [...dom.window.document.querySelectorAll('meta[http-equiv]')]
+      .filter((meta) => meta.getAttribute('http-equiv')?.trim().toLowerCase() === 'content-security-policy');
+    if (policies.length !== 1) {
+      throw new Error(`${label} must contain exactly one CSP meta`);
+    }
+    const policy = policies[0].getAttribute('content');
+    if (!policy) {
+      throw new Error(`${label} CSP meta is missing content`);
+    }
+    return policy;
+  } finally {
+    dom.window.close();
+  }
+}
 
 function assertExactSources(directives, directiveName, expectedSources, label) {
   const actualSources = directives.get(directiveName);
@@ -44,6 +70,11 @@ export function assertRequiredPolicy(policy, label, { requireFrameAncestors = fa
       throw new Error(`${label} CSP must not enable general 'unsafe-eval'`);
     }
   }
+  for (const directiveName of forbiddenExecutableOverrides) {
+    if (directives.has(directiveName)) {
+      throw new Error(`${label} CSP must not define executable override directive ${directiveName}`);
+    }
+  }
   for (const [directiveName, expectedSources] of requiredPolicySources) {
     assertExactSources(directives, directiveName, expectedSources, label);
   }
@@ -67,7 +98,8 @@ export function resolveDeployedFrontendTarget(rawValue, configuredApiOrigin) {
     || target.hash
     || target.pathname !== '/'
     || !configuredApiOrigin
-    || target.origin !== configuredApiOrigin) {
+    || target.origin !== configuredApiOrigin
+    || target.href !== `${configuredApiOrigin}/`) {
     throw new Error('FCR_DEPLOYED_FRONTEND_URL must be the exact configured origin root');
   }
   return target;
@@ -75,7 +107,7 @@ export function resolveDeployedFrontendTarget(rawValue, configuredApiOrigin) {
 
 export async function readBoundedHtml(response, label) {
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
-  if (!contentType.startsWith('text/html')) {
+  if (!/^text\/html(?:\s*;|$)/i.test(contentType)) {
     throw new Error(`${label} must return text/html`);
   }
   const declaredLength = response.headers.get('content-length');

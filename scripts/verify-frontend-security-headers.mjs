@@ -3,6 +3,7 @@ import { readdir, stat } from 'node:fs/promises';
 
 import {
   assertRequiredPolicy,
+  extractSingleCspMeta,
   readBoundedHtml,
   resolveDeployedFrontendTarget,
 } from './frontend-security-policy-validation.mjs';
@@ -41,9 +42,7 @@ try {
   const headerPolicy = response.headers.get('content-security-policy');
   const contentTypeOptions = response.headers.get('x-content-type-options');
   const frameOptions = response.headers.get('x-frame-options');
-  const metaMatch = html.match(
-    /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/>/i,
-  );
+  const metaPolicy = extractSingleCspMeta(html, 'built index');
 
   assertRequiredPolicy(headerPolicy, 'preview root', { requireFrameAncestors: true });
   if (contentTypeOptions !== 'nosniff') {
@@ -52,14 +51,11 @@ try {
   if (frameOptions !== 'DENY') {
     throw new Error('preview root is missing X-Frame-Options: DENY');
   }
-  if (!metaMatch) {
-    throw new Error('built index is missing the CSP meta fallback');
-  }
   const headerOnlyFramePolicy = "; frame-ancestors 'none'";
   if (!headerPolicy.endsWith(headerOnlyFramePolicy)) {
     throw new Error("CSP response header is missing frame-ancestors 'none'");
   }
-  if (metaMatch[1] !== headerPolicy.slice(0, -headerOnlyFramePolicy.length)) {
+  if (metaPolicy !== headerPolicy.slice(0, -headerOnlyFramePolicy.length)) {
     throw new Error('CSP response header and supported meta fallback directives differ');
   }
 
@@ -97,14 +93,9 @@ try {
     }
     const deployedHtml = await readBoundedHtml(deployedResponse, 'deployed root');
     const deployedHeaderPolicy = deployedResponse.headers.get('content-security-policy');
-    const deployedMetaMatch = deployedHtml.match(
-      /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/>/i,
-    );
+    const deployedMetaPolicy = extractSingleCspMeta(deployedHtml, 'deployed root');
     assertRequiredPolicy(deployedHeaderPolicy, 'deployed root', { requireFrameAncestors: true });
-    if (!deployedMetaMatch) {
-      throw new Error('deployed root is missing the CSP meta fallback');
-    }
-    assertRequiredPolicy(deployedMetaMatch[1], 'deployed meta fallback');
+    assertRequiredPolicy(deployedMetaPolicy, 'deployed meta fallback');
     if (deployedResponse.headers.get('x-content-type-options') !== 'nosniff') {
       throw new Error('deployed root is missing X-Content-Type-Options: nosniff');
     }

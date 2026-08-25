@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertRequiredPolicy,
+  extractSingleCspMeta,
   readBoundedHtml,
   resolveDeployedFrontendTarget,
 } from '../../scripts/frontend-security-policy-validation.mjs';
@@ -46,6 +47,26 @@ describe('deployed frontend CSP validation', () => {
     expect(() => assertRequiredPolicy(unsafe, 'deployed root')).toThrow(/general 'unsafe-eval'/i);
     expect(() => assertRequiredPolicy(widened, 'deployed root')).toThrow(/script-src.*only/i);
   });
+
+  it('rejects script and worker override directives', () => {
+    for (const directive of [
+      'script-src-elem https://evil.example',
+      'script-src-attr https://evil.example',
+      'worker-src https://evil.example',
+      'child-src https://evil.example',
+    ]) {
+      expect(() => assertRequiredPolicy(`${validPolicy}; ${directive}`, 'deployed root'))
+        .toThrow(/must not define.*(?:script|worker|child)/i);
+    }
+  });
+
+  it('requires exactly one CSP meta regardless of attribute order', () => {
+    const one = `<!doctype html><meta http-equiv="Content-Security-Policy" content="${validPolicy}" />`;
+    const two = `${one}<meta content="default-src 'self'; script-src 'self'" http-equiv='content-security-policy'>`;
+
+    expect(extractSingleCspMeta(one, 'deployed root')).toBe(validPolicy);
+    expect(() => extractSingleCspMeta(two, 'deployed root')).toThrow(/exactly one CSP meta/i);
+  });
 });
 
 describe('deployed frontend URL boundary', () => {
@@ -59,8 +80,10 @@ describe('deployed frontend URL boundary', () => {
       'http://127.0.0.1:18171/',
       'http://192.168.100.217:18171/review/projects',
       'http://192.168.100.217:18171/?token=secret',
+      'http://192.168.100.217:18171/?',
       'http://user:password@192.168.100.217:18171/',
       'http://192.168.100.217:18171/#fragment',
+      'http://192.168.100.217:18171/#',
     ]) {
       expect(() => resolveDeployedFrontendTarget(value, 'http://192.168.100.217:18171'))
         .toThrow(/exact configured origin root/i);
@@ -75,6 +98,11 @@ describe('deployed frontend response bounds', () => {
     await expect(readBoundedHtml(new Response('{}', {
       headers: { 'content-type': 'application/json' },
     }), 'deployed root')).rejects.toThrow(/text\/html/i);
+    for (const contentType of ['text/htmlx', 'text/html-evil', 'text/html, application/json']) {
+      await expect(readBoundedHtml(new Response('<!doctype html>', {
+        headers: { 'content-type': contentType },
+      }), 'deployed root')).rejects.toThrow(/text\/html/i);
+    }
     await expect(readBoundedHtml(new Response('<!doctype html>', {
       headers: {
         'content-type': 'text/html; charset=utf-8',

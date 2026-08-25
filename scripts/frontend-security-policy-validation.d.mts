@@ -2,6 +2,8 @@ export interface RequiredPolicyOptions {
   readonly requireFrameAncestors?: boolean;
 }
 
+export function extractSingleCspMeta(html: string, label: string): string;
+
 export function assertRequiredPolicy(
   policy: string | null | undefined,
   label: string,
