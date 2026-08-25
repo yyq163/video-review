@@ -1,27 +1,11 @@
 import { preview } from 'vite';
 import { readdir, stat } from 'node:fs/promises';
 
-const requiredDirectives = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "object-src 'none'",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "form-action 'self'",
-];
-
-function assertRequiredPolicy(policy, label) {
-  if (!policy) {
-    throw new Error(`${label} is missing Content-Security-Policy`);
-  }
-  for (const directive of requiredDirectives) {
-    if (!policy.includes(directive)) {
-      throw new Error(`${label} CSP is missing required directive: ${directive}`);
-    }
-  }
-  if (policy.includes("'unsafe-eval'")) {
-    throw new Error(`${label} CSP must not enable general 'unsafe-eval'`);
-  }
-}
+import {
+  assertRequiredPolicy,
+  readBoundedHtml,
+  resolveDeployedFrontendTarget,
+} from './frontend-security-policy-validation.mjs';
 
 const server = await preview({
   logLevel: 'silent',
@@ -61,7 +45,7 @@ try {
     /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/>/i,
   );
 
-  assertRequiredPolicy(headerPolicy, 'preview root');
+  assertRequiredPolicy(headerPolicy, 'preview root', { requireFrameAncestors: true });
   if (contentTypeOptions !== 'nosniff') {
     throw new Error('preview root is missing X-Content-Type-Options: nosniff');
   }
@@ -103,30 +87,24 @@ try {
 
   const deployedFrontendUrl = process.env.FCR_DEPLOYED_FRONTEND_URL?.trim();
   if (deployedFrontendUrl) {
-    const deployedTarget = new URL(deployedFrontendUrl);
-    if (!['http:', 'https:'].includes(deployedTarget.protocol)
-      || deployedTarget.username
-      || deployedTarget.password
-      || deployedTarget.hash) {
-      throw new Error('FCR_DEPLOYED_FRONTEND_URL must be a credential-free HTTP(S) URL without a fragment');
-    }
-    const deployedResponse = await fetch(deployedTarget, { redirect: 'error' });
+    const deployedTarget = resolveDeployedFrontendTarget(deployedFrontendUrl, configuredApiOrigin);
+    const deployedResponse = await fetch(deployedTarget, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!deployedResponse.ok) {
       throw new Error(`deployed root returned HTTP ${deployedResponse.status}`);
     }
-    const deployedHtml = await deployedResponse.text();
+    const deployedHtml = await readBoundedHtml(deployedResponse, 'deployed root');
     const deployedHeaderPolicy = deployedResponse.headers.get('content-security-policy');
     const deployedMetaMatch = deployedHtml.match(
       /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/>/i,
     );
-    assertRequiredPolicy(deployedHeaderPolicy, 'deployed root');
+    assertRequiredPolicy(deployedHeaderPolicy, 'deployed root', { requireFrameAncestors: true });
     if (!deployedMetaMatch) {
       throw new Error('deployed root is missing the CSP meta fallback');
     }
     assertRequiredPolicy(deployedMetaMatch[1], 'deployed meta fallback');
-    if (!deployedHeaderPolicy.includes("frame-ancestors 'none'")) {
-      throw new Error("deployed root CSP is missing frame-ancestors 'none'");
-    }
     if (deployedResponse.headers.get('x-content-type-options') !== 'nosniff') {
       throw new Error('deployed root is missing X-Content-Type-Options: nosniff');
     }
