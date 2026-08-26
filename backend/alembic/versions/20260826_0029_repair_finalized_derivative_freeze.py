@@ -40,6 +40,8 @@ def _sqlite_derivative_exception() -> str:
       AND NEW.fps_num IS OLD.fps_num
       AND NEW.fps_den IS OLD.fps_den
       AND NEW.media_probe_version IS OLD.media_probe_version
+      AND NEW.responsible_editor_id IS OLD.responsible_editor_id
+      AND NEW.responsible_editor_name_snapshot IS OLD.responsible_editor_name_snapshot
       AND NEW.version_note IS OLD.version_note
       AND NEW.change_summary IS OLD.change_summary
       AND NEW.lock_version IS OLD.lock_version

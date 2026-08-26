@@ -1135,6 +1135,23 @@ def test_sqlite_finalized_version_accepts_only_ready_task_backed_thumbnail(
             session.commit()
             assert version.thumbnail_asset_id == fallback.id
 
+            editor_tampered_thumbnail = file_object(
+                "file_77777777777777777777777777777777",
+                "image/jpeg",
+                "derivative-owner",
+            )
+            session.add(editor_tampered_thumbnail)
+            session.flush()
+            task.output_file_id = editor_tampered_thumbnail.id
+            task.updated_at = utcnow()
+            session.flush()
+            version.thumbnail_asset_id = editor_tampered_thumbnail.id
+            version.responsible_editor_id = "editor-finalized-tamper"
+            version.responsible_editor_name_snapshot = "Finalized Tamper"
+            with pytest.raises((DBAPIError, IntegrityError), match="finalized review item is frozen"):
+                session.commit()
+            session.rollback()
+
             version.original_filename = "mutated-after-finalize.mp4"
             with pytest.raises((DBAPIError, IntegrityError), match="finalized review item is frozen"):
                 session.commit()
