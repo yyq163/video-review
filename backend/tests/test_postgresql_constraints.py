@@ -3724,3 +3724,135 @@ def test_postgresql_finalized_version_accepts_only_ready_task_backed_thumbnail()
     finally:
         session.close()
         engine.dispose()
+
+
+def test_postgresql_0029_repairs_drifted_finalized_derivative_freeze() -> None:
+    database_url = _postgres_database_url()
+    database = _postgres_temp_database(database_url)
+    engine = None
+    session = None
+    try:
+        _prepare_postgresql_schema(database.url, "20260825_0028")
+        engine = create_engine(database.url)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE OR REPLACE FUNCTION fcr_check_identity_and_freeze() RETURNS trigger AS $$
+                    DECLARE
+                      ref_project_id text;
+                      ref_review_item_id text;
+                    BEGIN
+                      IF TG_OP = 'DELETE' THEN
+                        ref_project_id := OLD.project_ref_id;
+                        ref_review_item_id := OLD.review_item_id;
+                      ELSE
+                        ref_project_id := NEW.project_ref_id;
+                        ref_review_item_id := NEW.review_item_id;
+                      END IF;
+                      IF TG_TABLE_NAME = 'issue_revisions' AND TG_OP = 'INSERT' THEN
+                        IF NEW.annotation_set_id IS NOT NULL AND NOT EXISTS (
+                          SELECT 1 FROM annotation_sets a
+                          WHERE a.id = NEW.annotation_set_id
+                            AND a.project_ref_id = NEW.project_ref_id
+                            AND a.review_item_id = NEW.review_item_id
+                            AND a.version_id = NEW.version_id
+                            AND a.issue_id = NEW.issue_id
+                        ) THEN
+                          RAISE EXCEPTION 'issue revision annotation identity mismatch';
+                        END IF;
+                      END IF;
+                      IF EXISTS (
+                        SELECT 1 FROM review_items i
+                        WHERE i.id = ref_review_item_id
+                          AND i.project_ref_id = ref_project_id
+                          AND i.workflow_status = 'finalized'
+                      ) THEN
+                        RAISE EXCEPTION 'finalized review item is frozen';
+                      END IF;
+                      IF TG_OP = 'DELETE' THEN
+                        RETURN OLD;
+                      END IF;
+                      RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql
+                    """
+                )
+            )
+
+        session = sessionmaker(bind=engine)()
+        prefix = _suffix()
+        project, item, version, source = _seed_item(session, prefix)
+        thumbnail = _file(f"file_{uuid.uuid4().hex}")
+        thumbnail.mime_type = "image/jpeg"
+        thumbnail.width = 320
+        thumbnail.height = 180
+        task = MediaDerivativeTaskModel(
+            id=f"mdt_{uuid.uuid4().hex}",
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            kind="thumbnail",
+            status="ready",
+            attempts=0,
+            output_file_id=thumbnail.id,
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add_all([thumbnail, task])
+        session.commit()
+
+        finalization = FinalizationRecordModel(
+            id=f"fin_{prefix}_drifted_derivative",
+            project_ref_id=project.id,
+            review_item_id=item.id,
+            version_id=version.id,
+            version_no=version.version_no,
+            original_file_id=source.id,
+            original_filename=version.original_filename,
+            mime_type=version.mime_type,
+            file_size=version.file_size,
+            sha256=version.sha256,
+            duration_ms=version.duration_ms,
+            width=version.width,
+            height=version.height,
+            fps_num=version.fps_num,
+            fps_den=version.fps_den,
+            media_probe_version=version.media_probe_version,
+            status="active",
+        )
+        session.add(finalization)
+        session.commit()
+        item.active_finalization_id = finalization.id
+        item.workflow_status = "finalized"
+        session.commit()
+
+        version_id = version.id
+        thumbnail_id = thumbnail.id
+        version.thumbnail_asset_id = thumbnail.id
+        with pytest.raises(DBAPIError, match="finalized review item is frozen"):
+            session.commit()
+        session.rollback()
+        session.close()
+        session = None
+        engine.dispose()
+        engine = None
+
+        _prepare_postgresql_schema(database.url, "head")
+        engine = create_engine(database.url)
+        session = sessionmaker(bind=engine)()
+        version = session.get(ReviewVersionModel, version_id)
+        assert version is not None
+        version.thumbnail_asset_id = thumbnail_id
+        session.commit()
+        assert version.thumbnail_asset_id == thumbnail_id
+
+        version.sha256 = "f" * 64
+        with pytest.raises(DBAPIError, match="finalized review item is frozen"):
+            session.commit()
+    finally:
+        if session is not None:
+            session.close()
+        if engine is not None:
+            engine.dispose()
+        _drop_postgres_temp_database(database)
