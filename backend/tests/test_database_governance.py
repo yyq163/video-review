@@ -26,9 +26,11 @@ from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     OutboxEventModel,
     ProjectRefModel,
     ReviewAnnotationSetModel,
+    ReviewDecisionModel,
     ReviewIssueModel,
     ReviewIssueRevisionModel,
     ReviewItemModel,
+    ReviewThreadMessageModel,
     ReviewVersionModel,
     UploadSessionModel,
     utcnow,
@@ -1135,6 +1137,32 @@ def test_sqlite_finalized_version_accepts_only_ready_task_backed_thumbnail(
             session.commit()
             assert version.thumbnail_asset_id == fallback.id
 
+            playback = file_object(
+                "file_88888888888888888888888888888888",
+                "video/mp4",
+                "derivative-owner",
+            )
+            session.add(playback)
+            session.flush()
+            session.add(
+                MediaDerivativeTaskModel(
+                    id="mdt_playback_finalized_derivative_sqlite",
+                    project_ref_id=project_id,
+                    review_item_id=item_id,
+                    version_id=version_id,
+                    kind="playback_faststart",
+                    status="ready",
+                    attempts=0,
+                    output_file_id=playback.id,
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                )
+            )
+            session.flush()
+            version.playback_asset_id = playback.id
+            session.commit()
+            assert version.playback_asset_id == playback.id
+
             editor_tampered_thumbnail = file_object(
                 "file_77777777777777777777777777777777",
                 "image/jpeg",
@@ -1153,6 +1181,206 @@ def test_sqlite_finalized_version_accepts_only_ready_task_backed_thumbnail(
             session.rollback()
 
             version.original_filename = "mutated-after-finalize.mp4"
+            with pytest.raises((DBAPIError, IntegrityError), match="finalized review item is frozen"):
+                session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_sqlite_finalized_child_identity_rebinding_to_pending_item_is_frozen(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "finalized-child-identity-rebinding.db"
+    _set_migration_env(db_path, tmp_path, monkeypatch)
+    alembic_command.upgrade(_alembic_config(root), "head")
+    engine = create_engine(f"sqlite:///{db_path}")
+    LocalSession = sessionmaker(bind=engine)
+    project_id = "prj_finalized_identity_rebinding_sqlite"
+    finalized_item_id = "item_finalized_identity_rebinding_sqlite"
+    pending_item_id = "item_pending_identity_rebinding_sqlite"
+    finalized_version_id = "ver_finalized_identity_rebinding_sqlite"
+    pending_version_id = "ver_pending_identity_rebinding_sqlite"
+    finalized_issue_id = "issue_finalized_identity_rebinding_sqlite"
+    pending_issue_id = "issue_pending_identity_rebinding_sqlite"
+
+    def file_object(file_id: str) -> FileObjectModel:
+        return FileObjectModel(
+            id=file_id,
+            original_filename=f"{file_id}.mp4",
+            mime_type="video/mp4",
+            file_size=16,
+            sha256=("a" if "finalized" in file_id else "b") * 64,
+            storage_path=str(tmp_path / "storage" / "files" / file_id),
+            owner_principal_id="identity-rebinding-owner",
+            owner_principal_kind="system",
+            duration_ms=1000,
+            width=1920,
+            height=1080,
+            fps_num=25,
+            fps_den=1,
+            media_probe_version="identity-rebinding-test",
+        )
+
+    def version(version_id: str, item_id: str, source: FileObjectModel) -> ReviewVersionModel:
+        return ReviewVersionModel(
+            id=version_id,
+            project_ref_id=project_id,
+            review_item_id=item_id,
+            version_no=1,
+            version_label="V1",
+            is_current=True,
+            original_file_id=source.id,
+            original_filename=source.original_filename,
+            mime_type=source.mime_type,
+            file_size=source.file_size,
+            sha256=source.sha256,
+            duration_ms=source.duration_ms,
+            width=source.width,
+            height=source.height,
+            fps_num=source.fps_num,
+            fps_den=source.fps_den,
+            media_probe_version=source.media_probe_version,
+        )
+
+    try:
+        with LocalSession() as session:
+            finalized_source = file_object("file_finalized_identity_rebinding_sqlite")
+            pending_source = file_object("file_pending_identity_rebinding_sqlite")
+            finalized_item = ReviewItemModel(
+                id=finalized_item_id,
+                project_ref_id=project_id,
+                item_code="FINALIZED-IDENTITY-REBINDING",
+                title="Finalized identity rebinding",
+            )
+            pending_item = ReviewItemModel(
+                id=pending_item_id,
+                project_ref_id=project_id,
+                item_code="PENDING-IDENTITY-REBINDING",
+                title="Pending identity rebinding",
+            )
+            session.add_all(
+                [
+                    ProjectRefModel(
+                        id=project_id,
+                        project_code="IDENTITY-REBINDING-SQLITE",
+                        project_name="Finalized identity rebinding SQLite",
+                    ),
+                    finalized_source,
+                    pending_source,
+                    finalized_item,
+                    pending_item,
+                ]
+            )
+            session.flush()
+            finalized_version = version(finalized_version_id, finalized_item_id, finalized_source)
+            pending_version = version(pending_version_id, pending_item_id, pending_source)
+            session.add_all([finalized_version, pending_version])
+            session.flush()
+            finalized_item.current_version_id = finalized_version.id
+            pending_item.current_version_id = pending_version.id
+            finalized_revision_id = "revision_finalized_identity_rebinding_sqlite"
+            pending_revision_id = "revision_pending_identity_rebinding_sqlite"
+            session.add_all(
+                [
+                    ReviewIssueModel(
+                        id=finalized_issue_id,
+                        project_ref_id=project_id,
+                        review_item_id=finalized_item_id,
+                        version_id=finalized_version_id,
+                        issue_no=1,
+                        status="unresolved",
+                        current_revision_id=finalized_revision_id,
+                        timestamp_ms=1,
+                        frame_number=1,
+                    ),
+                    ReviewIssueModel(
+                        id=pending_issue_id,
+                        project_ref_id=project_id,
+                        review_item_id=pending_item_id,
+                        version_id=pending_version_id,
+                        issue_no=1,
+                        status="unresolved",
+                        current_revision_id=pending_revision_id,
+                        timestamp_ms=1,
+                        frame_number=1,
+                    ),
+                    ReviewIssueRevisionModel(
+                        id=finalized_revision_id,
+                        project_ref_id=project_id,
+                        review_item_id=finalized_item_id,
+                        version_id=finalized_version_id,
+                        issue_id=finalized_issue_id,
+                        revision_no=1,
+                        content="finalized issue",
+                    ),
+                    ReviewIssueRevisionModel(
+                        id=pending_revision_id,
+                        project_ref_id=project_id,
+                        review_item_id=pending_item_id,
+                        version_id=pending_version_id,
+                        issue_id=pending_issue_id,
+                        revision_no=1,
+                        content="pending issue",
+                    ),
+                ]
+            )
+            thread = ReviewThreadMessageModel(
+                id="thread_finalized_identity_rebinding_sqlite",
+                project_ref_id=project_id,
+                review_item_id=finalized_item_id,
+                version_id=finalized_version_id,
+                issue_id=finalized_issue_id,
+                content="finalized thread",
+            )
+            decision = ReviewDecisionModel(
+                id="decision_finalized_identity_rebinding_sqlite",
+                project_ref_id=project_id,
+                review_item_id=finalized_item_id,
+                version_id=finalized_version_id,
+                decision_type="changes_requested",
+                summary="finalized decision",
+            )
+            session.add_all([thread, decision])
+            session.commit()
+
+            finalization = FinalizationRecordModel(
+                id="fin_finalized_identity_rebinding_sqlite",
+                project_ref_id=project_id,
+                review_item_id=finalized_item_id,
+                version_id=finalized_version_id,
+                version_no=finalized_version.version_no,
+                original_file_id=finalized_source.id,
+                original_filename=finalized_version.original_filename,
+                mime_type=finalized_version.mime_type,
+                file_size=finalized_version.file_size,
+                sha256=finalized_version.sha256,
+                duration_ms=finalized_version.duration_ms,
+                width=finalized_version.width,
+                height=finalized_version.height,
+                fps_num=finalized_version.fps_num,
+                fps_den=finalized_version.fps_den,
+                media_probe_version=finalized_version.media_probe_version,
+                status="active",
+            )
+            session.add(finalization)
+            session.commit()
+            finalized_item.active_finalization_id = finalization.id
+            finalized_item.workflow_status = "finalized"
+            session.commit()
+
+            thread.review_item_id = pending_item_id
+            thread.version_id = pending_version_id
+            thread.issue_id = pending_issue_id
+            thread.content = "pending thread replacement"
+            with pytest.raises((DBAPIError, IntegrityError), match="finalized review item is frozen"):
+                session.commit()
+            session.rollback()
+
+            decision.review_item_id = pending_item_id
+            decision.version_id = pending_version_id
+            decision.summary = "pending decision replacement"
             with pytest.raises((DBAPIError, IntegrityError), match="finalized review item is frozen"):
                 session.commit()
     finally:

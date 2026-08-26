@@ -3718,6 +3718,28 @@ def test_postgresql_finalized_version_accepts_only_ready_task_backed_thumbnail()
         session.commit()
         assert version.thumbnail_asset_id == fallback.id
 
+        playback = _file(f"file_{uuid.uuid4().hex}")
+        session.add(playback)
+        session.flush()
+        session.add(
+            MediaDerivativeTaskModel(
+                id=f"mdt_{uuid.uuid4().hex}",
+                project_ref_id=project.id,
+                review_item_id=item.id,
+                version_id=version.id,
+                kind="playback_faststart",
+                status="ready",
+                attempts=0,
+                output_file_id=playback.id,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+        session.flush()
+        version.playback_asset_id = playback.id
+        session.commit()
+        assert version.playback_asset_id == playback.id
+
         version.sha256 = "f" * 64
         with pytest.raises(DBAPIError, match="finalized review item is frozen"):
             session.commit()
@@ -3856,3 +3878,147 @@ def test_postgresql_0029_repairs_drifted_finalized_derivative_freeze() -> None:
         if engine is not None:
             engine.dispose()
         _drop_postgres_temp_database(database)
+
+
+def test_postgresql_finalized_child_identity_rebinding_to_pending_item_is_frozen() -> None:
+    database_url = _postgres_database_url()
+    _prepare_postgresql_schema(database_url)
+    engine = create_engine(database_url)
+    SessionLocal = sessionmaker(bind=engine)
+    session = SessionLocal()
+    try:
+        prefix = _suffix()
+        project, finalized_item, finalized_version, finalized_source = _seed_item(session, prefix)
+        pending_item_id = f"item_{prefix}_pending"
+        pending_source = _file(f"file_{uuid.uuid4().hex}")
+        pending_item = ReviewItemModel(
+            id=pending_item_id,
+            project_ref_id=project.id,
+            item_code=f"ITEM_{prefix}_PENDING",
+            title="Pending identity-rebinding target",
+        )
+        session.add_all([pending_source, pending_item])
+        session.flush()
+        pending_version = _version(
+            f"ver_{prefix}_pending_v1",
+            project.id,
+            pending_item.id,
+            pending_source,
+            1,
+            True,
+        )
+        session.add(pending_version)
+        session.flush()
+        pending_item.current_version_id = pending_version.id
+        pending_version_id = pending_version.id
+
+        finalized_issue_id = f"issue_{prefix}_finalized"
+        pending_issue_id = f"issue_{prefix}_pending"
+        finalized_revision_id = f"revision_{prefix}_finalized"
+        pending_revision_id = f"revision_{prefix}_pending"
+        session.add_all(
+            [
+                ReviewIssueModel(
+                    id=finalized_issue_id,
+                    project_ref_id=project.id,
+                    review_item_id=finalized_item.id,
+                    version_id=finalized_version.id,
+                    issue_no=1,
+                    status="unresolved",
+                    current_revision_id=finalized_revision_id,
+                    timestamp_ms=1,
+                    frame_number=1,
+                ),
+                ReviewIssueModel(
+                    id=pending_issue_id,
+                    project_ref_id=project.id,
+                    review_item_id=pending_item.id,
+                    version_id=pending_version.id,
+                    issue_no=1,
+                    status="unresolved",
+                    current_revision_id=pending_revision_id,
+                    timestamp_ms=1,
+                    frame_number=1,
+                ),
+                ReviewIssueRevisionModel(
+                    id=finalized_revision_id,
+                    project_ref_id=project.id,
+                    review_item_id=finalized_item.id,
+                    version_id=finalized_version.id,
+                    issue_id=finalized_issue_id,
+                    revision_no=1,
+                    content="finalized issue",
+                ),
+                ReviewIssueRevisionModel(
+                    id=pending_revision_id,
+                    project_ref_id=project.id,
+                    review_item_id=pending_item.id,
+                    version_id=pending_version.id,
+                    issue_id=pending_issue_id,
+                    revision_no=1,
+                    content="pending issue",
+                ),
+            ]
+        )
+        thread = ReviewThreadMessageModel(
+            id=f"thread_{prefix}_finalized",
+            project_ref_id=project.id,
+            review_item_id=finalized_item.id,
+            version_id=finalized_version.id,
+            issue_id=finalized_issue_id,
+            content="finalized thread",
+        )
+        decision = ReviewDecisionModel(
+            id=f"decision_{prefix}_finalized",
+            project_ref_id=project.id,
+            review_item_id=finalized_item.id,
+            version_id=finalized_version.id,
+            decision_type="changes_requested",
+            summary="finalized decision",
+        )
+        session.add_all([thread, decision])
+        session.commit()
+
+        finalization = FinalizationRecordModel(
+            id=f"fin_{prefix}_identity_rebinding",
+            project_ref_id=project.id,
+            review_item_id=finalized_item.id,
+            version_id=finalized_version.id,
+            version_no=finalized_version.version_no,
+            original_file_id=finalized_source.id,
+            original_filename=finalized_version.original_filename,
+            mime_type=finalized_version.mime_type,
+            file_size=finalized_version.file_size,
+            sha256=finalized_version.sha256,
+            duration_ms=finalized_version.duration_ms,
+            width=finalized_version.width,
+            height=finalized_version.height,
+            fps_num=finalized_version.fps_num,
+            fps_den=finalized_version.fps_den,
+            media_probe_version=finalized_version.media_probe_version,
+            status="active",
+        )
+        session.add(finalization)
+        session.commit()
+        finalized_item.active_finalization_id = finalization.id
+        finalized_item.workflow_status = "finalized"
+        session.commit()
+
+        thread.review_item_id = pending_item.id
+        thread.version_id = pending_version_id
+        thread.issue_id = pending_issue_id
+        thread.content = "pending thread replacement"
+        with pytest.raises(DBAPIError, match="finalized review item is frozen"):
+            session.commit()
+        session.rollback()
+
+        decision = session.get(ReviewDecisionModel, decision.id)
+        assert decision is not None
+        decision.review_item_id = pending_item.id
+        decision.version_id = pending_version_id
+        decision.summary = "pending decision replacement"
+        with pytest.raises(DBAPIError, match="finalized review item is frozen"):
+            session.commit()
+    finally:
+        session.close()
+        engine.dispose()

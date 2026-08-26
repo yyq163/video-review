@@ -100,11 +100,19 @@ def _replace_sqlite_review_version_update_trigger(*, allow_derivatives: bool) ->
         f"""
         CREATE TRIGGER trg_review_versions_freeze_after_finalized_update
         BEFORE UPDATE ON review_versions
-        WHEN EXISTS (
-          SELECT 1 FROM review_items i
-          WHERE i.id = OLD.review_item_id
-            AND i.project_ref_id = OLD.project_ref_id
-            AND i.workflow_status = 'finalized'
+        WHEN (
+          EXISTS (
+            SELECT 1 FROM review_items i
+            WHERE i.id = OLD.review_item_id
+              AND i.project_ref_id = OLD.project_ref_id
+              AND i.workflow_status = 'finalized'
+          )
+          OR EXISTS (
+            SELECT 1 FROM review_items i
+            WHERE i.id = NEW.review_item_id
+              AND i.project_ref_id = NEW.project_ref_id
+              AND i.workflow_status = 'finalized'
+          )
         )
         AND NOT {exception}
         BEGIN
@@ -112,6 +120,40 @@ def _replace_sqlite_review_version_update_trigger(*, allow_derivatives: bool) ->
         END
         """
     )
+
+
+def _replace_sqlite_identity_freeze_update_triggers() -> None:
+    for table in (
+        "review_issues",
+        "thread_messages",
+        "review_decisions",
+        "issue_revisions",
+        "annotation_sets",
+        "finalizations",
+    ):
+        trigger = f"trg_{table}_freeze_after_finalized_update"
+        op.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        op.execute(
+            f"""
+            CREATE TRIGGER {trigger}
+            BEFORE UPDATE ON {table}
+            WHEN EXISTS (
+              SELECT 1 FROM review_items i
+              WHERE i.id = OLD.review_item_id
+                AND i.project_ref_id = OLD.project_ref_id
+                AND i.workflow_status = 'finalized'
+            )
+            OR EXISTS (
+              SELECT 1 FROM review_items i
+              WHERE i.id = NEW.review_item_id
+                AND i.project_ref_id = NEW.project_ref_id
+                AND i.workflow_status = 'finalized'
+            )
+            BEGIN
+              SELECT RAISE(ABORT, 'finalized review item is frozen');
+            END
+            """
+        )
 
 
 def _postgres_derivative_exception() -> str:
@@ -199,11 +241,22 @@ def _replace_postgresql_identity_freeze(*, allow_derivatives: bool) -> None:
             END IF;
           END IF;
           {derivative_authorization}
-          IF EXISTS (
-            SELECT 1 FROM review_items i
-            WHERE i.id = ref_review_item_id
-              AND i.project_ref_id = ref_project_id
-              AND i.workflow_status = 'finalized'
+          IF (
+            (
+              TG_OP = 'UPDATE'
+              AND EXISTS (
+                SELECT 1 FROM review_items i
+                WHERE i.id = OLD.review_item_id
+                  AND i.project_ref_id = OLD.project_ref_id
+                  AND i.workflow_status = 'finalized'
+              )
+            )
+            OR EXISTS (
+              SELECT 1 FROM review_items i
+              WHERE i.id = ref_review_item_id
+                AND i.project_ref_id = ref_project_id
+                AND i.workflow_status = 'finalized'
+            )
           ) AND NOT allow_derivative_publication THEN
             RAISE EXCEPTION 'finalized review item is frozen';
           END IF;
@@ -220,6 +273,7 @@ def _replace_postgresql_identity_freeze(*, allow_derivatives: bool) -> None:
 def upgrade() -> None:
     if _dialect() == "sqlite":
         _replace_sqlite_review_version_update_trigger(allow_derivatives=True)
+        _replace_sqlite_identity_freeze_update_triggers()
     elif _dialect() == "postgresql":
         _replace_postgresql_identity_freeze(allow_derivatives=True)
 
@@ -227,5 +281,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     if _dialect() == "sqlite":
         _replace_sqlite_review_version_update_trigger(allow_derivatives=True)
+        _replace_sqlite_identity_freeze_update_triggers()
     elif _dialect() == "postgresql":
         _replace_postgresql_identity_freeze(allow_derivatives=True)
