@@ -474,8 +474,7 @@ def test_progress_query_is_project_scoped_sorted_and_removes_completed_rows(clie
     with db.SessionLocal.begin() as session:
         assert qc.complete_technical_qc_task(
             session,
-            completed.task_id,
-            completed.claim_id,
+            completed,
             now=now + timedelta(seconds=1),
         )
 
@@ -764,8 +763,7 @@ def test_finalized_claim_adds_late_issue_without_changing_finalization_or_failur
         assert len(issue_ids) == 1
         assert _technical_qc().complete_technical_qc_task(
             session,
-            claim.task_id,
-            claim.claim_id,
+            claim,
         )
 
     models = importlib.import_module(

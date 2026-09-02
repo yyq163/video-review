@@ -301,6 +301,7 @@ def _replace_sqlite_technical_qc_freeze_exceptions(*, allow: bool) -> None:
         )
         AND NOT (
           {linked_old}
+          AND OLD.deleted_at IS NULL
           AND NEW.id IS OLD.id
           AND NEW.project_ref_id IS OLD.project_ref_id
           AND NEW.review_item_id IS OLD.review_item_id
@@ -309,6 +310,23 @@ def _replace_sqlite_technical_qc_freeze_exceptions(*, allow: bool) -> None:
           AND NEW.timestamp_ms IS OLD.timestamp_ms
           AND NEW.frame_number IS OLD.frame_number
           AND NEW.created_at IS OLD.created_at
+          AND (
+            NEW.current_revision_id IS OLD.current_revision_id
+            OR EXISTS (
+              SELECT 1
+              FROM issue_revisions old_revision
+              JOIN issue_revisions new_revision
+                ON new_revision.issue_id = old_revision.issue_id
+               AND new_revision.project_ref_id = old_revision.project_ref_id
+               AND new_revision.review_item_id = old_revision.review_item_id
+               AND new_revision.version_id = old_revision.version_id
+               AND new_revision.revision_no = old_revision.revision_no + 1
+              WHERE old_revision.id = OLD.current_revision_id
+                AND old_revision.issue_id = OLD.id
+                AND new_revision.id = NEW.current_revision_id
+                AND new_revision.issue_id = NEW.id
+            )
+          )
           AND (
             NEW.status IS OLD.status
             OR (OLD.status = 'unresolved' AND NEW.status = 'resolved')
@@ -350,6 +368,7 @@ def _replace_sqlite_technical_qc_freeze_exceptions(*, allow: bool) -> None:
                 AND issue.project_ref_id = NEW.project_ref_id
                 AND issue.review_item_id = NEW.review_item_id
                 AND issue.version_id = NEW.version_id
+                AND issue.deleted_at IS NULL
                 AND project.lifecycle_status = 'active'
                 AND project.deleted_at IS NULL
             )
@@ -399,7 +418,7 @@ def _postgres_finalized_technical_qc_issue_authority() -> str:
           AND task.claim_id IS NOT NULL
           AND length(trim(task.claim_id)) > 0
           AND task.lease_expires_at IS NOT NULL
-          AND task.lease_expires_at > CURRENT_TIMESTAMP
+          AND task.lease_expires_at > clock_timestamp()
           AND playback.status = 'ready'
           AND playback.output_file_id = task.input_file_id
           AND version.playback_asset_id = task.input_file_id
@@ -468,7 +487,7 @@ def _replace_postgresql_technical_qc_finding_guards(*, allow: bool) -> None:
               AND task.status = 'running'
               AND task.claim_id IS NOT NULL
               AND length(trim(task.claim_id)) > 0
-              AND task.lease_expires_at > CURRENT_TIMESTAMP
+              AND task.lease_expires_at > clock_timestamp()
               AND playback.status = 'ready'
               AND playback.output_file_id = task.input_file_id
               AND version.playback_asset_id = task.input_file_id
@@ -567,6 +586,24 @@ def _replace_postgresql_identity_freeze() -> None:
                   AND project.lifecycle_status = 'active'
                   AND project.deleted_at IS NULL
               )
+              AND OLD.deleted_at IS NULL
+              AND (
+                NEW.current_revision_id = OLD.current_revision_id
+                OR EXISTS (
+                  SELECT 1
+                  FROM issue_revisions old_revision
+                  JOIN issue_revisions new_revision
+                    ON new_revision.issue_id = old_revision.issue_id
+                   AND new_revision.project_ref_id = old_revision.project_ref_id
+                   AND new_revision.review_item_id = old_revision.review_item_id
+                   AND new_revision.version_id = old_revision.version_id
+                   AND new_revision.revision_no = old_revision.revision_no + 1
+                  WHERE old_revision.id = OLD.current_revision_id
+                    AND old_revision.issue_id = OLD.id
+                    AND new_revision.id = NEW.current_revision_id
+                    AND new_revision.issue_id = NEW.id
+                )
+              )
               AND (
                 NEW.status = OLD.status
                 OR (OLD.status = 'unresolved' AND NEW.status = 'resolved')
@@ -593,6 +630,7 @@ def _replace_postgresql_identity_freeze() -> None:
                 AND issue.project_ref_id = NEW.project_ref_id
                 AND issue.review_item_id = NEW.review_item_id
                 AND issue.version_id = NEW.version_id
+                AND issue.deleted_at IS NULL
                 AND project.lifecycle_status = 'active'
                 AND project.deleted_at IS NULL
             );

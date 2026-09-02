@@ -1806,22 +1806,6 @@ class SqlAlchemyReviewRepository:
             raise ReviewError("RESOURCE_STATE_CONFLICT", "项目已删除")
         if project.lifecycle_status == "archived":
             raise ReviewError("RESOURCE_STATE_CONFLICT", "项目已归档")
-        active_technical_qc = int(
-            self.session.scalar(
-                select(func.count())
-                .select_from(TechnicalQcTaskModel)
-                .where(
-                    TechnicalQcTaskModel.project_ref_id == project.id,
-                    TechnicalQcTaskModel.status.in_(("queued", "running")),
-                )
-            )
-            or 0
-        )
-        if active_technical_qc:
-            raise ReviewError(
-                "REVIEW_IN_PROGRESS",
-                "技术审查运行期间不能归档项目",
-            )
         project.lifecycle_status = "archived"
         project.lock_version += 1
         project.updated_at = utcnow()

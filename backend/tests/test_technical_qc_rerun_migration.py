@@ -286,6 +286,10 @@ def test_0030_postgresql_allows_only_claim_backed_finalized_qc_opinions(
                 [interval],
             )
         assert len(issue_ids) == 1
+        initial_revision_id = qc._stable_child_id(
+            "rev",
+            qc._finding_identity(claim, interval),
+        )
 
         with PgSession() as session:
             session.add(
@@ -404,6 +408,16 @@ def test_0030_postgresql_allows_only_claim_backed_finalized_qc_opinions(
         with PgSession() as session:
             issue = session.get(models.ReviewIssueModel, issue_ids[0])
             assert issue is not None
+            assert issue.current_revision_id != initial_revision_id
+            issue.current_revision_id = initial_revision_id
+            issue.lock_version += 1
+            with pytest.raises(DBAPIError, match="finalized review item is frozen"):
+                session.flush()
+            session.rollback()
+
+        with PgSession() as session:
+            issue = session.get(models.ReviewIssueModel, issue_ids[0])
+            assert issue is not None
             issue.status = "unresolved"
             issue.lock_version += 1
             with pytest.raises(DBAPIError, match="finalized review item is frozen"):
@@ -435,6 +449,36 @@ def test_0030_postgresql_allows_only_claim_backed_finalized_qc_opinions(
             assert issue.lock_version == 3
             assert revision is not None
             assert revision.content == "PostgreSQL 人工编辑后保留"
+
+        with PgSession() as session:
+            task = session.get(models.TechnicalQcTaskModel, task_id)
+            assert task is not None
+            task.lease_expires_at = models.utcnow() + timedelta(milliseconds=100)
+            session.flush()
+            session.execute(text("SELECT pg_sleep(0.25)"))
+            session.add(
+                models.TechnicalQcFindingModel(
+                    id=f"tqf_transaction_time_{_suffix()}",
+                    task_id=task_id,
+                    project_ref_id=project_id,
+                    review_item_id=item_id,
+                    version_id=version_id,
+                    identity_hash="d" * 64,
+                    issue_id=f"iss_transaction_time_{_suffix()}",
+                    start_frame=30,
+                    end_frame=30,
+                    start_ms=1_200,
+                    end_ms=1_240,
+                    reason_codes=["black_frame"],
+                    value_details={"pblack": 100.0},
+                )
+            )
+            with pytest.raises(
+                DBAPIError,
+                match="technical QC finding authority invalid",
+            ):
+                session.flush()
+            session.rollback()
 
         expired_interval = qc.QcInterval(
             start_frame=20,

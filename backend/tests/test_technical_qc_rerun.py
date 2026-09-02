@@ -46,8 +46,7 @@ def _complete_initial_qc(project_ref_id: str) -> None:
         assert claim.project_ref_id == project_ref_id
         assert qc.complete_technical_qc_task(
             session,
-            claim.task_id,
-            claim.claim_id,
+            claim,
         )
 
 
@@ -169,10 +168,16 @@ def test_finalized_rerun_adds_only_new_issue_and_preserves_human_changes(
         assert len(first_issue_ids) == 1
         assert qc.complete_technical_qc_task(
             session,
-            first_claim.task_id,
-            first_claim.claim_id,
+            first_claim,
         )
     original_issue_id = first_issue_ids[0]
+    with db.SessionLocal() as session:
+        original_issue = session.get(
+            models.ReviewIssueModel,
+            original_issue_id,
+        )
+        assert original_issue is not None
+        initial_revision_id = original_issue.current_revision_id
 
     issue_base = (
         f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
@@ -195,6 +200,16 @@ def test_finalized_rerun_adds_only_new_issue_and_preserves_human_changes(
         headers={"If-Match": "1"},
     )
     assert updated.status_code == 200, updated.text
+
+    with db.SessionLocal() as session:
+        issue = session.get(models.ReviewIssueModel, original_issue_id)
+        assert issue is not None
+        assert issue.current_revision_id != initial_revision_id
+        issue.current_revision_id = initial_revision_id
+        issue.lock_version += 1
+        with pytest.raises(IntegrityError, match="finalized review item is frozen"):
+            session.flush()
+        session.rollback()
 
     resolve_body = command(
         "ResolveReviewIssue",
@@ -256,6 +271,29 @@ def test_finalized_rerun_adds_only_new_issue_and_preserves_human_changes(
     )
     assert deleted.status_code == 200, deleted.text
 
+    with db.SessionLocal() as session:
+        issue = session.get(models.ReviewIssueModel, original_issue_id)
+        assert issue is not None
+        current_revision = session.get(
+            models.ReviewIssueRevisionModel,
+            issue.current_revision_id,
+        )
+        assert current_revision is not None
+        session.add(
+            models.ReviewIssueRevisionModel(
+                id="rev_deleted_qc_issue_rejected",
+                project_ref_id=issue.project_ref_id,
+                review_item_id=issue.review_item_id,
+                version_id=issue.version_id,
+                issue_id=issue.id,
+                revision_no=current_revision.revision_no + 1,
+                content="软删除后不得再修改",
+            )
+        )
+        with pytest.raises(IntegrityError, match="finalized review item is frozen"):
+            session.flush()
+        session.rollback()
+
     queued_again = _rerun(client, project["project_ref_id"])
     assert queued_again.status_code == 202, queued_again.text
     new_interval = qc.QcInterval(
@@ -281,8 +319,7 @@ def test_finalized_rerun_adds_only_new_issue_and_preserves_human_changes(
         )
         assert qc.complete_technical_qc_task(
             session,
-            second_claim.task_id,
-            second_claim.claim_id,
+            second_claim,
         )
 
     assert original_issue_id in second_issue_ids
@@ -426,8 +463,7 @@ def test_expired_claim_cannot_mutate_or_resurrect_task_lease(
         elif operation == "complete":
             result = qc.complete_technical_qc_task(
                 session,
-                claim.task_id,
-                claim.claim_id,
+                claim,
             )
         else:
             result = qc.fail_technical_qc_task(
@@ -498,6 +534,55 @@ def test_worker_does_not_complete_after_losing_lease_during_scan(
     )
 
     assert outcome == "skipped"
+    with db.SessionLocal() as session:
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+        issues = list(
+            session.scalars(
+                select(models.ReviewIssueModel).where(
+                    models.ReviewIssueModel.review_item_id == item["id"]
+                )
+            )
+        )
+    assert task is not None
+    assert task.status == "running"
+    assert task.claim_id == claim.claim_id
+    assert issues == []
+
+
+def test_worker_does_not_complete_after_playback_proxy_drifts_with_no_new_findings(
+    client: Any,
+) -> None:
+    project, item = create_project_item(client, code="TQC-PROXY-DRIFT")
+    _complete_initial_qc(project["project_ref_id"])
+    finalize(client, project["project_ref_id"], item)
+    queued = _rerun(client, project["project_ref_id"])
+    assert queued.status_code == 202, queued.text
+    qc, db, models = _modules()
+    with db.SessionLocal.begin() as session:
+        claim = qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        )[0]
+        derivative = session.scalar(
+            select(models.MediaDerivativeTaskModel).where(
+                models.MediaDerivativeTaskModel.version_id == claim.version_id,
+                models.MediaDerivativeTaskModel.kind == "playback_faststart",
+            )
+        )
+        assert derivative is not None
+        derivative.status = "queued"
+        derivative.output_file_id = None
+
+    with db.SessionLocal.begin() as session:
+        assert qc.persist_technical_qc_findings(session, claim, []) == []
+        assert not qc.complete_technical_qc_task(
+            session,
+            claim,
+        )
+
     with db.SessionLocal() as session:
         task = session.get(models.TechnicalQcTaskModel, claim.task_id)
         issues = list(
@@ -694,7 +779,7 @@ def test_existing_manual_issue_cannot_be_reclassified_as_technical_qc(
     assert issue.current_revision_id == manual_issue["current_revision_id"]
 
 
-def test_archive_is_blocked_while_project_technical_qc_is_active(
+def test_archive_keeps_existing_behavior_and_stops_queued_qc_claims(
     client: Any,
 ) -> None:
     project, _item = create_project_item(client, code="TQC-ARCHIVE-ACTIVE")
@@ -713,9 +798,9 @@ def test_archive_is_blocked_while_project_technical_qc_is_active(
         headers={"If-Match": str(project["lock_version"])},
     )
 
-    assert archived.status_code == 409, archived.text
-    assert api_error(archived)["code"] == "REVIEW_IN_PROGRESS"
-    _qc, db, models = _modules()
+    assert archived.status_code == 200, archived.text
+    assert api_data(archived)["lifecycle_status"] == "archived"
+    qc, db, models = _modules()
     with db.SessionLocal() as session:
         authority = session.get(
             models.ProjectRefModel,
@@ -728,9 +813,17 @@ def test_archive_is_blocked_while_project_technical_qc_is_active(
             )
         )
     assert authority is not None
-    assert authority.lifecycle_status == "active"
+    assert authority.lifecycle_status == "archived"
     assert task is not None
     assert task.status == "queued"
+    with db.SessionLocal.begin() as session:
+        assert qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        ) == []
 
 
 def test_archived_project_task_cannot_be_claimed_or_persist_late_findings(
