@@ -498,7 +498,7 @@ def _claim_single_ready_task(client: Any, code: str) -> tuple[Any, Any, Any, Any
             limit=1,
             per_project_limit=2,
             lease_seconds=60,
-            now=datetime(2026, 8, 25, 3, tzinfo=timezone.utc),
+            now=datetime.now(timezone.utc),
         )[0]
     return project, item, db, claim
 

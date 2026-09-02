@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
+from backend.app.modules.final_cut_review.domain.errors import ReviewError
 from backend.app.settings import get_settings
 
 from .test_postgresql_constraints import (
@@ -154,6 +155,33 @@ def test_0030_postgresql_allows_only_claim_backed_finalized_qc_opinions(
 
         with PgSession() as session:
             project, item, version, source = _seed_item(session, _suffix())
+            manual_issue_id = f"iss_manual_existing_{_suffix()}"
+            manual_revision_id = f"rev_manual_existing_{_suffix()}"
+            session.add(
+                models.ReviewIssueModel(
+                    id=manual_issue_id,
+                    project_ref_id=project.id,
+                    review_item_id=item.id,
+                    version_id=version.id,
+                    issue_no=1,
+                    status="unresolved",
+                    current_revision_id=manual_revision_id,
+                    timestamp_ms=40,
+                    frame_number=1,
+                )
+            )
+            session.flush()
+            session.add(
+                models.ReviewIssueRevisionModel(
+                    id=manual_revision_id,
+                    project_ref_id=project.id,
+                    review_item_id=item.id,
+                    version_id=version.id,
+                    issue_id=manual_issue_id,
+                    revision_no=1,
+                    content="existing manual opinion",
+                )
+            )
             derivative = models.MediaDerivativeTaskModel(
                 id=f"mdt_{_suffix()}",
                 project_ref_id=project.id,
@@ -259,6 +287,31 @@ def test_0030_postgresql_allows_only_claim_backed_finalized_qc_opinions(
             )
         assert len(issue_ids) == 1
 
+        with PgSession() as session:
+            session.add(
+                models.TechnicalQcFindingModel(
+                    id=f"tqf_manual_launder_{_suffix()}",
+                    task_id=task_id,
+                    project_ref_id=project_id,
+                    review_item_id=item_id,
+                    version_id=version_id,
+                    identity_hash="e" * 64,
+                    issue_id=manual_issue_id,
+                    start_frame=1,
+                    end_frame=1,
+                    start_ms=40,
+                    end_ms=80,
+                    reason_codes=["black_frame"],
+                    value_details={"pblack": 100.0},
+                )
+            )
+            with pytest.raises(
+                DBAPIError,
+                match="technical QC finding authority invalid",
+            ):
+                session.flush()
+            session.rollback()
+
         with PgSession.begin() as session:
             issue = session.get(models.ReviewIssueModel, issue_ids[0])
             item = session.get(models.ReviewItemModel, item_id)
@@ -300,6 +353,19 @@ def test_0030_postgresql_allows_only_claim_backed_finalized_qc_opinions(
                 session,
                 get_settings(),
             )
+            review_context = context_module.ExecutionContext(
+                entry_source="review",
+                request_id=f"req_{_suffix()}",
+                principal=context_module.PrincipalRef(
+                    kind="system",
+                    id="pg-qc-rerun-test",
+                    project_ref_ids=(project_id,),
+                ),
+                write_guard=context_module.WriteGuardState(
+                    mode="none",
+                    verified=True,
+                ),
+            )
             edited = repository.update_review_issue(
                 {
                     "project_ref_id": project_id,
@@ -308,22 +374,41 @@ def test_0030_postgresql_allows_only_claim_backed_finalized_qc_opinions(
                     "issue_id": issue_ids[0],
                     "content": "PostgreSQL 人工编辑后保留",
                 },
-                context_module.ExecutionContext(
-                    entry_source="review",
-                    request_id=f"req_{_suffix()}",
-                    principal=context_module.PrincipalRef(
-                        kind="system",
-                        id="pg-qc-rerun-test",
-                        project_ref_ids=(project_id,),
-                    ),
-                    write_guard=context_module.WriteGuardState(
-                        mode="none",
-                        verified=True,
-                    ),
-                ),
+                review_context,
                 1,
             )
             assert edited["current_revision"]["content"] == "PostgreSQL 人工编辑后保留"
+            resolved = repository.resolve_issue(
+                {
+                    "project_ref_id": project_id,
+                    "review_item_id": item_id,
+                    "version_id": version_id,
+                    "issue_id": issue_ids[0],
+                },
+                review_context,
+                2,
+            )
+            assert resolved["status"] == "resolved"
+            with pytest.raises(ReviewError, match="条目已定稿"):
+                repository.reopen_issue(
+                    {
+                        "project_ref_id": project_id,
+                        "review_item_id": item_id,
+                        "version_id": version_id,
+                        "issue_id": issue_ids[0],
+                    },
+                    review_context,
+                    3,
+                )
+
+        with PgSession() as session:
+            issue = session.get(models.ReviewIssueModel, issue_ids[0])
+            assert issue is not None
+            issue.status = "unresolved"
+            issue.lock_version += 1
+            with pytest.raises(DBAPIError, match="finalized review item is frozen"):
+                session.flush()
+            session.rollback()
 
         with PgSession.begin() as session:
             assert qc.persist_technical_qc_findings(
@@ -339,15 +424,72 @@ def test_0030_postgresql_allows_only_claim_backed_finalized_qc_opinions(
                     )
                 )
             )
-            issue = issues[0]
+            assert len(issues) == 2
+            issue = next(
+                candidate for candidate in issues if candidate.id == issue_ids[0]
+            )
             revision = session.get(
                 models.ReviewIssueRevisionModel,
                 issue.current_revision_id,
             )
-            assert len(issues) == 1
-            assert issue.lock_version == 2
+            assert issue.lock_version == 3
             assert revision is not None
             assert revision.content == "PostgreSQL 人工编辑后保留"
+
+        expired_interval = qc.QcInterval(
+            start_frame=20,
+            end_frame=20,
+            start_ms=800,
+            end_ms=840,
+            reason_codes=("white_frame",),
+            values={"yavg": 255.0},
+        )
+        expired_identity = qc._finding_identity(claim, expired_interval)
+        expired_issue_id = qc._stable_child_id("iss", expired_identity)
+        with PgSession.begin() as session:
+            task = session.get(models.TechnicalQcTaskModel, task_id)
+            assert task is not None
+            task.lease_expires_at = models.utcnow() - timedelta(seconds=1)
+        with pytest.raises(
+            DBAPIError,
+            match="technical QC finding authority invalid",
+        ):
+            with PgSession.begin() as session:
+                session.add(
+                    models.TechnicalQcFindingModel(
+                        id=qc._stable_child_id("tqf", expired_identity),
+                        task_id=task_id,
+                        project_ref_id=project_id,
+                        review_item_id=item_id,
+                        version_id=version_id,
+                        identity_hash=expired_identity,
+                        issue_id=expired_issue_id,
+                        start_frame=expired_interval.start_frame,
+                        end_frame=expired_interval.end_frame,
+                        start_ms=expired_interval.start_ms,
+                        end_ms=expired_interval.end_ms,
+                        reason_codes=list(expired_interval.reason_codes),
+                        value_details=dict(expired_interval.values),
+                    )
+                )
+                session.flush()
+                session.add(
+                    models.ReviewIssueModel(
+                        id=expired_issue_id,
+                        project_ref_id=project_id,
+                        review_item_id=item_id,
+                        version_id=version_id,
+                        issue_no=2,
+                        status="unresolved",
+                        current_revision_id=qc._stable_child_id(
+                            "rev",
+                            expired_identity,
+                        ),
+                        timestamp_ms=expired_interval.start_ms,
+                        frame_number=expired_interval.start_frame,
+                    )
+                )
+                session.flush()
     finally:
         if engine is not None:
             engine.dispose()

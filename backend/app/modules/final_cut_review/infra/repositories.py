@@ -1806,6 +1806,22 @@ class SqlAlchemyReviewRepository:
             raise ReviewError("RESOURCE_STATE_CONFLICT", "项目已删除")
         if project.lifecycle_status == "archived":
             raise ReviewError("RESOURCE_STATE_CONFLICT", "项目已归档")
+        active_technical_qc = int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(TechnicalQcTaskModel)
+                .where(
+                    TechnicalQcTaskModel.project_ref_id == project.id,
+                    TechnicalQcTaskModel.status.in_(("queued", "running")),
+                )
+            )
+            or 0
+        )
+        if active_technical_qc:
+            raise ReviewError(
+                "REVIEW_IN_PROGRESS",
+                "技术审查运行期间不能归档项目",
+            )
         project.lifecycle_status = "archived"
         project.lock_version += 1
         project.updated_at = utcnow()
@@ -2322,7 +2338,7 @@ class SqlAlchemyReviewRepository:
         self._assert_project_active(project)
         item = self._get_item(project.id, payload["review_item_id"], for_update=True)
         issue = self._get_issue(project.id, item.id, payload["version_id"], payload["issue_id"])
-        self._ensure_issue_writable(item, issue)
+        invariants.ensure_issue_writable(item.workflow_status)
         invariants.ensure_current_version(issue.version_id, item.current_version_id or "")
         self._expect_lock(issue, expected_version)
         if issue.status == "unresolved":

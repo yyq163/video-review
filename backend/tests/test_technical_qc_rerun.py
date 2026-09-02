@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -16,7 +17,8 @@ from .conftest import (
     principal_headers,
     upload_video,
 )
-from .test_api_contract_runtime import finalize
+from .test_api_contract_runtime import create_issue, finalize
+from .test_task6_fix1_technical_qc import _settings
 
 
 def _modules() -> tuple[Any, Any, Any]:
@@ -212,6 +214,32 @@ def test_finalized_rerun_adds_only_new_issue_and_preserves_human_changes(
     )
     assert resolved.status_code == 200, resolved.text
 
+    reopen_body = command(
+        "ReopenReviewIssue",
+        {
+            "project_ref_id": project["project_ref_id"],
+            "review_item_id": item["id"],
+            "version_id": item["current_version_id"],
+            "issue_id": original_issue_id,
+        },
+    )
+    reopened = client.post(
+        f"{issue_base}/reopen",
+        json=reopen_body,
+        headers={"If-Match": "3"},
+    )
+    assert reopened.status_code == 409, reopened.text
+    assert api_error(reopened)["code"] == "REVIEW_ITEM_FINALIZED"
+
+    with db.SessionLocal() as session:
+        issue = session.get(models.ReviewIssueModel, original_issue_id)
+        assert issue is not None
+        issue.status = "unresolved"
+        issue.lock_version += 1
+        with pytest.raises(IntegrityError, match="finalized review item is frozen"):
+            session.flush()
+        session.rollback()
+
     delete_body = command(
         "SoftDeleteReviewIssue",
         {
@@ -290,6 +318,199 @@ def test_finalized_rerun_adds_only_new_issue_and_preserves_human_changes(
     assert authority.active_finalization_id == finalization["id"]
     assert active_finalization is not None
     assert active_finalization.status == "active"
+
+
+def test_expired_claim_cannot_persist_a_finalized_technical_opinion(
+    client: Any,
+) -> None:
+    project, item = create_project_item(client, code="TQC-RERUN-EXPIRED")
+    _complete_initial_qc(project["project_ref_id"])
+    finalize(client, project["project_ref_id"], item)
+    queued = _rerun(client, project["project_ref_id"])
+    assert queued.status_code == 202, queued.text
+
+    qc, db, models = _modules()
+    with db.SessionLocal.begin() as session:
+        claim = qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        )[0]
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+        assert task is not None
+        task.lease_expires_at = models.utcnow() - timedelta(seconds=1)
+
+    interval = qc.QcInterval(
+        start_frame=5,
+        end_frame=5,
+        start_ms=200,
+        end_ms=240,
+        reason_codes=("black_frame",),
+        values={"pblack": 100.0},
+    )
+    with db.SessionLocal.begin() as session:
+        assert qc.persist_technical_qc_findings(
+            session,
+            claim,
+            [interval],
+        ) == []
+
+    with db.SessionLocal() as session:
+        issues = list(
+            session.scalars(
+                select(models.ReviewIssueModel).where(
+                    models.ReviewIssueModel.review_item_id == item["id"]
+                )
+            )
+        )
+        authority = session.get(models.ReviewItemModel, item["id"])
+    assert issues == []
+    assert authority is not None
+    assert authority.workflow_status == "finalized"
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["progress", "renew", "probe", "complete", "fail"],
+)
+def test_expired_claim_cannot_mutate_or_resurrect_task_lease(
+    client: Any,
+    operation: str,
+) -> None:
+    project, _item = create_project_item(
+        client,
+        code=f"TQC-EXPIRED-{operation.upper()}",
+    )
+    qc, db, models = _modules()
+    with db.SessionLocal.begin() as session:
+        qc.discover_ready_technical_qc_tasks(session)
+        claim = qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        )[0]
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+        assert task is not None
+        task.lease_expires_at = models.utcnow() - timedelta(seconds=1)
+
+    with db.SessionLocal.begin() as session:
+        if operation == "progress":
+            result = qc.update_technical_qc_progress(
+                session,
+                claim.task_id,
+                claim.claim_id,
+                processed_ms=10,
+            )
+        elif operation == "renew":
+            result = qc.renew_technical_qc_lease(
+                session,
+                claim.task_id,
+                claim.claim_id,
+                lease_seconds=60,
+            )
+        elif operation == "probe":
+            result = qc.persist_technical_qc_probe(
+                session,
+                claim.task_id,
+                claim.claim_id,
+                qc.TechnicalQcMediaProbe(
+                    video_frame_count=25,
+                    video_duration_ms=1_000,
+                    total_ms=1_000,
+                ),
+            )
+        elif operation == "complete":
+            result = qc.complete_technical_qc_task(
+                session,
+                claim.task_id,
+                claim.claim_id,
+            )
+        else:
+            result = qc.fail_technical_qc_task(
+                session,
+                claim.task_id,
+                claim.claim_id,
+                error_code="TECHNICAL_QC_SCAN_FAILED",
+                retryable=True,
+                max_attempts=3,
+                retry_delay_seconds=30,
+            )
+        assert result is False
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+        assert task is not None
+        assert task.status == "running"
+        assert task.claim_id == claim.claim_id
+        assert task.processed_ms == 0
+
+
+def test_worker_does_not_complete_after_losing_lease_during_scan(
+    client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, item = create_project_item(client, code="TQC-LEASE-LOST-FINALIZE")
+    _complete_initial_qc(project["project_ref_id"])
+    finalize(client, project["project_ref_id"], item)
+    queued = _rerun(client, project["project_ref_id"])
+    assert queued.status_code == 202, queued.text
+    qc, db, models = _modules()
+    with db.SessionLocal.begin() as session:
+        claim = qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        )[0]
+
+    interval = qc.QcInterval(
+        start_frame=5,
+        end_frame=5,
+        start_ms=200,
+        end_ms=240,
+        reason_codes=("black_frame",),
+        values={"pblack": 100.0},
+    )
+
+    def expire_during_scan(*_args: Any, **_kwargs: Any) -> Any:
+        with db.SessionLocal.begin() as session:
+            task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+            assert task is not None
+            task.lease_expires_at = models.utcnow() - timedelta(seconds=1)
+        return qc.TechnicalQcScanResult(
+            intervals=(interval,),
+            processed_ms=1_000,
+            frames_processed=25,
+            video_frame_count=25,
+            video_duration_ms=1_000,
+            total_ms=1_000,
+        )
+
+    monkeypatch.setattr(qc, "scan_technical_qc_claim", expire_during_scan)
+
+    outcome = qc._process_technical_qc_claim(
+        claim,
+        _settings(concurrency=1, per_project=1),
+        runtime_binding=None,
+    )
+
+    assert outcome == "skipped"
+    with db.SessionLocal() as session:
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+        issues = list(
+            session.scalars(
+                select(models.ReviewIssueModel).where(
+                    models.ReviewIssueModel.review_item_id == item["id"]
+                )
+            )
+        )
+    assert task is not None
+    assert task.status == "running"
+    assert task.claim_id == claim.claim_id
+    assert issues == []
 
 
 def test_rerun_preflight_is_atomic_when_any_current_playback_is_not_ready(
@@ -404,3 +625,179 @@ def test_rerun_requires_project_scoped_principal_authorization(client: Any) -> N
         )
     assert task is not None
     assert task.status == "complete"
+
+
+def test_existing_manual_issue_cannot_be_reclassified_as_technical_qc(
+    client: Any,
+) -> None:
+    project, item = create_project_item(client, code="TQC-MANUAL-LAUNDER")
+    manual_issue = create_issue(
+        client,
+        project["project_ref_id"],
+        item,
+        content="人工意见不得改绑为技术审查意见",
+    )
+    current_response = client.get(
+        f"/api/v1/final-cut-review/projects/{project['project_ref_id']}"
+        f"/items/{item['id']}"
+    )
+    assert current_response.status_code == 200, current_response.text
+    current_item = api_data(current_response)
+    finalize(
+        client,
+        project["project_ref_id"],
+        item,
+        if_match=current_item["lock_version"],
+    )
+
+    qc, db, models = _modules()
+    with db.SessionLocal.begin() as session:
+        qc.discover_ready_technical_qc_tasks(session)
+        claim = qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        )[0]
+
+    with db.SessionLocal() as session:
+        session.add(
+            models.TechnicalQcFindingModel(
+                id="tqf_manual_launder_rejected",
+                task_id=claim.task_id,
+                project_ref_id=claim.project_ref_id,
+                review_item_id=claim.review_item_id,
+                version_id=claim.version_id,
+                identity_hash="f" * 64,
+                issue_id=manual_issue["id"],
+                start_frame=manual_issue["frame_number"],
+                end_frame=manual_issue["frame_number"],
+                start_ms=manual_issue["timestamp_ms"],
+                end_ms=manual_issue["timestamp_ms"] + 40,
+                reason_codes=["black_frame"],
+                value_details={"pblack": 100.0},
+            )
+        )
+        with pytest.raises(IntegrityError, match="technical QC finding authority invalid"):
+            session.flush()
+        session.rollback()
+
+    with db.SessionLocal() as session:
+        finding = session.get(
+            models.TechnicalQcFindingModel,
+            "tqf_manual_launder_rejected",
+        )
+        issue = session.get(models.ReviewIssueModel, manual_issue["id"])
+    assert finding is None
+    assert issue is not None
+    assert issue.current_revision_id == manual_issue["current_revision_id"]
+
+
+def test_archive_is_blocked_while_project_technical_qc_is_active(
+    client: Any,
+) -> None:
+    project, _item = create_project_item(client, code="TQC-ARCHIVE-ACTIVE")
+    _complete_initial_qc(project["project_ref_id"])
+    queued = _rerun(client, project["project_ref_id"])
+    assert queued.status_code == 202, queued.text
+    archive_body = command(
+        "ArchiveProject",
+        {"project_ref_id": project["project_ref_id"]},
+    )
+
+    archived = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        "/archive",
+        json=archive_body,
+        headers={"If-Match": str(project["lock_version"])},
+    )
+
+    assert archived.status_code == 409, archived.text
+    assert api_error(archived)["code"] == "REVIEW_IN_PROGRESS"
+    _qc, db, models = _modules()
+    with db.SessionLocal() as session:
+        authority = session.get(
+            models.ProjectRefModel,
+            project["project_ref_id"],
+        )
+        task = session.scalar(
+            select(models.TechnicalQcTaskModel).where(
+                models.TechnicalQcTaskModel.project_ref_id
+                == project["project_ref_id"]
+            )
+        )
+    assert authority is not None
+    assert authority.lifecycle_status == "active"
+    assert task is not None
+    assert task.status == "queued"
+
+
+def test_archived_project_task_cannot_be_claimed_or_persist_late_findings(
+    client: Any,
+) -> None:
+    project, item = create_project_item(client, code="TQC-ARCHIVE-GUARD")
+    _complete_initial_qc(project["project_ref_id"])
+    finalize(client, project["project_ref_id"], item)
+    queued = _rerun(client, project["project_ref_id"])
+    assert queued.status_code == 202, queued.text
+    qc, db, models = _modules()
+    with db.SessionLocal.begin() as session:
+        project_row = session.get(
+            models.ProjectRefModel,
+            project["project_ref_id"],
+        )
+        assert project_row is not None
+        project_row.lifecycle_status = "archived"
+
+    with db.SessionLocal.begin() as session:
+        assert qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        ) == []
+
+    with db.SessionLocal.begin() as session:
+        project_row = session.get(
+            models.ProjectRefModel,
+            project["project_ref_id"],
+        )
+        assert project_row is not None
+        project_row.lifecycle_status = "active"
+        claim = qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        )[0]
+        project_row.lifecycle_status = "archived"
+
+    interval = qc.QcInterval(
+        start_frame=5,
+        end_frame=5,
+        start_ms=200,
+        end_ms=240,
+        reason_codes=("black_frame",),
+        values={"pblack": 100.0},
+    )
+    with db.SessionLocal.begin() as session:
+        assert qc.persist_technical_qc_findings(
+            session,
+            claim,
+            [interval],
+        ) == []
+    with db.SessionLocal() as session:
+        issues = list(
+            session.scalars(
+                select(models.ReviewIssueModel).where(
+                    models.ReviewIssueModel.review_item_id == item["id"]
+                )
+            )
+        )
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+    assert issues == []
+    assert task is not None
+    assert task.status == "running"

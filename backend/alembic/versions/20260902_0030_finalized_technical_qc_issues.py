@@ -52,6 +52,8 @@ def _sqlite_finalized_technical_qc_issue_authority() -> str:
          AND task.project_ref_id = finding.project_ref_id
          AND task.review_item_id = finding.review_item_id
          AND task.version_id = finding.version_id
+        JOIN project_refs project
+          ON project.id = finding.project_ref_id
         JOIN review_items item
           ON item.id = finding.review_item_id
          AND item.project_ref_id = finding.project_ref_id
@@ -79,9 +81,12 @@ def _sqlite_finalized_technical_qc_issue_authority() -> str:
           AND task.claim_id IS NOT NULL
           AND length(trim(task.claim_id)) > 0
           AND task.lease_expires_at IS NOT NULL
+          AND julianday(task.lease_expires_at) > julianday('now')
           AND playback.status = 'ready'
           AND playback.output_file_id = task.input_file_id
           AND version.playback_asset_id = task.input_file_id
+          AND project.lifecycle_status = 'active'
+          AND project.deleted_at IS NULL
           AND item.workflow_status = 'finalized'
           AND item.current_version_id = NEW.version_id
           AND item.current_version_is_current = 1
@@ -94,15 +99,120 @@ def _sqlite_finalized_technical_qc_issue_authority() -> str:
     """
 
 
+def _sqlite_technical_qc_finding_authority() -> str:
+    return """
+      EXISTS (
+        SELECT 1
+        FROM technical_qc_tasks task
+        JOIN project_refs project
+          ON project.id = task.project_ref_id
+        JOIN review_items item
+          ON item.id = task.review_item_id
+         AND item.project_ref_id = task.project_ref_id
+        JOIN review_versions version
+          ON version.id = task.version_id
+         AND version.project_ref_id = task.project_ref_id
+         AND version.review_item_id = task.review_item_id
+        JOIN media_derivative_tasks playback
+          ON playback.version_id = task.version_id
+         AND playback.project_ref_id = task.project_ref_id
+         AND playback.review_item_id = task.review_item_id
+         AND playback.kind = 'playback_faststart'
+        WHERE task.id = NEW.task_id
+          AND task.project_ref_id = NEW.project_ref_id
+          AND task.review_item_id = NEW.review_item_id
+          AND task.version_id = NEW.version_id
+          AND task.status = 'running'
+          AND task.claim_id IS NOT NULL
+          AND length(trim(task.claim_id)) > 0
+          AND task.lease_expires_at IS NOT NULL
+          AND julianday(task.lease_expires_at) > julianday('now')
+          AND playback.status = 'ready'
+          AND playback.output_file_id = task.input_file_id
+          AND version.playback_asset_id = task.input_file_id
+          AND project.lifecycle_status = 'active'
+          AND project.deleted_at IS NULL
+          AND item.current_version_id = NEW.version_id
+          AND item.current_version_is_current = 1
+          AND version.is_current = 1
+          AND NEW.issue_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM review_issues issue
+            WHERE issue.id = NEW.issue_id
+          )
+          AND (
+            item.workflow_status != 'finalized'
+            OR EXISTS (
+              SELECT 1 FROM finalizations finalization
+              WHERE finalization.id = item.active_finalization_id
+                AND finalization.project_ref_id = item.project_ref_id
+                AND finalization.review_item_id = item.id
+                AND finalization.version_id = item.current_version_id
+                AND finalization.status = 'active'
+            )
+          )
+      )
+    """
+
+
+def _replace_sqlite_technical_qc_finding_guards(*, allow: bool) -> None:
+    for suffix in ("insert", "update", "delete"):
+        op.execute(
+            "DROP TRIGGER IF EXISTS "
+            f"trg_technical_qc_findings_authority_{suffix}"
+        )
+    if not allow:
+        return
+    authority = _sqlite_technical_qc_finding_authority()
+    op.execute(
+        f"""
+        CREATE TRIGGER trg_technical_qc_findings_authority_insert
+        BEFORE INSERT ON technical_qc_findings
+        WHEN NOT ({authority})
+        BEGIN
+          SELECT RAISE(ABORT, 'technical QC finding authority invalid');
+        END
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_technical_qc_findings_authority_update
+        BEFORE UPDATE ON technical_qc_findings
+        BEGIN
+          SELECT RAISE(ABORT, 'technical QC findings are immutable');
+        END
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_technical_qc_findings_authority_delete
+        BEFORE DELETE ON technical_qc_findings
+        WHEN EXISTS (
+          SELECT 1 FROM review_items item
+          WHERE item.id = OLD.review_item_id
+            AND item.project_ref_id = OLD.project_ref_id
+            AND item.workflow_status = 'finalized'
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'finalized review item is frozen');
+        END
+        """
+    )
+
+
 def _sqlite_linked_technical_qc_issue(alias: str) -> str:
     return f"""
       EXISTS (
         SELECT 1
         FROM technical_qc_findings finding
+        JOIN project_refs project
+          ON project.id = finding.project_ref_id
         WHERE finding.issue_id = {alias}.id
           AND finding.project_ref_id = {alias}.project_ref_id
           AND finding.review_item_id = {alias}.review_item_id
           AND finding.version_id = {alias}.version_id
+          AND project.lifecycle_status = 'active'
+          AND project.deleted_at IS NULL
       )
     """
 
@@ -199,6 +309,15 @@ def _replace_sqlite_technical_qc_freeze_exceptions(*, allow: bool) -> None:
           AND NEW.timestamp_ms IS OLD.timestamp_ms
           AND NEW.frame_number IS OLD.frame_number
           AND NEW.created_at IS OLD.created_at
+          AND (
+            NEW.status IS OLD.status
+            OR (OLD.status = 'unresolved' AND NEW.status = 'resolved')
+          )
+          AND (
+            NEW.deleted_at IS OLD.deleted_at
+            OR (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
+          )
+          AND NEW.lock_version = OLD.lock_version + 1
         )
         BEGIN
           SELECT RAISE(ABORT, 'finalized review item is frozen');
@@ -220,6 +339,8 @@ def _replace_sqlite_technical_qc_freeze_exceptions(*, allow: bool) -> None:
             AND NOT EXISTS (
               SELECT 1
               FROM technical_qc_findings finding
+              JOIN project_refs project
+                ON project.id = finding.project_ref_id
               JOIN review_issues issue
                 ON issue.id = finding.issue_id
                AND issue.project_ref_id = finding.project_ref_id
@@ -229,6 +350,8 @@ def _replace_sqlite_technical_qc_freeze_exceptions(*, allow: bool) -> None:
                 AND issue.project_ref_id = NEW.project_ref_id
                 AND issue.review_item_id = NEW.review_item_id
                 AND issue.version_id = NEW.version_id
+                AND project.lifecycle_status = 'active'
+                AND project.deleted_at IS NULL
             )
             BEGIN
               SELECT RAISE(ABORT, 'finalized review item is frozen');
@@ -247,6 +370,8 @@ def _postgres_finalized_technical_qc_issue_authority() -> str:
          AND task.project_ref_id = finding.project_ref_id
          AND task.review_item_id = finding.review_item_id
          AND task.version_id = finding.version_id
+        JOIN project_refs project
+          ON project.id = finding.project_ref_id
         JOIN review_items item
           ON item.id = finding.review_item_id
          AND item.project_ref_id = finding.project_ref_id
@@ -274,9 +399,12 @@ def _postgres_finalized_technical_qc_issue_authority() -> str:
           AND task.claim_id IS NOT NULL
           AND length(trim(task.claim_id)) > 0
           AND task.lease_expires_at IS NOT NULL
+          AND task.lease_expires_at > CURRENT_TIMESTAMP
           AND playback.status = 'ready'
           AND playback.output_file_id = task.input_file_id
           AND version.playback_asset_id = task.input_file_id
+          AND project.lifecycle_status = 'active'
+          AND project.deleted_at IS NULL
           AND item.workflow_status = 'finalized'
           AND item.current_version_id = NEW.version_id
           AND item.current_version_is_current IS TRUE
@@ -287,6 +415,99 @@ def _postgres_finalized_technical_qc_issue_authority() -> str:
           AND NEW.lock_version = 1
       )
     """
+
+
+def _replace_postgresql_technical_qc_finding_guards(*, allow: bool) -> None:
+    op.execute(
+        "DROP TRIGGER IF EXISTS trg_technical_qc_findings_authority "
+        "ON technical_qc_findings"
+    )
+    op.execute("DROP FUNCTION IF EXISTS fcr_check_technical_qc_finding_authority()")
+    if not allow:
+        return
+    op.execute(
+        """
+        CREATE FUNCTION fcr_check_technical_qc_finding_authority()
+        RETURNS trigger AS $$
+        BEGIN
+          IF TG_OP = 'UPDATE' THEN
+            RAISE EXCEPTION 'technical QC findings are immutable';
+          END IF;
+          IF TG_OP = 'DELETE' THEN
+            IF EXISTS (
+              SELECT 1 FROM review_items item
+              WHERE item.id = OLD.review_item_id
+                AND item.project_ref_id = OLD.project_ref_id
+                AND item.workflow_status = 'finalized'
+            ) THEN
+              RAISE EXCEPTION 'finalized review item is frozen';
+            END IF;
+            RETURN OLD;
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1
+            FROM technical_qc_tasks task
+            JOIN project_refs project
+              ON project.id = task.project_ref_id
+            JOIN review_items item
+              ON item.id = task.review_item_id
+             AND item.project_ref_id = task.project_ref_id
+            JOIN review_versions version
+              ON version.id = task.version_id
+             AND version.project_ref_id = task.project_ref_id
+             AND version.review_item_id = task.review_item_id
+            JOIN media_derivative_tasks playback
+              ON playback.version_id = task.version_id
+             AND playback.project_ref_id = task.project_ref_id
+             AND playback.review_item_id = task.review_item_id
+             AND playback.kind = 'playback_faststart'
+            WHERE task.id = NEW.task_id
+              AND task.project_ref_id = NEW.project_ref_id
+              AND task.review_item_id = NEW.review_item_id
+              AND task.version_id = NEW.version_id
+              AND task.status = 'running'
+              AND task.claim_id IS NOT NULL
+              AND length(trim(task.claim_id)) > 0
+              AND task.lease_expires_at > CURRENT_TIMESTAMP
+              AND playback.status = 'ready'
+              AND playback.output_file_id = task.input_file_id
+              AND version.playback_asset_id = task.input_file_id
+              AND project.lifecycle_status = 'active'
+              AND project.deleted_at IS NULL
+              AND item.current_version_id = NEW.version_id
+              AND item.current_version_is_current IS TRUE
+              AND version.is_current IS TRUE
+              AND NEW.issue_id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM review_issues issue
+                WHERE issue.id = NEW.issue_id
+              )
+              AND (
+                item.workflow_status != 'finalized'
+                OR EXISTS (
+                  SELECT 1 FROM finalizations finalization
+                  WHERE finalization.id = item.active_finalization_id
+                    AND finalization.project_ref_id = item.project_ref_id
+                    AND finalization.review_item_id = item.id
+                    AND finalization.version_id = item.current_version_id
+                    AND finalization.status = 'active'
+                )
+              )
+          ) THEN
+            RAISE EXCEPTION 'technical QC finding authority invalid';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_technical_qc_findings_authority
+        BEFORE INSERT OR UPDATE OR DELETE ON technical_qc_findings
+        FOR EACH ROW EXECUTE FUNCTION fcr_check_technical_qc_finding_authority()
+        """
+    )
 
 
 def _replace_postgresql_identity_freeze() -> None:
@@ -337,17 +558,32 @@ def _replace_postgresql_identity_freeze() -> None:
               AND EXISTS (
                 SELECT 1
                 FROM technical_qc_findings finding
+                JOIN project_refs project
+                  ON project.id = finding.project_ref_id
                 WHERE finding.issue_id = OLD.id
                   AND finding.project_ref_id = OLD.project_ref_id
                   AND finding.review_item_id = OLD.review_item_id
                   AND finding.version_id = OLD.version_id
+                  AND project.lifecycle_status = 'active'
+                  AND project.deleted_at IS NULL
               )
+              AND (
+                NEW.status = OLD.status
+                OR (OLD.status = 'unresolved' AND NEW.status = 'resolved')
+              )
+              AND (
+                NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+                OR (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
+              )
+              AND NEW.lock_version = OLD.lock_version + 1
             );
           ELSIF TG_TABLE_NAME IN ('issue_revisions', 'annotation_sets')
               AND TG_OP = 'INSERT' THEN
             allow_technical_qc_change := EXISTS (
               SELECT 1
               FROM technical_qc_findings finding
+              JOIN project_refs project
+                ON project.id = finding.project_ref_id
               JOIN review_issues issue
                 ON issue.id = finding.issue_id
                AND issue.project_ref_id = finding.project_ref_id
@@ -357,6 +593,8 @@ def _replace_postgresql_identity_freeze() -> None:
                 AND issue.project_ref_id = NEW.project_ref_id
                 AND issue.review_item_id = NEW.review_item_id
                 AND issue.version_id = NEW.version_id
+                AND project.lifecycle_status = 'active'
+                AND project.deleted_at IS NULL
             );
           END IF;
           IF (
@@ -408,11 +646,17 @@ def _restore_0029_identity_freeze() -> None:
 def upgrade() -> None:
     _replace_finding_issue_foreign_key(deferred=True)
     if _dialect() == "sqlite":
+        _replace_sqlite_technical_qc_finding_guards(allow=True)
         _replace_sqlite_technical_qc_freeze_exceptions(allow=True)
     elif _dialect() == "postgresql":
+        _replace_postgresql_technical_qc_finding_guards(allow=True)
         _replace_postgresql_identity_freeze()
 
 
 def downgrade() -> None:
+    if _dialect() == "sqlite":
+        _replace_sqlite_technical_qc_finding_guards(allow=False)
+    elif _dialect() == "postgresql":
+        _replace_postgresql_technical_qc_finding_guards(allow=False)
     _restore_0029_identity_freeze()
     _replace_finding_issue_foreign_key(deferred=False)

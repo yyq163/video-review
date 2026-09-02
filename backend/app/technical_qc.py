@@ -290,6 +290,7 @@ def discover_ready_technical_qc_tasks(
         )
         .where(
             ProjectRefModel.deleted_at.is_(None),
+            ProjectRefModel.lifecycle_status == "active",
             MediaDerivativeTaskModel.kind == "playback_faststart",
             MediaDerivativeTaskModel.status == "ready",
             MediaDerivativeTaskModel.output_file_id.is_not(None),
@@ -369,6 +370,7 @@ def _claim_candidates(
             )
             .where(
                 ProjectRefModel.deleted_at.is_(None),
+                ProjectRefModel.lifecycle_status == "active",
                 MediaDerivativeTaskModel.status == "ready",
                 MediaDerivativeTaskModel.output_file_id == TechnicalQcTaskModel.input_file_id,
                 TechnicalQcTaskModel.attempts < max_attempts,
@@ -404,6 +406,7 @@ def _claim_candidates(
             )
             .where(
                 ProjectRefModel.deleted_at.is_(None),
+                ProjectRefModel.lifecycle_status == "active",
                 TechnicalQcTaskModel.project_ref_id == project_ref_id,
                 MediaDerivativeTaskModel.status == "ready",
                 MediaDerivativeTaskModel.output_file_id == TechnicalQcTaskModel.input_file_id,
@@ -644,19 +647,27 @@ def update_technical_qc_progress(
 ) -> bool:
     if processed_ms < 0:
         raise ValueError("processed_ms must be non-negative")
+    progressed_at = _utc(now)
     task = session.scalar(
         select(TechnicalQcTaskModel)
+        .join(
+            ProjectRefModel,
+            ProjectRefModel.id == TechnicalQcTaskModel.project_ref_id,
+        )
         .where(
             TechnicalQcTaskModel.id == task_id,
             TechnicalQcTaskModel.status == "running",
             TechnicalQcTaskModel.claim_id == claim_id,
+            TechnicalQcTaskModel.lease_expires_at > progressed_at,
+            ProjectRefModel.deleted_at.is_(None),
+            ProjectRefModel.lifecycle_status == "active",
         )
         .with_for_update(),
     )
     if task is None:
         return False
     task.processed_ms = min(task.total_ms, max(task.processed_ms, processed_ms))
-    task.updated_at = _utc(now)
+    task.updated_at = progressed_at
     session.flush()
     return True
 
@@ -671,18 +682,25 @@ def renew_technical_qc_lease(
 ) -> bool:
     if lease_seconds < 1:
         raise ValueError("lease_seconds must be positive")
+    renewed_at = _utc(now)
     task = session.scalar(
         select(TechnicalQcTaskModel)
+        .join(
+            ProjectRefModel,
+            ProjectRefModel.id == TechnicalQcTaskModel.project_ref_id,
+        )
         .where(
             TechnicalQcTaskModel.id == task_id,
             TechnicalQcTaskModel.status == "running",
             TechnicalQcTaskModel.claim_id == claim_id,
+            TechnicalQcTaskModel.lease_expires_at > renewed_at,
+            ProjectRefModel.deleted_at.is_(None),
+            ProjectRefModel.lifecycle_status == "active",
         )
         .with_for_update(),
     )
     if task is None:
         return False
-    renewed_at = _utc(now)
     task.lease_expires_at = renewed_at + timedelta(seconds=lease_seconds)
     task.updated_at = renewed_at
     session.flush()
@@ -696,18 +714,25 @@ def complete_technical_qc_task(
     *,
     now: datetime | None = None,
 ) -> bool:
+    completed_at = _utc(now)
     task = session.scalar(
         select(TechnicalQcTaskModel)
+        .join(
+            ProjectRefModel,
+            ProjectRefModel.id == TechnicalQcTaskModel.project_ref_id,
+        )
         .where(
             TechnicalQcTaskModel.id == task_id,
             TechnicalQcTaskModel.status == "running",
             TechnicalQcTaskModel.claim_id == claim_id,
+            TechnicalQcTaskModel.lease_expires_at > completed_at,
+            ProjectRefModel.deleted_at.is_(None),
+            ProjectRefModel.lifecycle_status == "active",
         )
         .with_for_update(),
     )
     if task is None:
         return False
-    completed_at = _utc(now)
     task.status = "complete"
     task.processed_ms = task.total_ms
     task.claim_id = None
@@ -726,12 +751,20 @@ def persist_technical_qc_probe(
     *,
     now: datetime | None = None,
 ) -> bool:
+    persisted_at = _utc(now)
     task = session.scalar(
         select(TechnicalQcTaskModel)
+        .join(
+            ProjectRefModel,
+            ProjectRefModel.id == TechnicalQcTaskModel.project_ref_id,
+        )
         .where(
             TechnicalQcTaskModel.id == task_id,
             TechnicalQcTaskModel.status == "running",
             TechnicalQcTaskModel.claim_id == claim_id,
+            TechnicalQcTaskModel.lease_expires_at > persisted_at,
+            ProjectRefModel.deleted_at.is_(None),
+            ProjectRefModel.lifecycle_status == "active",
         )
         .with_for_update(),
     )
@@ -742,7 +775,7 @@ def persist_technical_qc_probe(
     task.container_duration_ms = probe.total_ms
     task.total_ms = probe.total_ms
     task.processed_ms = min(task.processed_ms, task.total_ms)
-    task.updated_at = _utc(now)
+    task.updated_at = persisted_at
     session.flush()
     return True
 
@@ -820,6 +853,10 @@ def persist_technical_qc_findings(
 ) -> list[str]:
     task = session.scalar(
         select(TechnicalQcTaskModel)
+        .join(
+            ProjectRefModel,
+            ProjectRefModel.id == TechnicalQcTaskModel.project_ref_id,
+        )
         .where(
             TechnicalQcTaskModel.id == claim.task_id,
             TechnicalQcTaskModel.status == "running",
@@ -827,6 +864,9 @@ def persist_technical_qc_findings(
             TechnicalQcTaskModel.version_id == claim.version_id,
             TechnicalQcTaskModel.input_file_id == claim.input_file_id,
             TechnicalQcTaskModel.rule_version == claim.rule_version,
+            TechnicalQcTaskModel.lease_expires_at > _utc(),
+            ProjectRefModel.deleted_at.is_(None),
+            ProjectRefModel.lifecycle_status == "active",
         )
         .with_for_update(),
     )
@@ -1949,10 +1989,17 @@ def fail_technical_qc_task(
     failed_at = _utc(now)
     task = session.scalar(
         select(TechnicalQcTaskModel)
+        .join(
+            ProjectRefModel,
+            ProjectRefModel.id == TechnicalQcTaskModel.project_ref_id,
+        )
         .where(
             TechnicalQcTaskModel.id == task_id,
             TechnicalQcTaskModel.status == "running",
             TechnicalQcTaskModel.claim_id == claim_id,
+            TechnicalQcTaskModel.lease_expires_at > failed_at,
+            ProjectRefModel.deleted_at.is_(None),
+            ProjectRefModel.lifecycle_status == "active",
         )
         .with_for_update(),
     )
