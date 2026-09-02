@@ -48,7 +48,7 @@ from backend.app.modules.final_cut_review.infra.sqlalchemy_models import (
     TechnicalQcTaskModel,
 )
 from backend.app.safe_files import UnsafeFilePathError, pin_regular_file
-from backend.app.settings import Settings, get_database_settings, get_settings
+from backend.app.settings import Settings, get_database_settings
 
 
 RULE_VERSION = "technical-qc-v1"
@@ -817,6 +817,8 @@ def persist_technical_qc_findings(
     session: Session,
     claim: TechnicalQcClaim,
     intervals: Iterable[QcInterval],
+    *,
+    settings: Settings | None = None,
 ) -> list[str]:
     task = session.scalar(
         select(TechnicalQcTaskModel)
@@ -930,7 +932,10 @@ def persist_technical_qc_findings(
             ),
             write_guard=WriteGuardState(mode="none", verified=True),
         )
-        repository = SqlAlchemyReviewRepository(session, get_settings())
+        repository = SqlAlchemyReviewRepository(
+            session,
+            settings if settings is not None else get_database_settings(),
+        )
         for index, issue in enumerate(created_issues):
             repository.record_review_issue_created(
                 context,
@@ -2069,7 +2074,12 @@ def _process_technical_qc_claim(
             on_late_fatal=mark_fatal,
         )
         with _technical_qc_session(runtime_binding) as session:
-            persist_technical_qc_findings(session, claim, result.intervals)
+            persist_technical_qc_findings(
+                session,
+                claim,
+                result.intervals,
+                settings=settings,
+            )
             completed = complete_technical_qc_task(
                 session,
                 claim.task_id,

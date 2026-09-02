@@ -589,6 +589,83 @@ def test_automatic_finding_reuses_manual_issue_workflow_transition(
         assert retried.lock_version == transitioned_lock_version
 
 
+def test_worker_persists_positive_findings_without_web_write_guard_secret(
+    client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _project, item, db, claim = _claim_single_ready_task(
+        client,
+        "TASK6-WORKER-MINIMAL-CONFIG",
+    )
+    qc = _technical_qc()
+
+    monkeypatch.setattr(
+        qc,
+        "scan_technical_qc_claim",
+        lambda *_args, **_kwargs: qc.TechnicalQcScanResult(
+            intervals=(
+                qc.QcInterval(
+                    start_frame=1,
+                    end_frame=1,
+                    start_ms=40,
+                    end_ms=80,
+                    reason_codes=("short_shot",),
+                    values={"frame_count": 1},
+                ),
+            ),
+            processed_ms=claim.total_ms,
+            frames_processed=1,
+        ),
+    )
+    settings_module = importlib.import_module("backend.app.settings")
+    monkeypatch.delenv("WRITE_GUARD_SESSION_SECRET", raising=False)
+    monkeypatch.delenv("WRITE_GUARD_SESSION_SECRET_FILE", raising=False)
+    settings_module.get_settings.cache_clear()
+    worker_settings = SimpleNamespace(
+        storage_root=Path("/unused-by-controlled-scan"),
+        technical_qc_ffmpeg_command="/usr/bin/false",
+        technical_qc_timeout_seconds=5.0,
+        technical_qc_output_limit_bytes=64 * 1024,
+        technical_qc_lease_seconds=60,
+        technical_qc_worker_max_attempts=3,
+        technical_qc_worker_retry_delay_seconds=30,
+        technical_qc_sandbox_socket=None,
+    )
+    try:
+        status = qc._process_technical_qc_claim(
+            claim,
+            worker_settings,
+            runtime_binding=None,
+        )
+    finally:
+        settings_module.get_settings.cache_clear()
+
+    assert status == "complete"
+    models = importlib.import_module(
+        "backend.app.modules.final_cut_review.infra.sqlalchemy_models",
+    )
+    with db.SessionLocal() as session:
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+        findings = list(
+            session.scalars(
+                select(models.TechnicalQcFindingModel).where(
+                    models.TechnicalQcFindingModel.task_id == claim.task_id,
+                ),
+            ),
+        )
+        issues = list(
+            session.scalars(
+                select(models.ReviewIssueModel).where(
+                    models.ReviewIssueModel.review_item_id == item["id"],
+                ),
+            ),
+        )
+    assert task is not None
+    assert task.status == "complete"
+    assert task.error_code is None
+    assert len(findings) == len(issues) == 1
+
+
 def test_superseded_claim_does_not_create_issue_or_change_current_version_state(
     client: Any,
 ) -> None:
