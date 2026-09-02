@@ -28,6 +28,7 @@ export class InMemoryReviewQueries {
     this.store.assertProjectVisible(project);
     const progress = this.store.technicalQcProgressByProject.get(projectRefId);
     return {
+      activeTaskCount: progress?.activeTaskCount ?? 0,
       episodes: (progress?.episodes ?? [])
         .map((episode) => ({ ...episode }))
         .sort((left, right) =>

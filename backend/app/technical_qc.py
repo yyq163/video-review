@@ -29,6 +29,10 @@ from backend.app.modules.final_cut_review.application.context import (
     PrincipalRef,
     WriteGuardState,
 )
+from backend.app.modules.final_cut_review.domain.technical_qc import (
+    RULE_VERSION,
+    task_id_for_version,
+)
 from backend.app.modules.final_cut_review.infra import database as database_module
 from backend.app.modules.final_cut_review.infra.issue_workflow import (
     sync_item_workflow_for_current_issues,
@@ -51,7 +55,6 @@ from backend.app.safe_files import UnsafeFilePathError, pin_regular_file
 from backend.app.settings import Settings, get_database_settings
 
 
-RULE_VERSION = "technical-qc-v1"
 CONTINUOUS_LUMA_MIN_MS = 1_000
 SILENCE_MIN_MS = 2_000
 SHORT_SHOT_FRAME_COUNTS = frozenset({1, 2, 3})
@@ -255,11 +258,6 @@ def _utc(value: datetime | None = None) -> datetime:
     return current if current.tzinfo is not None else current.replace(tzinfo=timezone.utc)
 
 
-def _task_id(version_id: str) -> str:
-    digest = hashlib.sha256(f"technical-qc-task-v1\0{version_id}".encode()).hexdigest()
-    return f"tqc_{digest[:32]}"
-
-
 def discover_ready_technical_qc_tasks(
     session: Session,
     *,
@@ -319,7 +317,7 @@ def discover_ready_technical_qc_tasks(
             with session.begin_nested():
                 session.add(
                     TechnicalQcTaskModel(
-                        id=_task_id(version.id),
+                        id=task_id_for_version(version.id),
                         project_ref_id=version.project_ref_id,
                         review_item_id=version.review_item_id,
                         version_id=version.id,
@@ -844,14 +842,12 @@ def persist_technical_qc_findings(
     )
     if item is None:
         return []
-    if (
-        item.current_version_id != claim.version_id
-        or item.workflow_status == "finalized"
-    ):
+    if item.current_version_id != claim.version_id:
         return []
 
     issue_ids: list[str] = []
     created_issues: list[ReviewIssueModel] = []
+    finalized = item.workflow_status == "finalized"
     started_review = item.workflow_status == "pending_review"
     for interval in merge_overlapping_intervals(intervals):
         identity_hash = _finding_identity(claim, interval)
@@ -875,6 +871,23 @@ def persist_technical_qc_findings(
             )
             or 0
         ) + 1
+        finding = TechnicalQcFindingModel(
+            id=_stable_child_id("tqf", identity_hash),
+            task_id=claim.task_id,
+            project_ref_id=claim.project_ref_id,
+            review_item_id=claim.review_item_id,
+            version_id=claim.version_id,
+            identity_hash=identity_hash,
+            issue_id=issue_id,
+            start_frame=interval.start_frame,
+            end_frame=interval.end_frame,
+            start_ms=interval.start_ms,
+            end_ms=interval.end_ms,
+            reason_codes=list(interval.reason_codes),
+            value_details=dict(interval.values),
+        )
+        session.add(finding)
+        session.flush()
         issue = ReviewIssueModel(
             id=issue_id,
             project_ref_id=claim.project_ref_id,
@@ -900,28 +913,12 @@ def persist_technical_qc_findings(
                 annotation_set_id=None,
             ),
         )
-        session.add(
-            TechnicalQcFindingModel(
-                id=_stable_child_id("tqf", identity_hash),
-                task_id=claim.task_id,
-                project_ref_id=claim.project_ref_id,
-                review_item_id=claim.review_item_id,
-                version_id=claim.version_id,
-                identity_hash=identity_hash,
-                issue_id=issue_id,
-                start_frame=interval.start_frame,
-                end_frame=interval.end_frame,
-                start_ms=interval.start_ms,
-                end_ms=interval.end_ms,
-                reason_codes=list(interval.reason_codes),
-                value_details=dict(interval.values),
-            ),
-        )
         session.flush()
         issue_ids.append(issue_id)
         created_issues.append(issue)
     if created_issues:
-        sync_item_workflow_for_current_issues(session, item)
+        if not finalized:
+            sync_item_workflow_for_current_issues(session, item)
         context = ExecutionContext(
             entry_source="review",
             request_id=claim.claim_id,

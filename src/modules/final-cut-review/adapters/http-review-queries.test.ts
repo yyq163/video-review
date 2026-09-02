@@ -397,9 +397,10 @@ describe('HttpReviewQueries technical QC progress', () => {
     vi.unstubAllGlobals();
   });
 
-  it('uses the project-scoped running progress resource and maps only episode media time fields', async () => {
+  it('maps project active task count with running episode media time fields', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       data: {
+        active_task_count: 2,
         episodes: [
           { review_item_id: 'item-2', episode_no: 2, processed_ms: 250, total_ms: 1_000 },
           { review_item_id: 'item-1', episode_no: 1, processed_ms: 500, total_ms: 2_000 },
@@ -420,12 +421,13 @@ describe('HttpReviewQueries technical QC progress', () => {
       expect.objectContaining({ credentials: 'include' }),
     );
     expect(progress).toEqual({
+      activeTaskCount: 2,
       episodes: [
         { reviewItemId: 'item-2', episodeNo: 2, processedMs: 250, totalMs: 1_000 },
         { reviewItemId: 'item-1', episodeNo: 1, processedMs: 500, totalMs: 2_000 },
       ],
     });
-    expect(Object.keys(progress)).toEqual(['episodes']);
+    expect(Object.keys(progress)).toEqual(['activeTaskCount', 'episodes']);
     expect(Object.keys(progress.episodes[0])).toEqual([
       'reviewItemId',
       'episodeNo',

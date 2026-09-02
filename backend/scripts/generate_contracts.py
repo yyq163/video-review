@@ -34,6 +34,7 @@ OPERATION_REQUIRED_RESPONSES: dict[str, tuple[str, ...]] = {
     "complete_upload": ("422",),
 }
 OPERATION_SUCCESS_RESPONSES: dict[str, str] = {
+    "edit_rerun_project_technical_qc": "202",
     "review_prepare_package": "202",
 }
 BINARY_MEDIA_RESPONSES: dict[str, dict[str, set[str]]] = {
@@ -872,7 +873,14 @@ class TechnicalQcRunningEpisodeDTO(ContractModel):
 
 
 class TechnicalQcProgressDTO(ContractModel):
+    active_task_count: int = Field(ge=0)
     episodes: list[TechnicalQcRunningEpisodeDTO]
+
+
+class TechnicalQcRerunDTO(ContractModel):
+    project_ref_id: str
+    status: Literal["queued"]
+    queued_item_count: int = Field(ge=1)
 
 
 class PackageSnapshotItemDTO(ContractModel):
@@ -1355,7 +1363,14 @@ export interface TechnicalQcRunningEpisodeDTO {{
 }}
 
 export interface TechnicalQcProgressDTO {{
+  active_task_count: number;
   episodes: TechnicalQcRunningEpisodeDTO[];
+}}
+
+export interface TechnicalQcRerunDTO {{
+  project_ref_id: string;
+  status: "queued";
+  queued_item_count: number;
 }}
 
 export interface PackageSnapshotItem {{

@@ -49,7 +49,7 @@ def test_project_technical_qc_progress_query_exposes_only_running_episode_rows(c
     )
 
     assert response.status_code == 200, response.text
-    assert api_data(response) == {"episodes": []}
+    assert api_data(response) == {"active_task_count": 0, "episodes": []}
 
 
 def test_0026_clean_sqlite_round_trip_preserves_task_and_finding_schema(
@@ -742,7 +742,7 @@ def test_superseded_claim_does_not_create_issue_or_change_current_version_state(
     assert issue_count == 1
 
 
-def test_finalized_claim_completes_without_late_issue_or_retryable_failure(
+def test_finalized_claim_adds_late_issue_without_changing_finalization_or_failure(
     client: Any,
 ) -> None:
     project, item, db, claim = _claim_single_ready_task(client, "TASK6-FINALIZED-RACE")
@@ -756,11 +756,12 @@ def test_finalized_claim_completes_without_late_issue_or_retryable_failure(
         values={"pblack": 100.0},
     )
     with db.SessionLocal.begin() as session:
-        assert _technical_qc().persist_technical_qc_findings(
+        issue_ids = _technical_qc().persist_technical_qc_findings(
             session,
             claim,
             [interval],
-        ) == []
+        )
+        assert len(issue_ids) == 1
         assert _technical_qc().complete_technical_qc_task(
             session,
             claim.task_id,
@@ -782,7 +783,8 @@ def test_finalized_claim_completes_without_late_issue_or_retryable_failure(
         )
     assert authority is not None and authority.workflow_status == "finalized"
     assert task is not None and task.status == "complete" and task.error_code is None
-    assert issues == []
+    assert [issue.id for issue in issues] == issue_ids
+    assert authority.active_finalization_id is not None
 
 
 def test_automatic_issue_emits_manual_flow_events_and_system_audit_once(

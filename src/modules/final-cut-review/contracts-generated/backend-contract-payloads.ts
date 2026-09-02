@@ -109,6 +109,10 @@ export interface LockProjectFrameRatePayload {
   fps_den: number;
 }
 
+export interface RerunProjectTechnicalQcPayload {
+  project_ref_id: string;
+}
+
 export interface ArchiveProjectPayload {
   project_ref_id: string;
 }

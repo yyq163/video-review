@@ -4,6 +4,7 @@ capabilities:
     - review.project.read
     - review.project.create
     - review.project.update
+    - review.technical_qc.rerun
     - review.item.read
     - review.item.create
     - review.item.update

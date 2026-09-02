@@ -3,11 +3,13 @@ import {
   type ProjectDTO,
   type ProjectDeletionResultDTO,
   type ProjectSummaryDTO,
+  type TechnicalQcRerunDTO,
   type ReviewItemDTO,
   type ReviewVersionDTO,
   type ResponsibleEditorDTO,
 } from '../contracts-generated/backend-contract';
 import type { ReviewApiPort, ReviewProjectSummary, ReviewProjectSummaryItem } from '../ports';
+import type { TechnicalQcRerun } from '../contracts/types';
 import { settleWithConcurrencyLimit } from '../core/bounded-concurrency';
 import { ReviewDomainError } from '../core/errors';
 import {
@@ -114,6 +116,7 @@ type ProjectApi = Pick<
   | 'listResponsibleEditors'
   | 'getProjectSummary'
   | 'getTechnicalQcProgress'
+  | 'rerunProjectTechnicalQc'
   | 'getReviewItem'
   | 'getVersion'
   | 'getVersionIssues'
@@ -242,6 +245,29 @@ export class HttpReviewProjects implements ProjectApi {
     projectRefId,
     options,
   ) => this.queries.technicalQcProgress(projectRefId, options);
+
+  readonly rerunProjectTechnicalQc: ReviewApiPort['rerunProjectTechnicalQc'] = async (
+    input,
+    context,
+  ): Promise<TechnicalQcRerun> => {
+    this.transport.assertWriteContext(context, ['edit']);
+    const result = await this.transport.command<
+      TechnicalQcRerunDTO,
+      { project_ref_id: string }
+    >(
+      `/api/v1/final-cut-review/edit/projects/${input.projectRefId}/technical-qc/rerun`,
+      'RerunProjectTechnicalQc',
+      { project_ref_id: input.projectRefId },
+      context,
+      undefined,
+      { idempotent: true },
+    );
+    return {
+      projectRefId: result.project_ref_id,
+      status: result.status,
+      queuedItemCount: result.queued_item_count,
+    };
+  };
 
   readonly listProjects: ReviewApiPort['listProjects'] = async (options) => {
     const projects = await this.transport.requestList<ProjectDTO[]>(

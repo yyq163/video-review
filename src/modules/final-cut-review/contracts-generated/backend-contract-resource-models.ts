@@ -63,7 +63,14 @@ export interface TechnicalQcRunningEpisodeDTO {
 }
 
 export interface TechnicalQcProgressDTO {
+  active_task_count: number;
   episodes: TechnicalQcRunningEpisodeDTO[];
+}
+
+export interface TechnicalQcRerunDTO {
+  project_ref_id: string;
+  status: "queued";
+  queued_item_count: number;
 }
 
 export interface PackageSnapshotItem {

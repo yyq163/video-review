@@ -31,6 +31,7 @@ export class HttpReviewQueries {
       { signal: options?.signal },
     );
     return {
+      activeTaskCount: progress.active_task_count,
       episodes: progress.episodes.map((episode) => ({
         reviewItemId: episode.review_item_id,
         episodeNo: episode.episode_no,

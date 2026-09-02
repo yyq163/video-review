@@ -481,7 +481,10 @@ def test_last_attempt_crash_is_reconciled_to_terminal_failed_and_hidden_from_pro
         f"/api/v1/final-cut-review/projects/{project['project_ref_id']}/technical-qc-progress",
     )
     assert response.status_code == 200
-    assert response.json()["data"] == {"episodes": []}
+    assert response.json()["data"] == {
+        "active_task_count": 0,
+        "episodes": [],
+    }
 
 
 def test_completed_future_immediately_refills_slot_so_slow_project_does_not_block_other_project(

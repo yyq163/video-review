@@ -488,6 +488,29 @@ paths:
                 $ref: "#/components/schemas/EnvelopeProject"
         <<: *standardNon200Responses
 
+  /final-cut-review/edit/projects/{project_ref_id}/technical-qc/rerun:
+    post:
+      operationId: edit_rerun_project_technical_qc
+      tags: [commands]
+      x-command-type: RerunProjectTechnicalQc
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RerunProjectTechnicalQcCommandEnvelope"
+      responses:
+        "202":
+          description: Project current-version technical review tasks accepted for rerun.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeTechnicalQcRerun"
+        <<: *standardNon200Responses
+
   /final-cut-review/edit/responsible-editors:
     post:
       operationId: edit_create_responsible_editor
@@ -1746,6 +1769,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/TechnicalQcProgressDTO"
+    EnvelopeTechnicalQcRerun:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeAny"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TechnicalQcRerunDTO"
     EnvelopePackageSnapshot:
       allOf:
         - $ref: "#/components/schemas/EnvelopeAny"
@@ -1802,6 +1832,7 @@ components:
         - CreateProject
         - UpdateProject
         - LockProjectFrameRate
+        - RerunProjectTechnicalQc
         - ArchiveProject
         - RestoreProject
         - DeleteProject
@@ -1847,6 +1878,13 @@ components:
           properties:
             command_type: {type: string, const: LockProjectFrameRate}
             payload: {$ref: "#/components/schemas/LockProjectFrameRatePayload"}
+    RerunProjectTechnicalQcCommandEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/CommandEnvelopeBase"
+        - type: object
+          properties:
+            command_type: {type: string, const: RerunProjectTechnicalQc}
+            payload: {$ref: "#/components/schemas/ProjectAncestryPayload"}
     ArchiveProjectCommandEnvelope:
       allOf:
         - $ref: "#/components/schemas/CommandEnvelopeBase"
@@ -2715,13 +2753,22 @@ components:
         total_ms: {type: integer, minimum: 1}
     TechnicalQcProgressDTO:
       type: object
-      required: [episodes]
+      required: [active_task_count, episodes]
       additionalProperties: false
       properties:
+        active_task_count: {type: integer, minimum: 0}
         episodes:
           type: array
           items:
             $ref: "#/components/schemas/TechnicalQcRunningEpisodeDTO"
+    TechnicalQcRerunDTO:
+      type: object
+      required: [project_ref_id, status, queued_item_count]
+      additionalProperties: false
+      properties:
+        project_ref_id: {type: string, minLength: 1}
+        status: {type: string, const: queued}
+        queued_item_count: {type: integer, minimum: 1}
     PackageSnapshotDTO:
       type: object
       required: [id, project_ref_id, status, package_filename, expires_at, file_count, total_bytes, items, created_at, updated_at]

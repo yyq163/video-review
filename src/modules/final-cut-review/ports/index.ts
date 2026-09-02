@@ -19,6 +19,7 @@ import type {
   ReviewWorkspace,
   ResponsibleEditor,
   StoredOriginalFile,
+  TechnicalQcRerun,
   VersionId,
 } from '../contracts/types';
 
@@ -96,6 +97,7 @@ export interface TechnicalQcRunningEpisode {
 }
 
 export interface TechnicalQcProgress {
+  readonly activeTaskCount: number;
   readonly episodes: TechnicalQcRunningEpisode[];
 }
 
@@ -180,6 +182,10 @@ export interface ReviewCommandPort {
     input: { projectRefId: ProjectRefId; confirmed: true },
     context: ExecutionContext,
   ): Promise<ReviewProjectSummary>;
+  rerunProjectTechnicalQc(
+    input: { projectRefId: ProjectRefId },
+    context: ExecutionContext,
+  ): Promise<TechnicalQcRerun>;
   createReviewItemWithVersion(
     input: {
       projectRefId: ProjectRefId;

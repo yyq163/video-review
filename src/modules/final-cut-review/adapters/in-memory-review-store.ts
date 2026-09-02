@@ -56,6 +56,7 @@ export class InMemoryReviewStore {
     }
     for (const [projectRefId, progress] of Object.entries(options.technicalQcProgressByProject ?? {})) {
       this.technicalQcProgressByProject.set(projectRefId, {
+        activeTaskCount: progress.activeTaskCount ?? 0,
         episodes: progress.episodes.map((episode) => ({ ...episode })),
       });
     }

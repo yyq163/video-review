@@ -12,6 +12,7 @@
     "review.project.read",
     "review.project.create",
     "review.project.update",
+    "review.technical_qc.rerun",
     "review.project.archive",
     "review.project.restore",
     "review.project.delete",

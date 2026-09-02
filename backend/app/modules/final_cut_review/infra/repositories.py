@@ -25,6 +25,10 @@ from sqlalchemy.orm.exc import StaleDataError
 from backend.app.modules.final_cut_review.application.context import ExecutionContext
 from backend.app.modules.final_cut_review.domain import invariants
 from backend.app.modules.final_cut_review.domain.errors import ReviewError, not_found
+from backend.app.modules.final_cut_review.domain.technical_qc import (
+    RULE_VERSION as TECHNICAL_QC_RULE_VERSION,
+    task_id_for_version as technical_qc_task_id_for_version,
+)
 from backend.app.modules.review_contracts.generated import (
     ALLOWED_FRAME_RATE_PAIRS,
     DOMAIN_EVENT_TYPES,
@@ -39,6 +43,7 @@ from backend.app.modules.review_contracts.generated import (
     ProjectSummaryFinalizationDTO,
     ProjectSummaryItemDTO,
     TechnicalQcProgressDTO,
+    TechnicalQcRerunDTO,
     TechnicalQcRunningEpisodeDTO,
     ReviewAnnotationSetDTO,
     ReviewAnnotationShape,
@@ -83,6 +88,7 @@ from .sqlalchemy_models import (
     ReviewItemModel,
     ReviewThreadMessageModel,
     ReviewVersionModel,
+    TechnicalQcFindingModel,
     TechnicalQcTaskModel,
     UploadSessionModel,
     utcnow,
@@ -765,6 +771,7 @@ class SqlAlchemyReviewRepository:
             "CreateProject": self.create_project,
             "UpdateProject": self.update_project,
             "LockProjectFrameRate": self.lock_project_frame_rate,
+            "RerunProjectTechnicalQc": self.rerun_project_technical_qc,
             "CreateResponsibleEditor": self.create_responsible_editor,
             "RenameResponsibleEditor": self.rename_responsible_editor,
             "ArchiveProject": self.archive_project,
@@ -1385,6 +1392,28 @@ class SqlAlchemyReviewRepository:
             raise not_found()
         return issue
 
+    def _technical_qc_issue_is_linked(self, issue: ReviewIssueModel) -> bool:
+        return self.session.scalar(
+            select(TechnicalQcFindingModel.id).where(
+                TechnicalQcFindingModel.issue_id == issue.id,
+                TechnicalQcFindingModel.project_ref_id == issue.project_ref_id,
+                TechnicalQcFindingModel.review_item_id == issue.review_item_id,
+                TechnicalQcFindingModel.version_id == issue.version_id,
+            )
+        ) is not None
+
+    def _ensure_issue_writable(
+        self,
+        item: ReviewItemModel,
+        issue: ReviewIssueModel,
+    ) -> None:
+        if (
+            item.workflow_status == "finalized"
+            and self._technical_qc_issue_is_linked(issue)
+        ):
+            return
+        invariants.ensure_issue_writable(item.workflow_status)
+
     def _get_revision(self, issue_id: str, revision_id: str) -> ReviewIssueRevisionModel:
         revision = self.session.scalar(
             select(ReviewIssueRevisionModel).where(ReviewIssueRevisionModel.id == revision_id, ReviewIssueRevisionModel.issue_id == issue_id)
@@ -1572,6 +1601,135 @@ class SqlAlchemyReviewRepository:
         self.session.refresh(project)
         self._event("review.project.updated", context, project.id, "project", project.id, project.lock_version)
         return self.project_dto(project)
+
+    def rerun_project_technical_qc(
+        self,
+        payload: dict[str, Any],
+        context: ExecutionContext,
+        expected_version: int | None,
+    ) -> dict[str, Any]:
+        del context, expected_version
+        project = self._get_project(payload["project_ref_id"], for_update=True)
+        self._assert_project_active(project)
+
+        active_task_count = int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(TechnicalQcTaskModel)
+                .where(
+                    TechnicalQcTaskModel.project_ref_id == project.id,
+                    TechnicalQcTaskModel.status.in_(("queued", "running")),
+                )
+            )
+            or 0
+        )
+        if active_task_count:
+            raise ReviewError(
+                "REVIEW_IN_PROGRESS",
+                "该项目已有技术审查正在排队或运行",
+            )
+
+        items = list(
+            self.session.scalars(
+                select(ReviewItemModel)
+                .where(ReviewItemModel.project_ref_id == project.id)
+                .order_by(
+                    case((ReviewItemModel.episode_no.is_(None), 1), else_=0),
+                    ReviewItemModel.episode_no,
+                    ReviewItemModel.id,
+                )
+                .with_for_update()
+            )
+        )
+        if not items:
+            raise ReviewError("RESOURCE_STATE_CONFLICT", "项目没有可技术审查的分集")
+
+        targets: list[
+            tuple[
+                ReviewVersionModel,
+                MediaDerivativeTaskModel,
+                TechnicalQcTaskModel | None,
+            ]
+        ] = []
+        for item in items:
+            if not item.current_version_id:
+                raise ReviewError("RESOURCE_STATE_CONFLICT", "分集缺少当前版本")
+            version = self._get_version(
+                project.id,
+                item.id,
+                item.current_version_id,
+                for_update=True,
+            )
+            if not version.is_current:
+                raise ReviewError("VERSION_NOT_CURRENT", "分集当前版本身份不一致")
+            derivative = self.session.scalar(
+                select(MediaDerivativeTaskModel)
+                .where(
+                    MediaDerivativeTaskModel.project_ref_id == project.id,
+                    MediaDerivativeTaskModel.review_item_id == item.id,
+                    MediaDerivativeTaskModel.version_id == version.id,
+                    MediaDerivativeTaskModel.kind == "playback_faststart",
+                )
+                .with_for_update()
+            )
+            if (
+                derivative is None
+                or derivative.status != "ready"
+                or derivative.output_file_id is None
+                or derivative.output_file_id != version.playback_asset_id
+            ):
+                raise ReviewError("PLAYBACK_NOT_READY", "存在播放代理尚未就绪的分集")
+            self._assert_playback_ready(version)
+            task = self.session.scalar(
+                select(TechnicalQcTaskModel)
+                .where(TechnicalQcTaskModel.version_id == version.id)
+                .with_for_update()
+            )
+            targets.append((version, derivative, task))
+
+        now = utcnow()
+        for version, derivative, task in targets:
+            if task is None:
+                task = TechnicalQcTaskModel(
+                    id=technical_qc_task_id_for_version(version.id),
+                    project_ref_id=version.project_ref_id,
+                    review_item_id=version.review_item_id,
+                    version_id=version.id,
+                    input_file_id=derivative.output_file_id or "",
+                    status="queued",
+                    processed_ms=0,
+                    total_ms=version.duration_ms,
+                    rule_version=TECHNICAL_QC_RULE_VERSION,
+                    attempts=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+                self.session.add(task)
+                continue
+            task.input_file_id = derivative.output_file_id or ""
+            task.status = "queued"
+            task.claim_id = None
+            task.lease_expires_at = None
+            task.processed_ms = 0
+            task.total_ms = version.duration_ms
+            task.video_frame_count = None
+            task.video_duration_ms = None
+            task.container_duration_ms = None
+            task.error_code = None
+            task.rule_version = TECHNICAL_QC_RULE_VERSION
+            task.attempts = 0
+            task.next_attempt_at = None
+            task.created_at = now
+            task.updated_at = now
+            task.started_at = None
+            task.completed_at = None
+
+        self.session.flush()
+        return TechnicalQcRerunDTO(
+            project_ref_id=project.id,
+            status="queued",
+            queued_item_count=len(targets),
+        ).model_dump(mode="json")
 
     @staticmethod
     def responsible_editor_dto(editor: ResponsibleEditorModel) -> dict[str, Any]:
@@ -2058,7 +2216,7 @@ class SqlAlchemyReviewRepository:
         self._assert_project_active(project)
         item = self._get_item(project.id, payload["review_item_id"], for_update=True)
         issue = self._get_issue(project.id, item.id, payload["version_id"], payload["issue_id"])
-        invariants.ensure_issue_writable(item.workflow_status)
+        self._ensure_issue_writable(item, issue)
         invariants.ensure_current_version(issue.version_id, item.current_version_id or "")
         self._expect_lock(issue, expected_version)
         current_revision = self._get_revision(issue.id, issue.current_revision_id or "")
@@ -2135,7 +2293,7 @@ class SqlAlchemyReviewRepository:
         self._assert_project_active(project)
         item = self._get_item(project.id, payload["review_item_id"], for_update=True)
         issue = self._get_issue(project.id, item.id, payload["version_id"], payload["issue_id"])
-        invariants.ensure_issue_writable(item.workflow_status)
+        self._ensure_issue_writable(item, issue)
         invariants.ensure_current_version(issue.version_id, item.current_version_id or "")
         self._expect_lock(issue, expected_version)
         if issue.status == "resolved":
@@ -2144,7 +2302,8 @@ class SqlAlchemyReviewRepository:
         issue.lock_version += 1
         issue.updated_at = utcnow()
         self.session.flush()
-        self._sync_item_workflow_for_current_issues(item)
+        if item.workflow_status != "finalized":
+            self._sync_item_workflow_for_current_issues(item)
         self._event(
             "review.issue.resolved",
             context,
@@ -2163,7 +2322,7 @@ class SqlAlchemyReviewRepository:
         self._assert_project_active(project)
         item = self._get_item(project.id, payload["review_item_id"], for_update=True)
         issue = self._get_issue(project.id, item.id, payload["version_id"], payload["issue_id"])
-        invariants.ensure_issue_writable(item.workflow_status)
+        self._ensure_issue_writable(item, issue)
         invariants.ensure_current_version(issue.version_id, item.current_version_id or "")
         self._expect_lock(issue, expected_version)
         if issue.status == "unresolved":
@@ -2172,7 +2331,8 @@ class SqlAlchemyReviewRepository:
         issue.lock_version += 1
         issue.updated_at = utcnow()
         self.session.flush()
-        self._sync_item_workflow_for_current_issues(item)
+        if item.workflow_status != "finalized":
+            self._sync_item_workflow_for_current_issues(item)
         self._event(
             "review.issue.reopened",
             context,
@@ -2197,7 +2357,7 @@ class SqlAlchemyReviewRepository:
             payload["issue_id"],
             include_deleted=True,
         )
-        invariants.ensure_issue_writable(item.workflow_status)
+        self._ensure_issue_writable(item, issue)
         invariants.ensure_current_version(issue.version_id, item.current_version_id or "")
         self._expect_lock(issue, expected_version)
         if issue.deleted_at is not None:
@@ -2206,7 +2366,8 @@ class SqlAlchemyReviewRepository:
         issue.lock_version += 1
         issue.updated_at = utcnow()
         self.session.flush()
-        self._sync_item_workflow_for_current_issues(item)
+        if item.workflow_status != "finalized":
+            self._sync_item_workflow_for_current_issues(item)
         self._event(
             "review.issue.deleted",
             context,
@@ -4048,6 +4209,17 @@ class SqlAlchemyReviewRepository:
     def get_project_technical_qc_progress(self, project_ref_id: str) -> dict[str, Any]:
         project = self._get_project(project_ref_id)
         self._assert_project_visible(project)
+        active_task_count = int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(TechnicalQcTaskModel)
+                .where(
+                    TechnicalQcTaskModel.project_ref_id == project_ref_id,
+                    TechnicalQcTaskModel.status.in_(("queued", "running")),
+                )
+            )
+            or 0
+        )
         rows = self.session.execute(
             select(
                 TechnicalQcTaskModel.review_item_id,
@@ -4072,6 +4244,7 @@ class SqlAlchemyReviewRepository:
             )
         ).all()
         return TechnicalQcProgressDTO(
+            active_task_count=active_task_count,
             episodes=[
                 TechnicalQcRunningEpisodeDTO(
                     review_item_id=review_item_id,

@@ -650,6 +650,8 @@ class TechnicalQcFindingModel(Base):
             ],
             name="fk_technical_qc_findings_issue_identity",
             ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         CheckConstraint("length(identity_hash) = 64", name="ck_technical_qc_findings_identity"),
         CheckConstraint(

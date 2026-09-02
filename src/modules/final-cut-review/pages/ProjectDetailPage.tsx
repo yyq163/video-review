@@ -395,7 +395,8 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
     mutations.createResponsibleEditor.isPending ||
     mutations.renameResponsibleEditor.isPending ||
     mutations.finalizeProject.isPending ||
-    mutations.revokeProjectFinalization.isPending;
+    mutations.revokeProjectFinalization.isPending ||
+    mutations.rerunProjectTechnicalQc.isPending;
   const itemActionPending =
     mutations.updateReviewItem.isPending ||
     mutations.deleteReviewItem.isPending ||
@@ -460,6 +461,17 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
         await mutations.finalizeProject.mutateAsync({ projectRefId, confirmed: true });
         setProjectActionMessage('项目全部分集已定稿。');
       }
+    } catch (caught) {
+      setProjectActionError(actionError(caught));
+    }
+  };
+
+  const rerunProjectTechnicalQc = async () => {
+    setProjectActionError(null);
+    setProjectActionMessage(null);
+    try {
+      const result = await mutations.rerunProjectTechnicalQc.mutateAsync({ projectRefId });
+      setProjectActionMessage(`已提交 ${result.queuedItemCount} 集技术审查。`);
     } catch (caught) {
       setProjectActionError(actionError(caught));
     }
@@ -658,6 +670,22 @@ export function ProjectDetailPage(props: { entryMode: EntryMode }) {
             <CapabilityGate entryMode={props.entryMode} capability="review.project.delete">
               <button className="fj-review-secondary is-danger" disabled={projectActionPending} onClick={deleteProject} type="button">
                 删除项目
+              </button>
+            </CapabilityGate>
+          ) : null}
+          {!isArchived ? (
+            <CapabilityGate entryMode={props.entryMode} capability="review.technical_qc.rerun">
+              <button
+                className="fj-review-secondary"
+                disabled={
+                  projectActionPending
+                  || items.length === 0
+                  || (technicalQcProgress.data?.activeTaskCount ?? 0) > 0
+                }
+                onClick={() => void rerunProjectTechnicalQc()}
+                type="button"
+              >
+                重新进行技术审查
               </button>
             </CapabilityGate>
           ) : null}

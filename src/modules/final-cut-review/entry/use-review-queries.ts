@@ -649,6 +649,15 @@ export function useReviewMutations(mode: EntryMode) {
         queryClient.invalidateQueries({ queryKey: reviewKeys.projects });
       },
     }),
+    rerunProjectTechnicalQc: useMutation({
+      mutationFn: (input: Parameters<typeof api.rerunProjectTechnicalQc>[0]) =>
+        api.rerunProjectTechnicalQc(input, context()),
+      onSuccess: async (result) => {
+        await queryClient.invalidateQueries({
+          queryKey: reviewKeys.technicalQcProgress(result.projectRefId),
+        });
+      },
+    }),
     createReviewItemWithVersion: useMutation({
       mutationFn: (input: Parameters<typeof api.createReviewItemWithVersion>[0]) =>
         api.createReviewItemWithVersion(input, context()),

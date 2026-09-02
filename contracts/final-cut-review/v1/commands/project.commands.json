@@ -52,6 +52,19 @@
       }
     },
     {
+      "command_type": "RerunProjectTechnicalQc",
+      "capability": "review.technical_qc.rerun",
+      "idempotent": true,
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_ref_id"],
+        "properties": {
+          "project_ref_id": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
       "command_type": "ArchiveProject",
       "capability": "review.project.archive",
       "idempotent": false,

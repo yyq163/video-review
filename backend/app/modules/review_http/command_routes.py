@@ -38,6 +38,7 @@ COMMAND_ROUTE_TYPES = {
     "edit_create_project": "CreateProject",
     "edit_update_project": "UpdateProject",
     "edit_lock_project_frame_rate": "LockProjectFrameRate",
+    "edit_rerun_project_technical_qc": "RerunProjectTechnicalQc",
     "edit_create_responsible_editor": "CreateResponsibleEditor",
     "edit_rename_responsible_editor": "RenameResponsibleEditor",
     "review_archive_project": "ArchiveProject",
@@ -481,6 +482,27 @@ def edit_lock_project_frame_rate(
         deps,
         idempotency_key,
         if_match,
+    )
+
+
+@router.post("/edit/projects/{project_ref_id}/technical-qc/rerun")
+def edit_rerun_project_technical_qc(
+    project_ref_id: str,
+    response: Response,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    return _execute(
+        "edit",
+        "RerunProjectTechnicalQc",
+        envelope,
+        {"project_ref_id": project_ref_id},
+        deps,
+        idempotency_key,
+        None,
+        response=response,
+        success_status=202,
     )
 
 

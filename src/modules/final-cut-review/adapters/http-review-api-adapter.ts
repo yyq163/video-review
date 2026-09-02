@@ -15,6 +15,7 @@ export class HttpReviewApiAdapter implements ReviewApiPort {
   readonly listResponsibleEditors: ReviewApiPort['listResponsibleEditors'];
   readonly getProjectSummary: ReviewApiPort['getProjectSummary'];
   readonly getTechnicalQcProgress: ReviewApiPort['getTechnicalQcProgress'];
+  readonly rerunProjectTechnicalQc: ReviewApiPort['rerunProjectTechnicalQc'];
   readonly getReviewItem: ReviewApiPort['getReviewItem'];
   readonly getVersion: ReviewApiPort['getVersion'];
   readonly getVersionIssues: ReviewApiPort['getVersionIssues'];
@@ -72,6 +73,7 @@ export class HttpReviewApiAdapter implements ReviewApiPort {
     this.listResponsibleEditors = projects.listResponsibleEditors;
     this.getProjectSummary = projects.getProjectSummary;
     this.getTechnicalQcProgress = projects.getTechnicalQcProgress;
+    this.rerunProjectTechnicalQc = projects.rerunProjectTechnicalQc;
     this.getReviewItem = projects.getReviewItem;
     this.getVersion = projects.getVersion;
     this.getVersionIssues = projects.getVersionIssues;

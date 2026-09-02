@@ -7,6 +7,7 @@ export type Capability =
   | 'review.project.archive'
   | 'review.project.restore'
   | 'review.project.delete'
+  | 'review.technical_qc.rerun'
   | 'review.item.read'
   | 'review.item.create'
   | 'review.item.update'
@@ -322,4 +323,10 @@ export interface ExecutionContext {
   entryMode: EntryMode;
   requestId: string;
   createdAt: string;
+}
+
+export interface TechnicalQcRerun {
+  projectRefId: ProjectRefId;
+  status: 'queued';
+  queuedItemCount: number;
 }
