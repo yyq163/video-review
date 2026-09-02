@@ -902,7 +902,7 @@ def persist_technical_qc_findings(
         or task.input_file_id != claim.input_file_id
         or task.rule_version != claim.rule_version
     ):
-        return []
+        raise TechnicalQcError("TECHNICAL_QC_LEASE_LOST", retryable=False)
     item = session.scalar(
         select(ReviewItemModel)
         .where(
@@ -912,9 +912,9 @@ def persist_technical_qc_findings(
         .with_for_update(),
     )
     if item is None:
-        return []
+        raise TechnicalQcError("TECHNICAL_QC_LEASE_LOST", retryable=False)
     if item.current_version_id != claim.version_id:
-        return []
+        raise TechnicalQcError("TECHNICAL_QC_LEASE_LOST", retryable=False)
 
     issue_ids: list[str] = []
     created_issues: list[ReviewIssueModel] = []
@@ -2161,6 +2161,8 @@ def _process_technical_qc_claim(
             on_fatal(exc)
         raise
     except TechnicalQcError as exc:
+        if exc.code == "TECHNICAL_QC_LEASE_LOST":
+            return "skipped"
         if (
             exc.code == "TECHNICAL_QC_SCAN_CANCELLED"
             and (_WORKER_STOP.is_set() or _WORKER_FATAL.is_set())

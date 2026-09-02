@@ -388,11 +388,13 @@ def test_expired_claim_cannot_persist_a_finalized_technical_opinion(
         values={"pblack": 100.0},
     )
     with db.SessionLocal.begin() as session:
-        assert qc.persist_technical_qc_findings(
-            session,
-            claim,
-            [interval],
-        ) == []
+        with pytest.raises(qc.TechnicalQcError) as caught:
+            qc.persist_technical_qc_findings(
+                session,
+                claim,
+                [interval],
+            )
+        assert caught.value.code == "TECHNICAL_QC_LEASE_LOST"
 
     with db.SessionLocal() as session:
         issues = list(
@@ -577,7 +579,9 @@ def test_worker_does_not_complete_after_playback_proxy_drifts_with_no_new_findin
         derivative.output_file_id = None
 
     with db.SessionLocal.begin() as session:
-        assert qc.persist_technical_qc_findings(session, claim, []) == []
+        with pytest.raises(qc.TechnicalQcError) as caught:
+            qc.persist_technical_qc_findings(session, claim, [])
+        assert caught.value.code == "TECHNICAL_QC_LEASE_LOST"
         assert not qc.complete_technical_qc_task(
             session,
             claim,
@@ -877,11 +881,13 @@ def test_archived_project_task_cannot_be_claimed_or_persist_late_findings(
         values={"pblack": 100.0},
     )
     with db.SessionLocal.begin() as session:
-        assert qc.persist_technical_qc_findings(
-            session,
-            claim,
-            [interval],
-        ) == []
+        with pytest.raises(qc.TechnicalQcError) as caught:
+            qc.persist_technical_qc_findings(
+                session,
+                claim,
+                [interval],
+            )
+        assert caught.value.code == "TECHNICAL_QC_LEASE_LOST"
     with db.SessionLocal() as session:
         issues = list(
             session.scalars(
@@ -894,3 +900,87 @@ def test_archived_project_task_cannot_be_claimed_or_persist_late_findings(
     assert issues == []
     assert task is not None
     assert task.status == "running"
+
+
+def test_worker_skips_when_authority_recovers_after_finding_persist_rejection(
+    client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, item = create_project_item(client, code="TQC-AUTHORITY-RECOVERY")
+    _complete_initial_qc(project["project_ref_id"])
+    finalize(client, project["project_ref_id"], item)
+    queued = _rerun(client, project["project_ref_id"])
+    assert queued.status_code == 202, queued.text
+    qc, db, models = _modules()
+    with db.SessionLocal.begin() as session:
+        claim = qc.claim_technical_qc_tasks(
+            session,
+            limit=1,
+            per_project_limit=1,
+            max_attempts=3,
+            lease_seconds=60,
+        )[0]
+
+    interval = qc.QcInterval(
+        start_frame=5,
+        end_frame=5,
+        start_ms=200,
+        end_ms=240,
+        reason_codes=("black_frame",),
+        values={"pblack": 100.0},
+    )
+
+    def archive_during_scan(*_args: Any, **_kwargs: Any) -> Any:
+        with db.SessionLocal.begin() as session:
+            project_row = session.get(
+                models.ProjectRefModel,
+                project["project_ref_id"],
+            )
+            assert project_row is not None
+            project_row.lifecycle_status = "archived"
+        return qc.TechnicalQcScanResult(
+            intervals=(interval,),
+            processed_ms=1_000,
+            frames_processed=25,
+            video_frame_count=25,
+            video_duration_ms=1_000,
+            total_ms=1_000,
+        )
+
+    real_persist = qc.persist_technical_qc_findings
+
+    def persist_then_restore(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return real_persist(*args, **kwargs)
+        finally:
+            with db.SessionLocal.begin() as session:
+                project_row = session.get(
+                    models.ProjectRefModel,
+                    project["project_ref_id"],
+                )
+                assert project_row is not None
+                project_row.lifecycle_status = "active"
+
+    monkeypatch.setattr(qc, "scan_technical_qc_claim", archive_during_scan)
+    monkeypatch.setattr(qc, "persist_technical_qc_findings", persist_then_restore)
+
+    outcome = qc._process_technical_qc_claim(
+        claim,
+        _settings(concurrency=1, per_project=1),
+        runtime_binding=None,
+    )
+
+    assert outcome == "skipped"
+    with db.SessionLocal() as session:
+        task = session.get(models.TechnicalQcTaskModel, claim.task_id)
+        issues = list(
+            session.scalars(
+                select(models.ReviewIssueModel).where(
+                    models.ReviewIssueModel.review_item_id == item["id"]
+                )
+            )
+        )
+    assert task is not None
+    assert task.status == "running"
+    assert task.claim_id == claim.claim_id
+    assert issues == []

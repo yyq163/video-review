@@ -714,11 +714,13 @@ def test_superseded_claim_does_not_create_issue_or_change_current_version_state(
         values={"pblack": 100.0},
     )
     with db.SessionLocal.begin() as session:
-        assert _technical_qc().persist_technical_qc_findings(
-            session,
-            claim,
-            [interval],
-        ) == []
+        with pytest.raises(_technical_qc().TechnicalQcError) as caught:
+            _technical_qc().persist_technical_qc_findings(
+                session,
+                claim,
+                [interval],
+            )
+        assert caught.value.code == "TECHNICAL_QC_LEASE_LOST"
 
     models = importlib.import_module(
         "backend.app.modules.final_cut_review.infra.sqlalchemy_models",
