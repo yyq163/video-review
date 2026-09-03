@@ -110,6 +110,10 @@ def test_openapi_contract_has_complete_runtime_shapes() -> None:
         "authorize_package_download",
         "complete_upload",
     }
+    accepted_operation_ids = {
+        "edit_rerun_project_technical_qc",
+        "review_prepare_package",
+    }
     assert generator.BODYLESS_OPERATION_IDS == bodyless_operation_ids
     openapi = yaml.safe_load((root / "contracts/final-cut-review/v1/openapi.yaml").read_text(encoding="utf-8"))
     schemas = openapi["components"]["schemas"]
@@ -127,7 +131,7 @@ def test_openapi_contract_has_complete_runtime_shapes() -> None:
             responses = operation["responses"]
             seen_201 = seen_201 or "201" in responses
             seen_202 = seen_202 or "202" in responses
-            success_status = "202" if operation["operationId"] == "review_prepare_package" else "200"
+            success_status = "202" if operation["operationId"] in accepted_operation_ids else "200"
             for status in (success_status, "400", "401", "403", "404", "409", "422", "500", "503"):
                 assert status in responses, f"{method.upper()} {path} missing {status}"
             assert responses[success_status].get("description") != "ok"
