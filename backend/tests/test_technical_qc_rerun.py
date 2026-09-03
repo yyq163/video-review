@@ -160,6 +160,36 @@ def test_review_entry_can_queue_the_same_project_technical_qc_rerun(
     }
 
 
+def test_review_entry_rerun_validation_failure_is_audited(client: Any) -> None:
+    project, _item = create_project_item(client, code="TQC-RERUN-REVIEW-AUDIT")
+    request_id_header = "00000000-0000-4000-8000-000000000116"
+
+    response = client.post(
+        f"/api/v1/final-cut-review/review/projects/{project['project_ref_id']}"
+        "/technical-qc/rerun",
+        json={"invalid": "RAW-RERUN-PAYLOAD-MUST-NOT-PERSIST"},
+        headers={"X-Request-ID": request_id_header},
+    )
+
+    assert response.status_code == 422, response.text
+    assert api_error(response)["code"] == "VALIDATION_ERROR"
+    _qc, db, models = _modules()
+    with db.SessionLocal() as session:
+        audit = session.scalar(
+            select(models.OperationLogModel).where(
+                models.OperationLogModel.request_id
+                == request_id_header.replace("-", "")
+            )
+        )
+    assert audit is not None
+    assert audit.entry_source == "review"
+    assert audit.command_type == "RerunProjectTechnicalQc"
+    assert audit.failure_stage == "payload"
+    assert "RAW-RERUN-PAYLOAD-MUST-NOT-PERSIST" not in " ".join(
+        str(value) for value in vars(audit).values()
+    )
+
+
 def test_finalized_rerun_adds_only_new_issue_and_preserves_human_changes(
     client: Any,
 ) -> None:

@@ -39,6 +39,7 @@ COMMAND_ROUTE_TYPES = {
     "edit_update_project": "UpdateProject",
     "edit_lock_project_frame_rate": "LockProjectFrameRate",
     "edit_rerun_project_technical_qc": "RerunProjectTechnicalQc",
+    "review_rerun_project_technical_qc": "RerunProjectTechnicalQc",
     "edit_create_responsible_editor": "CreateResponsibleEditor",
     "edit_rename_responsible_editor": "RenameResponsibleEditor",
     "review_archive_project": "ArchiveProject",
