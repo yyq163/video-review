@@ -250,12 +250,12 @@ export class HttpReviewProjects implements ProjectApi {
     input,
     context,
   ): Promise<TechnicalQcRerun> => {
-    this.transport.assertWriteContext(context, ['edit']);
+    this.transport.assertWriteContext(context, ['edit', 'review']);
     const result = await this.transport.command<
       TechnicalQcRerunDTO,
       { project_ref_id: string }
     >(
-      `/api/v1/final-cut-review/edit/projects/${input.projectRefId}/technical-qc/rerun`,
+      `/api/v1/final-cut-review/${context.entryMode}/projects/${input.projectRefId}/technical-qc/rerun`,
       'RerunProjectTechnicalQc',
       { project_ref_id: input.projectRefId },
       context,

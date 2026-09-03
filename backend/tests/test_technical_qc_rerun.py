@@ -50,14 +50,20 @@ def _complete_initial_qc(project_ref_id: str) -> None:
         )
 
 
-def _rerun(client: Any, project_ref_id: str, *, command_id: str | None = None) -> Any:
+def _rerun(
+    client: Any,
+    project_ref_id: str,
+    *,
+    command_id: str | None = None,
+    entry_mode: str = "edit",
+) -> Any:
     body = command(
         "RerunProjectTechnicalQc",
         {"project_ref_id": project_ref_id},
         command_id=command_id,
     )
     return client.post(
-        f"/api/v1/final-cut-review/edit/projects/{project_ref_id}/technical-qc/rerun",
+        f"/api/v1/final-cut-review/{entry_mode}/projects/{project_ref_id}/technical-qc/rerun",
         json=body,
         headers={"Idempotency-Key": body["command_id"]},
     )
@@ -132,6 +138,26 @@ def test_rerun_requeues_finalized_current_version_and_replays_same_command_once(
     duplicate = _rerun(client, project["project_ref_id"])
     assert duplicate.status_code == 409, duplicate.text
     assert api_error(duplicate)["code"] == "REVIEW_IN_PROGRESS"
+
+
+def test_review_entry_can_queue_the_same_project_technical_qc_rerun(
+    client: Any,
+) -> None:
+    project, _item = create_project_item(client, code="TQC-RERUN-REVIEW-ENTRY")
+    _complete_initial_qc(project["project_ref_id"])
+
+    response = _rerun(
+        client,
+        project["project_ref_id"],
+        entry_mode="review",
+    )
+
+    assert response.status_code == 202, response.text
+    assert api_data(response) == {
+        "project_ref_id": project["project_ref_id"],
+        "status": "queued",
+        "queued_item_count": 1,
+    }
 
 
 def test_finalized_rerun_adds_only_new_issue_and_preserves_human_changes(

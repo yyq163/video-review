@@ -35,6 +35,7 @@ OPERATION_REQUIRED_RESPONSES: dict[str, tuple[str, ...]] = {
 }
 OPERATION_SUCCESS_RESPONSES: dict[str, str] = {
     "edit_rerun_project_technical_qc": "202",
+    "review_rerun_project_technical_qc": "202",
     "review_prepare_package": "202",
 }
 BINARY_MEDIA_RESPONSES: dict[str, dict[str, set[str]]] = {

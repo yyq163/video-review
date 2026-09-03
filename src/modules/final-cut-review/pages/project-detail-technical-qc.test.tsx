@@ -132,7 +132,7 @@ describe('ProjectDetailPage technical QC progress', () => {
     });
   });
 
-  it('hides the rerun action outside edit entry and disables it while tasks are active', async () => {
+  it('shows the rerun action in both entries and disables it while tasks are active', async () => {
     runtime = createReviewRuntime({
       technicalQcProgressByProject: {
         prj_seed_final_cut: {
@@ -182,8 +182,8 @@ describe('ProjectDetailPage technical QC progress', () => {
     );
     await screen.findByRole('heading', { level: 1 });
     expect(
-      screen.queryByRole('button', { name: '重新进行技术审查' }),
-    ).not.toBeInTheDocument();
+      await screen.findByRole('button', { name: '重新进行技术审查' }),
+    ).toBeDisabled();
   });
 
   it('shows the command failure and restores the rerun action', async () => {

@@ -506,6 +506,27 @@ def edit_rerun_project_technical_qc(
     )
 
 
+@router.post("/review/projects/{project_ref_id}/technical-qc/rerun")
+def review_rerun_project_technical_qc(
+    project_ref_id: str,
+    response: Response,
+    envelope: CommandEnvelope,
+    deps: tuple[Request, Session, str, str | None, str | None] = Depends(_deps),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    return _execute(
+        "review",
+        "RerunProjectTechnicalQc",
+        envelope,
+        {"project_ref_id": project_ref_id},
+        deps,
+        idempotency_key,
+        None,
+        response=response,
+        success_status=202,
+    )
+
+
 @router.post("/edit/responsible-editors")
 def edit_create_responsible_editor(
     response: Response,

@@ -18,6 +18,7 @@ capabilities:
     - review.download.finalized_original
   review:
     - review.project.read
+    - review.technical_qc.rerun
     - review.project.archive
     - review.project.restore
     - review.project.delete

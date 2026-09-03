@@ -511,6 +511,29 @@ paths:
                 $ref: "#/components/schemas/EnvelopeTechnicalQcRerun"
         <<: *standardNon200Responses
 
+  /final-cut-review/review/projects/{project_ref_id}/technical-qc/rerun:
+    post:
+      operationId: review_rerun_project_technical_qc
+      tags: [commands]
+      x-command-type: RerunProjectTechnicalQc
+      parameters:
+        - $ref: "#/components/parameters/ProjectRefId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RerunProjectTechnicalQcCommandEnvelope"
+      responses:
+        "202":
+          description: Project current-version technical review tasks accepted for rerun from review entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeTechnicalQcRerun"
+        <<: *standardNon200Responses
+
   /final-cut-review/edit/responsible-editors:
     post:
       operationId: edit_create_responsible_editor

@@ -112,6 +112,7 @@ def test_openapi_contract_has_complete_runtime_shapes() -> None:
     }
     accepted_operation_ids = {
         "edit_rerun_project_technical_qc",
+        "review_rerun_project_technical_qc",
         "review_prepare_package",
     }
     assert generator.BODYLESS_OPERATION_IDS == bodyless_operation_ids
@@ -149,6 +150,7 @@ def test_openapi_contract_has_complete_runtime_shapes() -> None:
         for operation in methods.values()
         if isinstance(operation, dict) and "operationId" in operation
     }
+    assert accepted_operation_ids <= set(operations)
     complete_upload_params = {parameter["$ref"] for parameter in operations["complete_upload"]["parameters"]}
     assert "#/components/parameters/IdempotencyKey" in complete_upload_params
     upload_part_params = {parameter["$ref"] for parameter in operations["upload_part"]["parameters"]}
