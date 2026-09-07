@@ -569,6 +569,116 @@ def test_streamed_timing_accepts_long_six_decimal_timestamps_without_db_integer_
 
 
 @pytest.mark.parametrize(
+    ("fps_num", "fps_den", "duration", "evidence"),
+    [
+        (
+            24,
+            1,
+            "0.250000",
+            b"0.000000|-0.166667|0.041667\n"
+            b"0.041667|-0.125000|0.041667\n"
+            b"0.083333|-0.083333|0.041667\n"
+            b"0.125000|-0.041667|0.041667\n"
+            b"0.166667|0.000000|0.041667\n"
+            b"0.208333|0.041667|0.041667\n",
+        ),
+        (
+            25,
+            1,
+            "0.240000",
+            b"0.000000|-0.200000|0.040000\n"
+            b"0.040000|-0.160000|0.040000\n"
+            b"0.080000|-0.120000|0.040000\n"
+            b"0.120000|-0.080000|0.040000\n"
+            b"0.160000|-0.040000|0.040000\n"
+            b"0.200000|0.000000|0.040000\n",
+        ),
+        (
+            30_000,
+            1_001,
+            "0.200200",
+            b"0.000000|-0.100100|0.033367\n"
+            b"0.033367|-0.066733|0.033367\n"
+            b"0.066733|-0.033367|0.033367\n"
+            b"0.100100|0.000000|0.033367\n"
+            b"0.133467|0.033367|0.033367\n"
+            b"0.166833|0.066733|0.033367\n",
+        ),
+        (
+            60,
+            1,
+            "0.100000",
+            b"0.000000|-0.133333|0.016667\n"
+            b"0.016667|-0.116667|0.016667\n"
+            b"0.033333|-0.100000|0.016667\n"
+            b"0.050000|-0.083333|0.016667\n"
+            b"0.066667|-0.066667|0.016667\n"
+            b"0.083333|-0.050000|0.016667\n",
+        ),
+    ],
+)
+def test_streamed_timing_accepts_bounded_constant_dts_lead_without_b_frames(
+    fps_num: int,
+    fps_den: int,
+    duration: str,
+    evidence: bytes,
+) -> None:
+    metadata = _timing_metadata(
+        start_time="0.000000",
+        duration=duration,
+        frame_count=6,
+        fps_num=fps_num,
+        fps_den=fps_den,
+        reorder_depth=0,
+    )
+
+    assert validate_streamed_frame_timing(io.BytesIO(evidence), metadata) == 6
+
+
+def test_streamed_timing_does_not_treat_presentation_start_as_a_dts_origin() -> None:
+    metadata = _timing_metadata(
+        start_time="2.000000",
+        duration="0.240000",
+        frame_count=6,
+        fps_num=25,
+        reorder_depth=0,
+    )
+    evidence = (
+        b"2.000000|0.000000|0.040000\n"
+        b"2.040000|0.040000|0.040000\n"
+        b"2.080000|0.080000|0.040000\n"
+        b"2.120000|0.120000|0.040000\n"
+        b"2.160000|0.160000|0.040000\n"
+        b"2.200000|0.200000|0.040000\n"
+    )
+
+    assert validate_streamed_frame_timing(io.BytesIO(evidence), metadata) == 6
+
+
+def test_streamed_timing_rejects_decode_timestamp_after_presentation() -> None:
+    metadata = _timing_metadata(
+        start_time="0.000000",
+        duration="0.240000",
+        frame_count=6,
+        fps_num=25,
+        reorder_depth=0,
+    )
+    evidence = (
+        b"0.000000|0.040000|0.040000\n"
+        b"0.040000|0.080000|0.040000\n"
+        b"0.080000|0.120000|0.040000\n"
+        b"0.120000|0.160000|0.040000\n"
+        b"0.160000|0.200000|0.040000\n"
+        b"0.200000|0.240000|0.040000\n"
+    )
+
+    with pytest.raises(ReviewError) as exc_info:
+        validate_streamed_frame_timing(io.BytesIO(evidence), metadata)
+
+    assert exc_info.value.code == "MEDIA_FRAME_RATE_UNKNOWN"
+
+
+@pytest.mark.parametrize(
     "evidence",
     [
         (

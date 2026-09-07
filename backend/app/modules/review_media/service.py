@@ -400,7 +400,6 @@ def validate_streamed_frame_timing(stream: BinaryIO, metadata: MediaProbeResult)
     expected_interval = Fraction(frame_rate.denominator, frame_rate.numerator)
     reorder_buffer_capacity = metadata.video_reorder_depth + 1
     maximum_presentation_lookahead = metadata.video_reorder_depth * 2
-    earliest_dts = start_time - maximum_presentation_lookahead * expected_interval - MEDIA_PROBE_TIMESTAMP_TOLERANCE
     latest_timing = end_time + MEDIA_PROBE_TIMESTAMP_TOLERANCE
     count = 0
     previous_dts: Fraction | None = None
@@ -439,7 +438,12 @@ def validate_streamed_frame_timing(stream: BinaryIO, metadata: MediaProbeResult)
         pts = _evidence_fraction(fields[0])
         dts = _evidence_fraction(fields[1], allow_negative=True)
         duration = _evidence_fraction(fields[2])
-        if pts < start_time or pts > latest_timing or dts < earliest_dts or dts > latest_timing or duration <= 0:
+        if (
+            pts < start_time
+            or pts > latest_timing
+            or dts > pts + MEDIA_PROBE_TIMESTAMP_TOLERANCE
+            or duration <= 0
+        ):
             raise _frame_rate_unknown()
         if previous_dts is not None and abs((dts - previous_dts) - expected_interval) > MEDIA_PROBE_TIMESTAMP_TOLERANCE:
             raise _variable_frame_rate()
