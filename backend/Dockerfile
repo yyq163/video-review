@@ -49,6 +49,9 @@ RUN curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --co
 
 WORKDIR /usr/src/ffmpeg-9.0.1
 
+# The real HEVC fixture catches missing SPS reorder-depth evidence in ffprobe.
+COPY backend/tests/fixtures/hevc-b-frames-cfr25.mp4 /usr/src/hevc-b-frames-cfr25.mp4
+
 RUN ./configure \
         --prefix=/opt/ffmpeg-apv \
         --disable-debug \
@@ -70,6 +73,7 @@ RUN ./configure \
         --disable-shared \
         --enable-zlib \
         --enable-decoder=apv \
+        --enable-decoder=hevc \
         --enable-encoder=mjpeg \
         --enable-encoder=rawvideo \
         --enable-demuxer=mov \
@@ -98,6 +102,10 @@ RUN ./configure \
     && install -D -m 0644 COPYING.LGPLv2.1 /opt/ffmpeg-apv/share/licenses/FFmpeg-COPYING.LGPLv2.1 \
     && /opt/ffmpeg-apv/bin/ffmpeg -hide_banner -decoders 2>&1 | grep -Eq '[[:space:]]apv[[:space:]]' \
     && /opt/ffmpeg-apv/bin/ffprobe -version 2>&1 | grep -F "ffprobe version ${FFMPEG_APV_VERSION}" \
+    && /opt/ffmpeg-apv/bin/ffprobe -v error -select_streams v:0 \
+        -show_entries stream=codec_name,has_b_frames,avg_frame_rate,nb_frames -of json \
+        /usr/src/hevc-b-frames-cfr25.mp4 > /tmp/hevc-probe.json \
+    && python3 -c 'import json; s=json.load(open("/tmp/hevc-probe.json"))["streams"]; assert len(s)==1 and s[0]["codec_name"]=="hevc" and s[0]["has_b_frames"]==2 and s[0]["avg_frame_rate"]=="25/1" and s[0]["nb_frames"]=="25", s' \
     && /opt/ffmpeg-apv/bin/ffmpeg -buildconf > /opt/ffmpeg-apv/share/ffmpeg-apv-buildconf.txt 2>&1 \
     && ! grep -Eq -- '--enable-(gpl|nonfree)' /opt/ffmpeg-apv/share/ffmpeg-apv-buildconf.txt \
     && printf '%s\n' "${FFMPEG_APV_SOURCE_SHA256}" > /opt/ffmpeg-apv/share/ffmpeg-apv-source-sha256.txt \
@@ -166,6 +174,7 @@ RUN apt-get update \
 COPY --from=ffmpeg-apv-builder /opt/ffmpeg-apv /opt/ffmpeg-apv
 
 RUN /opt/ffmpeg-apv/bin/ffmpeg -hide_banner -decoders 2>&1 | grep -Eq '[[:space:]]apv[[:space:]]' \
+    && /opt/ffmpeg-apv/bin/ffmpeg -hide_banner -decoders 2>&1 | grep -Eq '[[:space:]]hevc[[:space:]]' \
     && /opt/ffmpeg-apv/bin/ffprobe -version 2>&1 | grep -F 'ffprobe version 9.0.1' \
     && ! /opt/ffmpeg-apv/bin/ffmpeg -buildconf 2>&1 | grep -Eq -- '--enable-(gpl|nonfree)'
 
