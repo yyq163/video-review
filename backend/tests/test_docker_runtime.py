@@ -427,6 +427,7 @@ def test_apv_runtime_is_officially_locked_isolated_and_license_audited() -> None
     assert "--disable-cuvid" in dockerfile
     for component in (
         "--enable-decoder=apv",
+        "--enable-decoder=hevc",
         "--enable-encoder=mjpeg",
         "--enable-encoder=rawvideo",
         "--enable-demuxer=mov",
@@ -448,6 +449,8 @@ def test_apv_runtime_is_officially_locked_isolated_and_license_audited() -> None
     assert "ffmpeg-apv-buildconf.txt" in dockerfile
     assert "ffmpeg-apv-source-sha256.txt" in dockerfile
     assert "ffmpeg-apv-dynamic-libraries.txt" in dockerfile
+    assert "COPY backend/tests/fixtures/hevc-b-frames-cfr25.mp4" in dockerfile
+    assert 's[0]["has_b_frames"]==2' in dockerfile
 
 
 def test_persistence_verifier_hashes_all_business_and_audit_rows() -> None:
