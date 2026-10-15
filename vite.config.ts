@@ -12,6 +12,8 @@ const mediaInfoWasmPath = createRequire(import.meta.url).resolve('mediainfo.js/M
 
 function resolveApiOrigin(apiBaseUrl: string | undefined, required: boolean): string | undefined {
   const normalizedApiBaseUrl = apiBaseUrl?.trim() ?? '';
+  // The browser selects the origin at runtime; CSP already permits 'self'.
+  if (normalizedApiBaseUrl === 'same-origin') return undefined;
   if (!normalizedApiBaseUrl) {
     if (required) {
       throw new Error('VITE_FINAL_CUT_REVIEW_API_BASE_URL is required for production build and preview');

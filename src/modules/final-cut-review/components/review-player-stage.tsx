@@ -144,6 +144,7 @@ export function ReviewPlayerStage({
             key={mediaElementKey}
             ref={videoRef}
             src={version.playbackUrl}
+            poster={version.thumbnailStatus === 'ready' ? version.thumbnailUrl ?? undefined : undefined}
             crossOrigin="use-credentials"
             data-version-id={version.versionId}
             style={containedMediaStyle}

@@ -47,8 +47,21 @@ function normalizeBaseUrl(baseUrl: string): string {
 export function resolveReviewRuntimeConfiguration(
   apiBaseUrl: string | undefined,
   isProduction: boolean,
+  browserOrigin?: string,
 ): ReviewRuntimeConfiguration {
   const normalizedApiBaseUrl = apiBaseUrl?.trim() ?? '';
+  if (normalizedApiBaseUrl === 'same-origin') {
+    let origin: URL;
+    try {
+      origin = new URL(browserOrigin ?? '');
+    } catch {
+      throw new Error('same-origin requires the current HTTP(S) browser origin');
+    }
+    if (!['http:', 'https:'].includes(origin.protocol) || origin.origin !== browserOrigin) {
+      throw new Error('same-origin requires the current HTTP(S) browser origin');
+    }
+    return { apiBaseUrl: origin.origin, runtimeKind: 'http' };
+  }
   if (!normalizedApiBaseUrl && isProduction) {
     throw new Error('VITE_FINAL_CUT_REVIEW_API_BASE_URL is required for production runtime');
   }

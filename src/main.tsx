@@ -21,6 +21,7 @@ if (!container) {
 const runtimeConfiguration = resolveReviewRuntimeConfiguration(
   import.meta.env.VITE_FINAL_CUT_REVIEW_API_BASE_URL,
   import.meta.env.PROD,
+  window.location.origin,
 );
 
 container.dataset.reviewRuntime = runtimeConfiguration.runtimeKind;

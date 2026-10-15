@@ -1570,13 +1570,15 @@
 
 .fj-review-video-frame {
   background: #000;
-  height: 100%;
+  /* Anchor to the capped stage size; Safari can resolve percentage height before max-height. */
+  height: auto;
+  inset: 0;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  position: relative;
+  position: absolute;
   z-index: 1;
-  width: 100%;
+  width: auto;
 }
 
 .fj-review-video-frame video,

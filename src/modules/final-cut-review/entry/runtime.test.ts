@@ -77,6 +77,25 @@ vi.mock('../adapters/mock-review-api-adapter', () => ({
 import { createReviewRuntime, resolveReviewRuntimeConfiguration } from './runtime';
 
 describe('resolveReviewRuntimeConfiguration', () => {
+  it.each([
+    'http://192.168.20.30:18171',
+    'http://review.example.ts.net:18171',
+    'https://review.example:18443',
+  ])('uses the current browser origin, including its port, in same-origin mode: %s', (origin) => {
+    expect(resolveReviewRuntimeConfiguration(' same-origin ', true, origin)).toEqual({
+      apiBaseUrl: origin,
+      runtimeKind: 'http',
+    });
+  });
+
+  it.each([undefined, '', 'null', 'file:///tmp/review', 'https://user:pass@review.example', 'https://review.example/path'])(
+    'rejects an unavailable or invalid browser origin in same-origin mode: %s', (origin) => {
+      expect(() => resolveReviewRuntimeConfiguration('same-origin', true, origin)).toThrow(
+        'same-origin requires the current HTTP(S) browser origin',
+      );
+    },
+  );
+
   it('trims a configured HTTP API base URL', () => {
     expect(resolveReviewRuntimeConfiguration('  https://review.example/api/  ', true)).toEqual({
       apiBaseUrl: 'https://review.example/api/',

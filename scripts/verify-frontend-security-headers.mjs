@@ -60,7 +60,8 @@ try {
   }
 
   const configuredApiBaseUrl = process.env.VITE_FINAL_CUT_REVIEW_API_BASE_URL?.trim();
-  const configuredApiOrigin = configuredApiBaseUrl
+  const useSameOrigin = configuredApiBaseUrl === 'same-origin';
+  const configuredApiOrigin = configuredApiBaseUrl && !useSameOrigin
     ? new URL(configuredApiBaseUrl).origin
     : null;
 
@@ -83,7 +84,10 @@ try {
 
   const deployedFrontendUrl = process.env.FCR_DEPLOYED_FRONTEND_URL?.trim();
   if (deployedFrontendUrl) {
-    const deployedTarget = resolveDeployedFrontendTarget(deployedFrontendUrl, configuredApiOrigin);
+    const deployedTarget = resolveDeployedFrontendTarget(
+      deployedFrontendUrl,
+      useSameOrigin ? new URL(deployedFrontendUrl).origin : configuredApiOrigin,
+    );
     const deployedResponse = await fetch(deployedTarget, {
       redirect: 'error',
       signal: AbortSignal.timeout(10_000),
